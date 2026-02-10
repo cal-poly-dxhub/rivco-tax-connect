@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# CDK
+cdk.out/
+.cdk.staging/
+
+# Dependencies installed in runtime
+bot/runtime/*.so
+bot/runtime/*.dist-info/
+bot/runtime/jellyfish/
+bot/runtime/bs4/
+bot/runtime/soupsieve/
+bot/runtime/typing_extensions.py
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Data (keep sample, ignore large files)
+*.xls
+*.xlsx

@@ -1,0 +1,40 @@
+project:
+  name: riverside-tax-refund
+  description: Riverside County Tax Refund Lookup
+
+aws:
+  region: us-west-2
+  connect_instance_id: 64599ec4-17cc-4f99-b15a-d4cce1fb3531
+
+lambda:
+  function_name: riverside-tax-lookup
+  timeout_seconds: 30
+  memory_mb: 512
+  environment:
+    VOICE_TIMEOUT_MS: "15000"
+    CLAIM_URL: https://apps.auditorcontroller.org/unclaimedrefund/refundform.aspx
+
+s3:
+  bucket_suffix: data
+  data_file: UnclaimedRefunds.xls
+
+lex:
+  bot_name: TaxRefundBot
+  alias_name: live
+  locale: en_US
+  voice_id: Joanna
+  nlu_threshold: 0.4
+
+connect:
+  flow_name: TaxRefundFlow
+  voice_id: Matthew
+  voice_engine: Generative
+
+prompts:
+  welcome: Welcome to the Riverside County unclaimed tax refund lookup. Please provide your name or company name and we will search for any refunds you may have.
+  not_found: I'm sorry, I couldn't find any unclaimed refunds for {name}. Please verify the spelling or try a different name.
+  found: I found {count} refund(s) for {name} totaling ${total}. Visit {url} to claim your refund. Is there anything else I can help you with?
+  error: Sorry, an error occurred. Please try again later.
+  fallback_utterances:
+    - hello
+    - hi
