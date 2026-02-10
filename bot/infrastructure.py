@@ -95,7 +95,6 @@ class NovaSonicConnectStack(Stack):
             bot_locales=[{
                 "localeId": cfg['lex']['locale'],
                 "nluConfidenceThreshold": cfg['lex']['nlu_threshold'],
-                "voiceSettings": {"voiceId": cfg['lex']['voice_id'], "engine": "generative"},
                 "intents": [
                     {
                         "name": "FallbackIntent",
@@ -160,7 +159,7 @@ class NovaSonicConnectStack(Stack):
                     "Identifier": "set-voice",
                     "Type": "UpdateContactTextToSpeechVoice",
                     "Parameters": {"TextToSpeechVoice": cfg['connect']['voice_id'], "TextToSpeechEngine": cfg['connect']['voice_engine']},
-                    "Transitions": {"NextAction": "wisdom-session"}
+                    "Transitions": {"NextAction": "wisdom-session", "Errors": [{"NextAction": "disconnect", "ErrorType": "NoMatchingError"}]}
                 },
                 {
                     "Identifier": "wisdom-session",
