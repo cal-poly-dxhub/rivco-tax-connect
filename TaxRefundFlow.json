@@ -1,0 +1,67 @@
+{
+  "Version": "2019-10-30",
+  "StartAction": "set-voice",
+  "Metadata": {
+    "entryPointPosition": {"x": -40, "y": 12},
+    "ActionMetadata": {
+      "set-voice": {"position": {"x": 100, "y": 0}},
+      "q-assistant": {"position": {"x": 350, "y": 0}},
+      "get-input": {"position": {"x": 600, "y": 0}},
+      "disconnect": {"position": {"x": 850, "y": 150}}
+    },
+    "name": "TaxRefundFlow",
+    "type": "contactFlow",
+    "status": "PUBLISHED"
+  },
+  "Actions": [
+    {
+      "Identifier": "set-voice",
+      "Type": "UpdateContactTextToSpeechVoice",
+      "Parameters": {
+        "TextToSpeechVoice": "Matthew",
+        "TextToSpeechEngine": "Generative"
+      },
+      "Transitions": {"NextAction": "q-assistant"}
+    },
+    {
+      "Identifier": "q-assistant",
+      "Type": "AssociateQConnectAssistant",
+      "Parameters": {
+        "AssistantDomainArn": "$.Attributes.QConnectAssistantArn"
+      },
+      "Transitions": {
+        "NextAction": "get-input",
+        "Errors": [{"NextAction": "get-input", "ErrorType": "NoMatchingError"}]
+      }
+    },
+    {
+      "Identifier": "get-input",
+      "Type": "GetParticipantInput",
+      "Parameters": {
+        "Text": " ",
+        "LexV2Bot": {
+          "AliasArn": "$.Attributes.LexBotAliasArn"
+        },
+        "LexSessionAttributes": {
+          "x-amz-lex:audio:start-timeout-ms:*:*": "15000"
+        }
+      },
+      "Transitions": {
+        "NextAction": "get-input",
+        "Conditions": [
+          {"NextAction": "disconnect", "Condition": {"Operator": "Equals", "Operands": ["COMPLETE"]}}
+        ],
+        "Errors": [
+          {"NextAction": "get-input", "ErrorType": "NoMatchingCondition"},
+          {"NextAction": "disconnect", "ErrorType": "NoMatchingError"}
+        ]
+      }
+    },
+    {
+      "Identifier": "disconnect",
+      "Type": "DisconnectParticipant",
+      "Parameters": {},
+      "Transitions": {}
+    }
+  ]
+}

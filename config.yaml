@@ -4,7 +4,6 @@ project:
 
 aws:
   region: us-west-2
-  connect_instance_id: 64599ec4-17cc-4f99-b15a-d4cce1fb3531
 
 lambda:
   function_name: riverside-tax-lookup
@@ -22,7 +21,7 @@ lex:
   bot_name: TaxRefundBot
   alias_name: live
   locale: en_US
-  voice_id: Joanna
+  voice_id: Matthew
   nlu_threshold: 0.4
 
 connect:
@@ -35,6 +34,3 @@ prompts:
   not_found: I'm sorry, I couldn't find any unclaimed refunds for {name}. Please verify the spelling or try a different name.
   found: I found {count} refund(s) for {name} totaling ${total}. Visit {url} to claim your refund. Is there anything else I can help you with?
   error: Sorry, an error occurred. Please try again later.
-  fallback_utterances:
-    - hello
-    - hi
