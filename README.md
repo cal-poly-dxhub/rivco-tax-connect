@@ -74,9 +74,11 @@ aws s3 cp UnclaimedRefunds.xls s3://$(aws cloudformation describe-stacks \
 3. Select your contact flow under Chat contact flow and Web calling contact flow
 4. Customize the widget's appearance to your liking
 5. Add the URL which the bot will be hosted on to required domains
+6. Copy and paste the connect widget script onto your website
 
-## Testing
+## Local Testing
 
+Ensure that `http://localhost:8000/test-widget.html` is an accepted domain.
 ```bash
 python3 -m http.server 8000
 # Visit http://localhost:8000/test-widget.html
