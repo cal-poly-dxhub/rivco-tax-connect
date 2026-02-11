@@ -44,10 +44,62 @@ aws s3 cp UnclaimedRefunds.xls s3://$(aws cloudformation describe-stacks \
 
 ### Amazon Connect Admin Website
 
-### 1. Configure Nova Sonic Speech-to-Speech
+### 1. Create Connect AI Agent Domain (AWS Console)
 
-1. Sign in to the Amazon Connect admin website
-2. Go to **Routing** → **Flows** → **Conversational AI** tab
+1. Go to **AWS Console** → **Amazon Connect** → select your instance
+2. In the left navigation, choose **Amazon Q** → **Add domain**
+3. Create a new domain with a friendly name
+4. Use default encryption or create a KMS key
+5. Click **Add domain**
+
+### 2. Configure AI Prompt with TAX_LOOKUP Action (Admin Website)
+
+1. Go to **Amazon Q** → **AI prompts** → **Create prompt**
+3. Add the following **System prompt**:
+   ```
+   You are a helpful assistant for Riverside County tax refund lookups.
+   When a customer provides their name, use the TAX_LOOKUP tool to search for unclaimed refunds.
+   Be friendly and helpful. If the customer wants to end the conversation, use COMPLETE.
+   ```
+4. Add these **Custom tools**:
+   ```yaml
+   tools:
+   - name: TAX_LOOKUP
+     description: Look up tax refunds for a customer by their name. Use this when the customer wants to check if they have any unclaimed tax refunds.
+     input_schema:
+       type: object
+       properties:
+         customer_name:
+           type: string
+           description: The customer's full name to search for refunds
+       required:
+       - customer_name
+   - name: CONVERSATION
+     description: Continue holding a casual conversation with the customer.
+     input_schema:
+       type: object
+       properties:
+         message:
+           type: string
+           description: The message to send to the customer
+       required:
+       - message
+   - name: COMPLETE
+     description: End the conversation when the customer is done.
+     input_schema:
+       type: object
+       properties:
+         message:
+           type: string
+           description: A goodbye message
+       required:
+       - message
+   ```
+5. Save the prompt
+
+### 3. Configure Nova Sonic Speech-to-Speech
+
+1. Go to **Routing** → **Flows** → **Conversational AI** tab
 3. Select your bot name
 4. Go to **Configuration** tab, select your locale (e.g., en-US)
 5. In **Speech model** section → **Edit**
@@ -55,7 +107,7 @@ aws s3 cp UnclaimedRefunds.xls s3://$(aws cloudformation describe-stacks \
 7. Set **Voice provider** to **Amazon Nova Sonic**
 8. Click **Confirm**, then **Build language**
 
-### 2. Configure Contact Flow Voice
+### 4. Configure Contact Flow Voice
 
 1. Open your contact flow in Flow designer
 2. Add/edit a **Set voice** block
@@ -67,7 +119,7 @@ aws s3 cp UnclaimedRefunds.xls s3://$(aws cloudformation describe-stacks \
    - Lupe (es-US, Feminine)
 5. **Save** and **Publish** the flow
 
-### 3. Enable Communications Widget
+### 5. Enable Communications Widget
 
 1. Go to **Channels** → **Communications widget** → **Add widget**
 2. Select Add chat and Add web calling

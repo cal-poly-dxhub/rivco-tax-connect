@@ -150,37 +150,90 @@ class NovaSonicConnectStack(Stack):
         )
         bot_assoc.add_dependency(alias)
 
-        # Contact flow with Q in Connect - use Fn.sub for dynamic ARN substitution
+        # Contact flow with Q in Connect and custom TAX_LOOKUP action
         flow_content_template = json.dumps({
             "Version": "2019-10-30",
-            "StartAction": "set-voice",
+            "StartAction": "wisdom-session",
             "Actions": [
-                {
-                    "Identifier": "set-voice",
-                    "Type": "UpdateContactTextToSpeechVoice",
-                    "Parameters": {"TextToSpeechVoice": cfg['connect']['voice_id'], "TextToSpeechEngine": cfg['connect']['voice_engine']},
-                    "Transitions": {"NextAction": "wisdom-session", "Errors": [{"NextAction": "disconnect", "ErrorType": "NoMatchingError"}]}
-                },
                 {
                     "Identifier": "wisdom-session",
                     "Type": "CreateWisdomSession",
                     "Parameters": {"WisdomAssistantArn": "${AssistantArn}"},
-                    "Transitions": {"NextAction": "get-input", "Errors": [{"NextAction": "get-input", "ErrorType": "NoMatchingError"}]}
+                    "Transitions": {
+                        "NextAction": "get-input",
+                        "Errors": [{"NextAction": "get-input", "ErrorType": "NoMatchingError"}],
+                        "Conditions": []
+                    }
                 },
                 {
                     "Identifier": "get-input",
                     "Type": "ConnectParticipantWithLexBot",
                     "Parameters": {
                         "Text": " ",
-                        "LexV2Bot": {"AliasArn": "${BotAliasArn}"},
-                        "LexSessionAttributes": {"x-amz-lex:audio:start-timeout-ms:*:*": str(cfg['lambda']['environment']['VOICE_TIMEOUT_MS'])}
+                        "LexV2Bot": {"AliasArn": "${BotAliasArn}"}
                     },
                     "Transitions": {
-                        "NextAction": "get-input",
-                        "Errors": [{"NextAction": "get-input", "ErrorType": "NoMatchingCondition"}, {"NextAction": "disconnect", "ErrorType": "NoMatchingError"}]
+                        "NextAction": "check-tool",
+                        "Errors": [
+                            {"NextAction": "check-tool", "ErrorType": "NoMatchingCondition"},
+                            {"NextAction": "disconnect", "ErrorType": "NoMatchingError"}
+                        ],
+                        "Conditions": []
                     }
                 },
-                {"Identifier": "disconnect", "Type": "DisconnectParticipant", "Parameters": {}, "Transitions": {}}
+                {
+                    "Identifier": "check-tool",
+                    "Type": "Compare",
+                    "Parameters": {"ComparisonValue": "$.Lex.SessionAttributes.Tool"},
+                    "Transitions": {
+                        "NextAction": "get-input",
+                        "Errors": [{"NextAction": "get-input", "ErrorType": "NoMatchingCondition"}],
+                        "Conditions": [
+                            {"NextAction": "invoke-lambda", "Condition": {"Operator": "Equals", "Operands": ["TAX_LOOKUP"]}},
+                            {"NextAction": "disconnect", "Condition": {"Operator": "Equals", "Operands": ["COMPLETE"]}}
+                        ]
+                    }
+                },
+                {
+                    "Identifier": "invoke-lambda",
+                    "Type": "InvokeLambdaFunction",
+                    "Parameters": {
+                        "LambdaFunctionARN": "${LambdaArn}",
+                        "InvocationTimeLimitSeconds": "8",
+                        "ResponseValidation": {"ResponseType": "STRING_MAP"}
+                    },
+                    "Transitions": {
+                        "NextAction": "speak-result",
+                        "Errors": [{"NextAction": "speak-error", "ErrorType": "NoMatchingError"}],
+                        "Conditions": []
+                    }
+                },
+                {
+                    "Identifier": "speak-result",
+                    "Type": "MessageParticipant",
+                    "Parameters": {"Text": "$.External.result"},
+                    "Transitions": {
+                        "NextAction": "get-input",
+                        "Errors": [{"NextAction": "get-input", "ErrorType": "NoMatchingError"}],
+                        "Conditions": []
+                    }
+                },
+                {
+                    "Identifier": "speak-error",
+                    "Type": "MessageParticipant",
+                    "Parameters": {"Text": "Sorry, I couldn't look that up right now."},
+                    "Transitions": {
+                        "NextAction": "get-input",
+                        "Errors": [{"NextAction": "get-input", "ErrorType": "NoMatchingError"}],
+                        "Conditions": []
+                    }
+                },
+                {
+                    "Identifier": "disconnect",
+                    "Type": "DisconnectParticipant",
+                    "Parameters": {},
+                    "Transitions": {}
+                }
             ]
         })
 
@@ -191,7 +244,8 @@ class NovaSonicConnectStack(Stack):
             type="CONTACT_FLOW",
             content=Fn.sub(flow_content_template, {
                 "AssistantArn": assistant.attr_assistant_arn,
-                "BotAliasArn": f"arn:aws:lex:{self.region}:{self.account}:bot-alias/{bot.attr_id}/{alias.attr_bot_alias_id}"
+                "BotAliasArn": f"arn:aws:lex:{self.region}:{self.account}:bot-alias/{bot.attr_id}/{alias.attr_bot_alias_id}",
+                "LambdaArn": fn.function_arn
             }),
         )
         flow.add_dependency(bot_assoc)
