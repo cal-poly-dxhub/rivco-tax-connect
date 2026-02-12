@@ -8,6 +8,8 @@ from aws_cdk import (
     aws_lex as lex,
     aws_connect as connect,
     aws_wisdom as wisdom,
+    aws_bedrockagentcore as agentcore,
+    custom_resources as cr,
 )
 from constructs import Construct
 
@@ -82,6 +84,7 @@ class NovaSonicConnectStack(Stack):
             self, "Assistant",
             name=f"{proj}-assistant",
             type="AGENT",
+            tags=[{"key": "AmazonConnectEnabled", "value": "True"}],
         )
 
         # Lex bot with AMAZON.QInConnectIntent for Q in Connect self-service
@@ -150,7 +153,15 @@ class NovaSonicConnectStack(Stack):
         )
         bot_assoc.add_dependency(alias)
 
-        # Contact flow with Q in Connect and custom TAX_LOOKUP action
+        # Associate Wisdom assistant with Connect
+        wisdom_assoc = connect.CfnIntegrationAssociation(
+            self, "WisdomAssociation",
+            instance_id=instance.attr_arn,
+            integration_type="WISDOM_ASSISTANT",
+            integration_arn=assistant.attr_assistant_arn,
+        )
+
+        # Contact flow — chat with AI agent via Lex + Wisdom
         flow_content_template = json.dumps({
             "Version": "2019-10-30",
             "StartAction": "wisdom-session",
@@ -173,58 +184,8 @@ class NovaSonicConnectStack(Stack):
                         "LexV2Bot": {"AliasArn": "${BotAliasArn}"}
                     },
                     "Transitions": {
-                        "NextAction": "check-tool",
-                        "Errors": [
-                            {"NextAction": "check-tool", "ErrorType": "NoMatchingCondition"},
-                            {"NextAction": "disconnect", "ErrorType": "NoMatchingError"}
-                        ],
-                        "Conditions": []
-                    }
-                },
-                {
-                    "Identifier": "check-tool",
-                    "Type": "Compare",
-                    "Parameters": {"ComparisonValue": "$.Lex.SessionAttributes.Tool"},
-                    "Transitions": {
                         "NextAction": "get-input",
-                        "Errors": [{"NextAction": "get-input", "ErrorType": "NoMatchingCondition"}],
-                        "Conditions": [
-                            {"NextAction": "invoke-lambda", "Condition": {"Operator": "Equals", "Operands": ["TAX_LOOKUP"]}},
-                            {"NextAction": "disconnect", "Condition": {"Operator": "Equals", "Operands": ["COMPLETE"]}}
-                        ]
-                    }
-                },
-                {
-                    "Identifier": "invoke-lambda",
-                    "Type": "InvokeLambdaFunction",
-                    "Parameters": {
-                        "LambdaFunctionARN": "${LambdaArn}",
-                        "InvocationTimeLimitSeconds": "8",
-                        "ResponseValidation": {"ResponseType": "STRING_MAP"}
-                    },
-                    "Transitions": {
-                        "NextAction": "speak-result",
-                        "Errors": [{"NextAction": "speak-error", "ErrorType": "NoMatchingError"}],
-                        "Conditions": []
-                    }
-                },
-                {
-                    "Identifier": "speak-result",
-                    "Type": "MessageParticipant",
-                    "Parameters": {"Text": "$.External.result"},
-                    "Transitions": {
-                        "NextAction": "get-input",
-                        "Errors": [{"NextAction": "get-input", "ErrorType": "NoMatchingError"}],
-                        "Conditions": []
-                    }
-                },
-                {
-                    "Identifier": "speak-error",
-                    "Type": "MessageParticipant",
-                    "Parameters": {"Text": "Sorry, I couldn't look that up right now."},
-                    "Transitions": {
-                        "NextAction": "get-input",
-                        "Errors": [{"NextAction": "get-input", "ErrorType": "NoMatchingError"}],
+                        "Errors": [{"NextAction": "disconnect", "ErrorType": "NoMatchingError"}],
                         "Conditions": []
                     }
                 },
@@ -245,7 +206,6 @@ class NovaSonicConnectStack(Stack):
             content=Fn.sub(flow_content_template, {
                 "AssistantArn": assistant.attr_assistant_arn,
                 "BotAliasArn": f"arn:aws:lex:{self.region}:{self.account}:bot-alias/{bot.attr_id}/{alias.attr_bot_alias_id}",
-                "LambdaArn": fn.function_arn
             }),
         )
         flow.add_dependency(bot_assoc)
@@ -258,3 +218,97 @@ class NovaSonicConnectStack(Stack):
         CfnOutput(self, "ConnectInstanceId", value=instance.attr_id)
         CfnOutput(self, "ConnectInstanceArn", value=instance.attr_arn)
         CfnOutput(self, "ContactFlowArn", value=flow.attr_contact_flow_arn)
+
+        # Gateway IAM role
+        gateway_role = iam.Role(self, "GatewayRole",
+            assumed_by=iam.ServicePrincipal("bedrock-agentcore.amazonaws.com"),
+        )
+        fn.grant_invoke(gateway_role)
+
+        # Connect instance access URL for OIDC discovery
+        connect_url = f"https://{proj}.my.connect.aws"
+
+        # AgentCore Gateway (L1 construct) - uses Connect's OIDC for auth
+        gateway = agentcore.CfnGateway(self, "TaxLookupGateway",
+            name=f"{proj}-gateway",
+            description="MCP Gateway for tax refund lookup tool",
+            protocol_type="MCP",
+            authorizer_type="CUSTOM_JWT",
+            role_arn=gateway_role.role_arn,
+            authorizer_configuration=agentcore.CfnGateway.AuthorizerConfigurationProperty(
+                custom_jwt_authorizer=agentcore.CfnGateway.CustomJWTAuthorizerConfigurationProperty(
+                    discovery_url=f"{connect_url}/.well-known/openid-configuration",
+                    allowed_audience=["PLACEHOLDER"],
+                ),
+            ),
+        )
+
+        # Update gateway audience to its own ID (can't self-reference in CFN)
+        cr.AwsCustomResource(self, "UpdateGatewayAudience",
+            on_create=cr.AwsSdkCall(
+                service="BedrockAgentCoreControl",
+                action="updateGateway",
+                parameters={
+                    "gatewayIdentifier": gateway.ref,
+                    "name": f"{proj}-gateway",
+                    "description": "MCP Gateway for tax refund lookup tool",
+                    "protocolType": "MCP",
+                    "authorizerType": "CUSTOM_JWT",
+                    "roleArn": gateway_role.role_arn,
+                    "authorizerConfiguration": {
+                        "customJWTAuthorizer": {
+                            "discoveryUrl": f"{connect_url}/.well-known/openid-configuration",
+                            "allowedAudience": [gateway.ref],
+                        }
+                    },
+                },
+                physical_resource_id=cr.PhysicalResourceId.of("gateway-audience-update"),
+            ),
+            policy=cr.AwsCustomResourcePolicy.from_statements([
+                iam.PolicyStatement(
+                    actions=["bedrock-agentcore:UpdateGateway"],
+                    resources=[gateway.attr_gateway_arn],
+                ),
+            ]),
+        )
+
+        # Gateway Target with Lambda
+        target = agentcore.CfnGatewayTarget(self, "TaxLookupTarget",
+            name="tax-lookup",
+            description="Look up tax refunds by customer name",
+            gateway_identifier=gateway.ref,
+            target_configuration=agentcore.CfnGatewayTarget.TargetConfigurationProperty(
+                mcp=agentcore.CfnGatewayTarget.McpTargetConfigurationProperty(
+                    lambda_=agentcore.CfnGatewayTarget.McpLambdaTargetConfigurationProperty(
+                        lambda_arn=fn.function_arn,
+                        tool_schema=agentcore.CfnGatewayTarget.ToolSchemaProperty(
+                            inline_payload=[
+                                agentcore.CfnGatewayTarget.ToolDefinitionProperty(
+                                    name="tax_lookup",
+                                    description="Look up tax refunds for a customer by their name",
+                                    input_schema=agentcore.CfnGatewayTarget.SchemaDefinitionProperty(
+                                        type="object",
+                                        properties={
+                                            "customer_name": agentcore.CfnGatewayTarget.SchemaDefinitionProperty(
+                                                type="string",
+                                                description="The customer's full name to search for refunds",
+                                            ),
+                                        },
+                                        required=["customer_name"],
+                                    ),
+                                ),
+                            ],
+                        ),
+                    ),
+                ),
+            ),
+            credential_provider_configurations=[
+                agentcore.CfnGatewayTarget.CredentialProviderConfigurationProperty(
+                    credential_provider_type="GATEWAY_IAM_ROLE",
+                ),
+            ],
+        )
+        target.add_dependency(gateway)
+
+        CfnOutput(self, "GatewayId", value=gateway.ref)
+        CfnOutput(self, "GatewayUrl", value=gateway.attr_gateway_url)

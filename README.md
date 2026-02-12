@@ -33,71 +33,47 @@ aws s3 cp UnclaimedRefunds.xls s3://$(aws cloudformation describe-stacks \
 
 ## Manual Steps
 
+### In The AWS Console
+
 ### 0. Enable Lex Bot Management (AWS Console)
 
 1. Go to **Amazon Connect** in AWS Console
-2. Select your instance → **Lex bots**
+2. Select your instance **Flows** → **Amazon Lex**
 3. Enable both checkboxes:
    - **Enable Lex Bot Management in Amazon Connect**
    - **Enable Bot Analytics and Transcripts in Amazon Connect**
 4. Save
 
-### Amazon Connect Admin Website
-
 ### 1. Create Connect AI Agent Domain (AWS Console)
 
-1. Go to **AWS Console** → **Amazon Connect** → select your instance
-2. In the left navigation, choose **Amazon Q** → **Add domain**
-3. Create a new domain with a friendly name
-4. Use default encryption or create a KMS key
-5. Click **Add domain**
+1. In the left navigation, choose **AI agents** → **Add domain**
+2. Create a new domain with a friendly name (e.g., "riverside-tax")
+3. Use default encryption or create a KMS key
+4. Click **Add domain**
 
-### 2. Configure AI Prompt with TAX_LOOKUP Action (Admin Website)
+### 2. Register AgentCore Gateway as MCP Server
 
-1. Go to **Amazon Q** → **AI prompts** → **Create prompt**
-3. Add the following **System prompt**:
-   ```
-   You are a helpful assistant for Riverside County tax refund lookups.
-   When a customer provides their name, use the TAX_LOOKUP tool to search for unclaimed refunds.
-   Be friendly and helpful. If the customer wants to end the conversation, use COMPLETE.
-   ```
-4. Add these **Custom tools**:
-   ```yaml
-   tools:
-   - name: TAX_LOOKUP
-     description: Look up tax refunds for a customer by their name. Use this when the customer wants to check if they have any unclaimed tax refunds.
-     input_schema:
-       type: object
-       properties:
-         customer_name:
-           type: string
-           description: The customer's full name to search for refunds
-       required:
-       - customer_name
-   - name: CONVERSATION
-     description: Continue holding a casual conversation with the customer.
-     input_schema:
-       type: object
-       properties:
-         message:
-           type: string
-           description: The message to send to the customer
-       required:
-       - message
-   - name: COMPLETE
-     description: End the conversation when the customer is done.
-     input_schema:
-       type: object
-       properties:
-         message:
-           type: string
-           description: A goodbye message
-       required:
-       - message
-   ```
-5. Save the prompt
+1. Go to **Third-party applications** → **Add application**
+2. Configure:
+   - **Display name**: `Tax Lookup Gateway`
+   - **Application type**: Select **MCP server**
+3. In **Instance association**:
+   - Select your Connect instance
+4. Click **Add application**
 
-### 3. Configure Nova Sonic Speech-to-Speech
+> **Note:** This step must be done after `cdk deploy` completes. The CDK stack creates the gateway and sets the correct `allowedAudience` automatically, but registering it as a third-party application in Connect has no CloudFormation resource and must be done manually.
+
+### Amazon Connect Admin Website
+
+### 3. Add Tool to AI Agent
+
+1. Go to **AI agent designer** → **AI Agents** → **Create AI Agent**
+2. Select **Orchestration** type
+3. In the **Tools** section, click **Add tool** → **MCP tool**
+4. Select `Tax Lookup Gateway` and add the `tax_lookup` tool
+5. Save and Publish the AI agent
+
+### 4. Configure Nova Sonic Speech-to-Speech
 
 1. Go to **Routing** → **Flows** → **Conversational AI** tab
 3. Select your bot name
@@ -107,7 +83,7 @@ aws s3 cp UnclaimedRefunds.xls s3://$(aws cloudformation describe-stacks \
 7. Set **Voice provider** to **Amazon Nova Sonic**
 8. Click **Confirm**, then **Build language**
 
-### 4. Configure Contact Flow Voice
+### 5. Configure Contact Flow Voice
 
 1. Open your contact flow in Flow designer
 2. Add/edit a **Set voice** block
@@ -119,7 +95,7 @@ aws s3 cp UnclaimedRefunds.xls s3://$(aws cloudformation describe-stacks \
    - Lupe (es-US, Feminine)
 5. **Save** and **Publish** the flow
 
-### 5. Enable Communications Widget
+### 6. Enable Communications Widget
 
 1. Go to **Channels** → **Communications widget** → **Add widget**
 2. Select Add chat and Add web calling
