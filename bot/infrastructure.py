@@ -8,6 +8,7 @@ from aws_cdk import (
     aws_lex as lex,
     aws_connect as connect,
     aws_wisdom as wisdom,
+    aws_logs as logs,
     aws_bedrockagentcore as agentcore,
     custom_resources as cr,
 )
@@ -41,14 +42,10 @@ class NovaSonicConnectStack(Stack):
         )
         bucket.grant_read(role)
 
-        # Lambda environment from config
+        # Lambda environment — only vars the code actually uses
         env = {
             "S3_BUCKET": bucket.bucket_name,
             "DATA_FILE": cfg['s3']['data_file'],
-            "PROMPT_WELCOME": cfg['prompts']['welcome'],
-            "PROMPT_NOT_FOUND": cfg['prompts']['not_found'],
-            "PROMPT_FOUND": cfg['prompts']['found'],
-            "PROMPT_ERROR": cfg['prompts']['error'],
             **cfg['lambda']['environment']
         }
 
@@ -77,14 +74,27 @@ class NovaSonicConnectStack(Stack):
         fn.add_permission("LexInvoke", principal=iam.ServicePrincipal("lexv2.amazonaws.com"), source_account=self.account)
 
         # Lex bot role
-        bot_role = iam.Role(self, "BotRole", assumed_by=iam.ServicePrincipal("lexv2.amazonaws.com"))
+        bot_role = iam.Role(self, "BotRole", assumed_by=iam.CompositePrincipal(
+            iam.ServicePrincipal("lexv2.amazonaws.com"),
+            iam.ServicePrincipal("lexv2.aws.internal"),
+        ))
+        bot_role.add_to_policy(iam.PolicyStatement(
+            actions=["wisdom:*", "qconnect:*"],
+            resources=[
+                f"arn:aws:wisdom:{self.region}:{self.account}:*",
+                f"arn:aws:qconnect:{self.region}:{self.account}:*",
+            ],
+        ))
+        bot_role.add_to_policy(iam.PolicyStatement(
+            actions=["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+            resources=["*"],
+        ))
 
         # Wisdom (Q in Connect) Assistant
         assistant = wisdom.CfnAssistant(
             self, "Assistant",
-            name=f"{proj}-assistant",
+            name=cfg['wisdom']['assistant_name'],
             type="AGENT",
-            tags=[{"key": "AmazonConnectEnabled", "value": "True"}],
         )
 
         # Lex bot with AMAZON.QInConnectIntent for Q in Connect self-service
@@ -102,11 +112,42 @@ class NovaSonicConnectStack(Stack):
                     {
                         "name": "FallbackIntent",
                         "parentIntentSignature": "AMAZON.FallbackIntent",
+                        "initialResponseSetting": {
+                            "nextStep": {
+                                "dialogAction": {"type": "InvokeDialogCodeHook"}
+                            },
+                            "codeHook": {
+                                "enableCodeHookInvocation": True,
+                                "isActive": True,
+                                "postCodeHookSpecification": {
+                                    "successNextStep": {"dialogAction": {"type": "EndConversation"}},
+                                    "failureNextStep": {"dialogAction": {"type": "EndConversation"}},
+                                    "timeoutNextStep": {"dialogAction": {"type": "EndConversation"}},
+                                }
+                            }
+                        },
                     },
                     {
                         "name": "QInConnectIntent",
                         "parentIntentSignature": "AMAZON.QInConnectIntent",
                         "dialogCodeHook": {"enabled": True},
+                        "fulfillmentCodeHook": {
+                            "enabled": True,
+                            "isActive": True,
+                            "postFulfillmentStatusSpecification": {
+                                "successResponse": {
+                                    "messageGroupsList": [{
+                                        "message": {
+                                            "plainTextMessage": {"value": "((x-amz-lex:q-in-connect-response))"}
+                                        }
+                                    }],
+                                    "allowInterrupt": True,
+                                },
+                                "successNextStep": {"dialogAction": {"type": "EndConversation"}},
+                                "failureNextStep": {"dialogAction": {"type": "EndConversation"}},
+                                "timeoutNextStep": {"dialogAction": {"type": "EndConversation"}},
+                            }
+                        },
                         "qInConnectIntentConfiguration": {
                             "qInConnectAssistantConfiguration": {
                                 "assistantArn": assistant.attr_assistant_arn
@@ -118,11 +159,29 @@ class NovaSonicConnectStack(Stack):
         )
         bot.add_dependency(assistant)
 
-        # Bot alias with Q in Connect enabled
+        # Bot version (required before alias can work)
+        bot_version = lex.CfnBotVersion(
+            self, "BotVersion",
+            bot_id=bot.attr_id,
+            bot_version_locale_specification=[{
+                "localeId": cfg['lex']['locale'],
+                "botVersionLocaleDetails": {"sourceBotVersion": "DRAFT"}
+            }],
+        )
+
+        # CloudWatch log group for Lex conversation logs
+        lex_log_group = logs.LogGroup(
+            self, "LexLogGroup",
+            log_group_name=f"/aws/lex/{cfg['lex']['bot_name']}",
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+
+        # Bot alias with Q in Connect enabled + conversation logs
         alias = lex.CfnBotAlias(
             self, "BotAlias",
             bot_alias_name=cfg['lex']['alias_name'],
             bot_id=bot.attr_id,
+            bot_version=bot_version.attr_bot_version,
             bot_alias_locale_settings=[{
                 "localeId": cfg['lex']['locale'],
                 "botAliasLocaleSetting": {
@@ -130,7 +189,19 @@ class NovaSonicConnectStack(Stack):
                     "codeHookSpecification": {"lambdaCodeHook": {"lambdaArn": fn.function_arn, "codeHookInterfaceVersion": "1.0"}}
                 }
             }],
+            conversation_log_settings=lex.CfnBotAlias.ConversationLogSettingsProperty(
+                text_log_settings=[lex.CfnBotAlias.TextLogSettingProperty(
+                    enabled=True,
+                    destination=lex.CfnBotAlias.TextLogDestinationProperty(
+                        cloud_watch=lex.CfnBotAlias.CloudWatchLogGroupLogDestinationProperty(
+                            cloud_watch_log_group_arn=lex_log_group.log_group_arn,
+                            log_prefix="conversation",
+                        )
+                    ),
+                )],
+            ),
         )
+        alias.add_dependency(bot_version)
 
         # Connect instance
         instance = connect.CfnInstance(
@@ -161,19 +232,74 @@ class NovaSonicConnectStack(Stack):
             integration_arn=assistant.attr_assistant_arn,
         )
 
-        # Contact flow — chat with AI agent via Lex + Wisdom
+        # Contact flow — matches the working "Self Service Test Flow"
+        # Flow: enable-logging → create-wisdom-session (with AI agent) → update-contact →
+        #   set-voice → create-wisdom-session-2 → update-contact-2 →
+        #   connect-lex-bot (with ai-agent-arn session attr) → goodbye/error → disconnect
+        ai_agent_arn = cfg['connect']['ai_agent_version_arn']
+
         flow_content_template = json.dumps({
             "Version": "2019-10-30",
-            "StartAction": "wisdom-session",
+            "StartAction": "enable-logging",
             "Actions": [
                 {
-                    "Identifier": "wisdom-session",
+                    "Identifier": "enable-logging",
+                    "Type": "UpdateFlowLoggingBehavior",
+                    "Parameters": {"FlowLoggingBehavior": "Enabled"},
+                    "Transitions": {"NextAction": "create-wisdom-1"}
+                },
+                {
+                    "Identifier": "create-wisdom-1",
+                    "Type": "CreateWisdomSession",
+                    "Parameters": {
+                        "WisdomAssistantArn": "${AssistantArn}",
+                        "OrchestrationAIAgentConfiguration": {
+                            "AgentAssistanceAgentVersionArn": ai_agent_arn
+                        }
+                    },
+                    "Transitions": {
+                        "NextAction": "update-contact-1",
+                        "Errors": [{"NextAction": "speak-error", "ErrorType": "NoMatchingError"}]
+                    }
+                },
+                {
+                    "Identifier": "update-contact-1",
+                    "Type": "UpdateContactData",
+                    "Parameters": {"WisdomSessionArn": "$.Wisdom.SessionArn"},
+                    "Transitions": {
+                        "NextAction": "set-voice",
+                        "Errors": [{"NextAction": "speak-error", "ErrorType": "NoMatchingError"}]
+                    }
+                },
+                {
+                    "Identifier": "set-voice",
+                    "Type": "UpdateContactTextToSpeechVoice",
+                    "Parameters": {
+                        "TextToSpeechVoice": cfg['connect']['voice_id'],
+                        "TextToSpeechEngine": cfg['connect']['voice_engine'],
+                        "TextToSpeechStyle": "None"
+                    },
+                    "Transitions": {
+                        "NextAction": "create-wisdom-2",
+                        "Errors": [{"NextAction": "create-wisdom-2", "ErrorType": "NoMatchingError"}]
+                    }
+                },
+                {
+                    "Identifier": "create-wisdom-2",
                     "Type": "CreateWisdomSession",
                     "Parameters": {"WisdomAssistantArn": "${AssistantArn}"},
                     "Transitions": {
+                        "NextAction": "update-contact-2",
+                        "Errors": [{"NextAction": "speak-error", "ErrorType": "NoMatchingError"}]
+                    }
+                },
+                {
+                    "Identifier": "update-contact-2",
+                    "Type": "UpdateContactData",
+                    "Parameters": {"WisdomSessionArn": "$.Wisdom.SessionArn"},
+                    "Transitions": {
                         "NextAction": "get-input",
-                        "Errors": [{"NextAction": "get-input", "ErrorType": "NoMatchingError"}],
-                        "Conditions": []
+                        "Errors": [{"NextAction": "speak-error", "ErrorType": "NoMatchingError"}]
                     }
                 },
                 {
@@ -181,12 +307,36 @@ class NovaSonicConnectStack(Stack):
                     "Type": "ConnectParticipantWithLexBot",
                     "Parameters": {
                         "Text": " ",
-                        "LexV2Bot": {"AliasArn": "${BotAliasArn}"}
+                        "LexInitializationData": {"InitialMessage": cfg['prompts']['welcome']},
+                        "LexV2Bot": {"AliasArn": "${BotAliasArn}"},
+                        "LexSessionAttributes": {
+                            "x-amz-lex:q-in-connect:ai-agent-arn": ai_agent_arn
+                        }
                     },
                     "Transitions": {
-                        "NextAction": "get-input",
-                        "Errors": [{"NextAction": "disconnect", "ErrorType": "NoMatchingError"}],
-                        "Conditions": []
+                        "NextAction": "speak-error",
+                        "Errors": [
+                            {"NextAction": "speak-goodbye", "ErrorType": "NoMatchingCondition"},
+                            {"NextAction": "speak-error", "ErrorType": "NoMatchingError"}
+                        ]
+                    }
+                },
+                {
+                    "Identifier": "speak-goodbye",
+                    "Type": "MessageParticipant",
+                    "Parameters": {"Text": cfg['prompts']['goodbye']},
+                    "Transitions": {
+                        "NextAction": "disconnect",
+                        "Errors": [{"NextAction": "disconnect", "ErrorType": "NoMatchingError"}]
+                    }
+                },
+                {
+                    "Identifier": "speak-error",
+                    "Type": "MessageParticipant",
+                    "Parameters": {"Text": cfg['prompts']['error']},
+                    "Transitions": {
+                        "NextAction": "disconnect",
+                        "Errors": [{"NextAction": "disconnect", "ErrorType": "NoMatchingError"}]
                     }
                 },
                 {

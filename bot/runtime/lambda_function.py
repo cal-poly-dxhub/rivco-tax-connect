@@ -1,15 +1,22 @@
 import json
+import logging
 import os
+
 import boto3
 import jellyfish
 from bs4 import BeautifulSoup
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 s3 = boto3.client('s3')
 BUCKET = os.environ.get('S3_BUCKET')
 FILE_KEY = os.environ.get('DATA_FILE', 'UnclaimedRefunds.xls')
 CLAIM_URL = os.environ.get('CLAIM_URL', 'https://apps.auditorcontroller.org/unclaimedrefund/refundform.aspx')
+FUZZY_THRESHOLD = float(os.environ.get('FUZZY_THRESHOLD', '0.8'))
 
 _records_cache = None
+
 
 def load_records():
     global _records_cache
@@ -28,51 +35,82 @@ def load_records():
     _records_cache = records
     return records
 
-def match_name(query, records):
+
+def find_best_match(query):
     if not query:
-        return []
+        return None, []
+
     q = query.lower().strip()
-    scored = [(jellyfish.jaro_winkler_similarity(q, r['name'].lower()), r) for r in records]
-    return [r for s, r in sorted(scored, key=lambda x: -x[0]) if s >= 0.7]
+    records = load_records()
+
+    scored = [
+        (jellyfish.jaro_winkler_similarity(q, r['name'].lower()), r)
+        for r in records
+    ]
+    scored.sort(key=lambda x: -x[0])
+
+    top5 = [(round(s, 3), r['name']) for s, r in scored[:5]]
+    logger.info("Query: '%s' | Top 5: %s", query, top5)
+
+    best_score, best_record = scored[0]
+    if best_score < FUZZY_THRESHOLD:
+        logger.info("Best score %.3f below threshold %.2f — no match", best_score, FUZZY_THRESHOLD)
+        return None, []
+
+    best_name = best_record['name']
+    matching_records = [r for r in records if r['name'] == best_name]
+
+    total = sum(r['amount'] for r in matching_records)
+    logger.info("Matched: '%s' (score=%.3f) | %d record(s) | Total: $%.2f",
+                best_name, best_score, len(matching_records), total)
+
+    return best_name, matching_records
+
+
+def lookup(name):
+    best_name, records = find_best_match(name)
+    if not best_name:
+        return f"No refunds found for {name}."
+
+    total = sum(r['amount'] for r in records)
+    return (
+        f"Match: {best_name} | "
+        f"Refunds: {len(records)} | "
+        f"Total: ${total:,.2f} | "
+        f"Claim URL: {CLAIM_URL}"
+    )
+
 
 def lambda_handler(event, context):
-    # Handle Connect flow invocation (custom action)
-    if 'Details' in event:
-        name = event.get('Details', {}).get('ContactData', {}).get('Attributes', {}).get('customer_name', '')
-        if not name:
-            # Try to get from Lex session attributes
-            name = event.get('Details', {}).get('ContactData', {}).get('Attributes', {}).get('name', '')
-        try:
-            matches = match_name(name, load_records())
-            if matches:
-                top = matches[0]['name']
-                same = [m for m in matches if m['name'] == top]
-                total = sum(m['amount'] for m in same)
-                return {'result': f"I found {len(same)} refund(s) for {top} totaling ${total:.2f}. Visit {CLAIM_URL} to claim your refund."}
-            return {'result': f"I couldn't find any refunds for {name}. Please check the spelling and try again."}
-        except Exception as e:
-            return {'result': "I'm sorry, I couldn't look up that information right now."}
-    
-    # Handle Lex invocation (fallback)
+    logger.info("Event: %s", json.dumps(event, default=str))
+
+    # MCP Gateway tool call
+    if 'customer_name' in event:
+        return {'result': lookup(event['customer_name'])}
+
+    # Lex: delegate QInConnectIntent back to Q in Connect
     intent = event.get('sessionState', {}).get('intent', {})
-    transcript = event.get('inputTranscript', '').strip()
     session = event.get('sessionState', {}).get('sessionAttributes', {}) or {}
-    
-    try:
-        matches = match_name(transcript, load_records())
-        if matches:
-            top = matches[0]['name']
-            same = [m for m in matches if m['name'] == top]
-            total = sum(m['amount'] for m in same)
-            msg = f"I found {len(same)} refund(s) for {top} totaling ${total:.2f}. Visit {CLAIM_URL} to claim your refund."
-        else:
-            msg = f"I couldn't find any refunds for {transcript}."
+
+    if intent.get('name') == 'QInConnectIntent':
         return {
-            'sessionState': {'dialogAction': {'type': 'ElicitIntent'}, 'intent': intent, 'sessionAttributes': session},
-            'messages': [{'contentType': 'PlainText', 'content': msg}]
+            'sessionState': {
+                'dialogAction': {'type': 'Delegate'},
+                'intent': intent,
+                'sessionAttributes': session,
+            }
         }
-    except Exception:
+
+    # Lex FallbackIntent: do tax lookup on transcript
+    if 'inputTranscript' in event:
+        msg = lookup(event['inputTranscript'].strip())
         return {
-            'sessionState': {'dialogAction': {'type': 'Close'}, 'intent': {**intent, 'state': 'Failed'}},
-            'messages': [{'contentType': 'PlainText', 'content': "An error occurred. Please try again."}]
+            'sessionState': {
+                'dialogAction': {'type': 'ElicitIntent'},
+                'intent': intent,
+                'sessionAttributes': session,
+            },
+            'messages': [{'contentType': 'PlainText', 'content': msg}],
         }
+
+    return {'result': 'Unknown invocation type.'}

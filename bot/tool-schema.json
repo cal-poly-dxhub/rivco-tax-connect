@@ -1,0 +1,14 @@
+{
+  "name": "tax_lookup",
+  "description": "Look up tax refunds for a customer by their name. Use this when the customer wants to check if they have any unclaimed tax refunds.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "customer_name": {
+        "type": "string",
+        "description": "The customer's full name to search for refunds"
+      }
+    },
+    "required": ["customer_name"]
+  }
+}
