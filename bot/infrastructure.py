@@ -3,6 +3,7 @@ import yaml
 from aws_cdk import (
     Stack, Duration, RemovalPolicy, CfnOutput, BundlingOptions, BundlingFileAccess,
     aws_s3 as s3,
+    aws_s3_deployment as s3deploy,
     aws_lambda as _lambda,
     aws_iam as iam,
     aws_lex as lex,
@@ -10,6 +11,7 @@ from aws_cdk import (
     aws_wisdom as wisdom,
     aws_logs as logs,
     aws_bedrockagentcore as agentcore,
+    aws_apigateway as apigw,
     custom_resources as cr,
 )
 from constructs import Construct
@@ -430,3 +432,84 @@ class NovaSonicConnectStack(Stack):
         CfnOutput(self, "QueueArn", value=queue.attr_queue_arn)
         CfnOutput(self, "RoutingProfileArn", value=routing_profile.attr_routing_profile_arn)
         CfnOutput(self, "KnowledgeBaseId", value=kb.attr_knowledge_base_id)
+
+        # --- Task 10: Secure Document Upload Portal ---
+
+        # S3 bucket for uploaded documents (encrypted, lifecycle, no public access)
+        uploads_bucket = s3.Bucket(
+            self, "UploadsBucket",
+            bucket_name=f"{proj}-uploads-{self.account}",
+            encryption=s3.BucketEncryption.S3_MANAGED,
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            removal_policy=RemovalPolicy.DESTROY,
+            auto_delete_objects=True,
+            lifecycle_rules=[s3.LifecycleRule(expiration=Duration.days(90))],
+            cors=[s3.CorsRule(
+                allowed_methods=[s3.HttpMethods.PUT],
+                allowed_origins=["*"],
+                allowed_headers=["*"],
+                max_age=3600,
+            )],
+        )
+
+        # Lambda for presigned URL generation
+        upload_fn = _lambda.Function(
+            self, "UploadHandler",
+            function_name=f"{proj}-upload-handler",
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            handler="lambda_function.lambda_handler",
+            code=_lambda.Code.from_asset("bot/upload_handler"),
+            timeout=Duration.seconds(10),
+            memory_size=128,
+            environment={
+                "UPLOAD_BUCKET": uploads_bucket.bucket_name,
+            },
+        )
+        uploads_bucket.grant_put(upload_fn)
+
+        # API Gateway REST API
+        upload_api = apigw.RestApi(
+            self, "UploadApi",
+            rest_api_name=f"{proj}-upload-api",
+            default_cors_preflight_options=apigw.CorsOptions(
+                allow_origins=apigw.Cors.ALL_ORIGINS,
+                allow_methods=["POST", "OPTIONS"],
+                allow_headers=["Content-Type"],
+            ),
+        )
+        upload_api.root.add_resource("upload").add_method(
+            "POST", apigw.LambdaIntegration(upload_fn),
+        )
+
+        # S3 bucket for static portal site (public website hosting)
+        portal_bucket = s3.Bucket(
+            self, "PortalBucket",
+            bucket_name=f"{proj}-portal-{self.account}",
+            removal_policy=RemovalPolicy.DESTROY,
+            auto_delete_objects=True,
+            website_index_document="index.html",
+            public_read_access=True,
+            block_public_access=s3.BlockPublicAccess(
+                block_public_acls=False,
+                block_public_policy=False,
+                ignore_public_acls=False,
+                restrict_public_buckets=False,
+            ),
+        )
+
+        s3deploy.BucketDeployment(
+            self, "PortalDeployment",
+            sources=[s3deploy.Source.asset("bot/upload_portal")],
+            destination_bucket=portal_bucket,
+        )
+
+        config_js = f'window.API_URL = "{upload_api.url.rstrip("/")}";\n'
+        s3deploy.BucketDeployment(
+            self, "PortalConfig",
+            sources=[s3deploy.Source.data("config.js", config_js)],
+            destination_bucket=portal_bucket,
+        )
+
+        CfnOutput(self, "UploadPortalUrl", value=portal_bucket.bucket_website_url)
+        CfnOutput(self, "UploadApiUrl", value=upload_api.url)
+        CfnOutput(self, "UploadsBucketName", value=uploads_bucket.bucket_name)

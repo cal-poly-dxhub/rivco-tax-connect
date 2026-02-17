@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Riverside County — Document Upload Portal</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f7fa; color: #1a1a1a; }
+  .header { background: #1b3a5c; color: #fff; padding: 1.5rem 2rem; }
+  .header h1 { font-size: 1.4rem; font-weight: 600; }
+  .container { max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+  .card { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.1); padding: 2rem; }
+  .card h2 { font-size: 1.2rem; margin-bottom: .5rem; }
+  .card p.subtitle { color: #555; font-size: .9rem; margin-bottom: 1.5rem; }
+  label { display: block; font-weight: 500; margin-bottom: .3rem; font-size: .9rem; }
+  input, select { width: 100%; padding: .6rem .75rem; border: 1px solid #ccc; border-radius: 4px; font-size: .95rem; margin-bottom: 1rem; }
+  input:focus, select:focus { outline: none; border-color: #1b3a5c; box-shadow: 0 0 0 2px rgba(27,58,92,.15); }
+  .file-group { margin-bottom: 1.2rem; }
+  .file-group small { color: #666; font-size: .8rem; }
+  button { background: #1b3a5c; color: #fff; border: none; padding: .75rem 1.5rem; border-radius: 4px; font-size: 1rem; cursor: pointer; width: 100%; }
+  button:hover { background: #15304d; }
+  button:disabled { background: #999; cursor: not-allowed; }
+  .status { margin-top: 1rem; padding: .75rem; border-radius: 4px; font-size: .9rem; display: none; }
+  .status.ok { display: block; background: #e8f5e9; color: #2e7d32; }
+  .status.err { display: block; background: #fce4ec; color: #c62828; }
+  .status.loading { display: block; background: #e3f2fd; color: #1565c0; }
+  .required::after { content: " *"; color: #c62828; }
+</style>
+</head>
+<body>
+<div class="header"><h1>Riverside County Auditor-Controller — Document Upload</h1></div>
+<div class="container">
+  <div class="card">
+    <h2>Upload Supporting Documents</h2>
+    <p class="subtitle">Submit the documents required for your AP13 affidavit. Accepted formats: PDF, JPEG, PNG. Max 10 MB per file.</p>
+    <form id="uploadForm" aria-label="Document upload form">
+      <label for="name" class="required">Full Name</label>
+      <input type="text" id="name" required placeholder="Jane Doe" autocomplete="name">
+
+      <label for="refundType" class="required">Refund Type</label>
+      <select id="refundType" required>
+        <option value="">— Select —</option>
+        <option value="STALE_WARRANT">Stale Warrant</option>
+        <option value="PAYROLL">Payroll</option>
+        <option value="PROPERTY_TAX">Property Tax</option>
+      </select>
+
+      <div class="file-group">
+        <label for="fileId" class="required">Government-Issued Photo ID</label>
+        <small>Driver's license, passport, or state ID</small>
+        <input type="file" id="fileId" accept=".pdf,.jpg,.jpeg,.png,.heic" required>
+      </div>
+
+      <div class="file-group">
+        <label for="fileAffidavit" class="required">Completed &amp; Signed AP13 Affidavit</label>
+        <small>The filled-out AP13 PDF form</small>
+        <input type="file" id="fileAffidavit" accept=".pdf,.jpg,.jpeg,.png,.heic" required>
+      </div>
+
+      <div class="file-group">
+        <label for="fileAddress" class="required">Proof of Current Address</label>
+        <small>Utility bill, bank statement, or lease agreement</small>
+        <input type="file" id="fileAddress" accept=".pdf,.jpg,.jpeg,.png,.heic" required>
+      </div>
+
+      <button type="submit" id="submitBtn">Upload Documents</button>
+      <div id="status" class="status" role="alert"></div>
+    </form>
+  </div>
+</div>
+<script src="config.js"></script>
+<script>
+(function () {
+  const API_URL = window.API_URL || "";
+  const form = document.getElementById("uploadForm");
+  const status = document.getElementById("status");
+  const btn = document.getElementById("submitBtn");
+
+  // Pre-fill name from query string if provided
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("name")) document.getElementById("name").value = params.get("name");
+  if (params.get("type")) document.getElementById("refundType").value = params.get("type");
+
+  function setStatus(cls, msg) {
+    status.className = "status " + cls;
+    status.textContent = msg;
+  }
+
+  form.addEventListener("submit", async function (e) {
+    e.preventDefault();
+    btn.disabled = true;
+    setStatus("loading", "Requesting upload URLs…");
+
+    const fileInputs = [
+      { el: document.getElementById("fileId"), label: "photo-id" },
+      { el: document.getElementById("fileAffidavit"), label: "ap13-affidavit" },
+      { el: document.getElementById("fileAddress"), label: "proof-of-address" },
+    ];
+
+    const files = [];
+    for (const fi of fileInputs) {
+      const file = fi.el.files[0];
+      if (!file) { setStatus("err", "Please select all required files."); btn.disabled = false; return; }
+      if (file.size > 10 * 1024 * 1024) { setStatus("err", file.name + " exceeds 10 MB limit."); btn.disabled = false; return; }
+      files.push({ file, filename: fi.label + "_" + file.name, contentType: file.type || "application/octet-stream" });
+    }
+
+    try {
+      const res = await fetch(API_URL + "/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: document.getElementById("name").value.trim(),
+          refundType: document.getElementById("refundType").value,
+          files: files.map(f => ({ filename: f.filename, contentType: f.contentType })),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Request failed");
+
+      setStatus("loading", "Uploading files…");
+      for (let i = 0; i < data.uploads.length; i++) {
+        await fetch(data.uploads[i].uploadUrl, {
+          method: "PUT",
+          headers: { "Content-Type": files[i].contentType },
+          body: files[i].file,
+        });
+      }
+
+      setStatus("ok", "Documents uploaded successfully! Submission ID: " + data.submissionId);
+      form.reset();
+    } catch (err) {
+      setStatus("err", "Upload failed: " + err.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+})();
+</script>
+</body>
+</html>
