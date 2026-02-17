@@ -74,7 +74,6 @@ prompts:
       - sessionId: {{$.sessionId}}
       - assistantId: {{$.assistantId}}
       - dateTime: {{$.dateTime}}
-      - channel: {{$.Custom.channel}}
 
     messages:
       - "{{$.conversationHistory}}"
