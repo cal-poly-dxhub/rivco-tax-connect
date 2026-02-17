@@ -3,6 +3,8 @@ import logging
 import os
 from datetime import datetime
 
+import re
+
 import boto3
 import jellyfish
 
@@ -10,6 +12,7 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 s3 = boto3.client('s3')
+sns = boto3.client('sns')
 BUCKET = os.environ.get('S3_BUCKET')
 FILE_KEY = os.environ.get('DATA_FILE', 'refunds_demo_balanced.jsonl')
 FUZZY_THRESHOLD = float(os.environ.get('FUZZY_THRESHOLD', '0.8'))
@@ -95,12 +98,32 @@ def lookup(name):
     return json.dumps(results)
 
 
+def send_sms(phone_number, message):
+    """Send SMS to a validated US phone number."""
+    if not re.match(r'^\+1\d{10}$', phone_number):
+        return 'Invalid phone number. Must be a US number in E.164 format (+1XXXXXXXXXX).'
+    if len(message) > 160:
+        message = message[:157] + '...'
+    sns.publish(
+        PhoneNumber=phone_number,
+        Message=message,
+        MessageAttributes={
+            'AWS.SNS.SMS.SMSType': {'DataType': 'String', 'StringValue': 'Transactional'},
+        },
+    )
+    logger.info("SMS sent to %s...%s", phone_number[:5], phone_number[-2:])
+    return f'SMS sent to {phone_number}.'
+
+
 def lambda_handler(event, context):
     logger.info("Event: %s", json.dumps(event, default=str))
 
-    # MCP Gateway tool call
+    # MCP Gateway tool calls
     if 'customer_name' in event:
         return {'result': lookup(event['customer_name'])}
+
+    if 'phone_number' in event:
+        return {'result': send_sms(event['phone_number'], event.get('message', ''))}
 
     # Lex: delegate QInConnectIntent back to Q in Connect
     intent = event.get('sessionState', {}).get('intent', {})

@@ -31,10 +31,10 @@ connect:
   voice_engine: Generative
   voice_id_spanish: Lupe
   voice_engine_spanish: Generative
-  ai_agent_version_arn: "arn:aws:wisdom:us-west-2:123456789012:ai-agent/ecda3140-e1d1-4609-a2a0-8bf600ace278/4c8ffe48-7f58-4eca-bc5e-6e11adf8d106:$LATEST"
+  # ai_agent_version_arn is resolved dynamically by post-deploy.sh
 
 wisdom:
-  assistant_name: taxdomain
+  assistant_name: riverside-tax-refund-assistant
 
 prompts:
   welcome: "Hello! Welcome to Riverside County's unclaimed tax refund lookup. To get started, please provide your name or company name."
@@ -72,7 +72,7 @@ prompts:
       - If there are multiple refunds, list each one with its type and amount
 
       **CHANNEL-AWARE LINK DELIVERY:**
-      - VOICE channel ({{$.Custom.channel}} == VOICE): Do NOT read the URL aloud. Instead ask: "Would you like me to send the claim form link to your phone via text message? If so, what phone number should I use?"
+      - VOICE channel: If the channel (see SESSION INFO) is VOICE, do NOT read the URL aloud. Instead ask: "Would you like me to send the claim form link to your phone via text message? If so, what phone number should I use?"
       - CHAT channel: Include the claim form link directly in your response
       - SMS channel: Include the claim form link directly in your response
 

@@ -4,110 +4,134 @@ Self-service AI agent for tax refund lookup using Amazon Connect with Nova Sonic
 
 ## Architecture
 
-- Amazon Connect instance with Conversational AI bot
-- Amazon Nova Sonic for speech-to-speech voice interactions
-- Lambda function for tax refund data lookup
-- S3 bucket for refund data storage
-- Wisdom (Q in Connect) Assistant
+```
+Customer → Connect Chat/Voice → Lex Bot (QInConnectIntent)
+                                    ↓
+                              Q in Connect (ORCHESTRATION AI Agent)
+                                    ↓
+                              MCP Gateway (AgentCore)
+                                    ↓
+                              Lambda (tax_lookup) → S3 (refund data)
+```
 
 ## Prerequisites
 
-- Docker (for Lambda bundling)
+- Finch or Docker (for Lambda bundling)
 - AWS CDK
 - Python 3.12+
 
 ## Deployment
 
+### Step 1: Deploy Infrastructure (CDK)
+
 ```bash
-# 1. Install dependencies
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-
-# 2. Deploy CDK stack
-cdk deploy
-
-# 3. Upload refund data
-aws s3 cp UnclaimedRefunds.xls s3://$(aws cloudformation describe-stacks \
-  --stack-name riverside-tax-refund --query "Stacks[0].Outputs[?OutputKey=='BucketName'].OutputValue" --output text)/
+CDK_DOCKER=finch cdk deploy --require-approval never
 ```
 
-## Manual Steps
+This creates: Connect instance, Lex bot, Lambda, S3 bucket, Q in Connect assistant, knowledge base, AgentCore MCP Gateway with Lambda target.
 
-### In The AWS Console
+### Step 2: Console Setup (One-Time)
 
-### 0. Enable Lex Bot Management (AWS Console)
+These steps **must** be completed before running `post-deploy.sh`. They cannot be automated via CLI.
 
-1. Go to **Amazon Connect** in AWS Console
-2. Select your instance **Flows** → **Amazon Lex**
+#### 2a. Register MCP Gateway as Third-Party App
+
+1. Go to **Amazon Connect** → **Third-party applications** → **Add application**
+2. Set **Display name** to `Tax Lookup Gateway`
+3. Set **Application type** to **MCP server**
+4. Select the AgentCore gateway created by CDK (name starts with `riverside-tax-refund-mcp-gateway-`)
+5. Associate with your Connect instance
+6. Click **Add application**
+
+#### 2b. Create ORCHESTRATION AI Agent
+
+> **Important:** The agent must be ORCHESTRATION type. SELF_SERVICE agents do not support MCP tools. The CLI cannot create ORCHESTRATION agents — this must be done in the console.
+
+1. In the Connect admin site, go to **AI agent designer** → **AI Agents** → **Create AI Agent**
+2. Select **Orchestration** type
+3. Name it `tax-refund-agent`
+4. In the **Tools** section, click **Add tool** → **MCP tool**
+5. Select `Tax Lookup Gateway` and add the `tax_lookup` tool
+6. In the **Prompt** section, select `tax-refund-orchestration-prompt` (created by `post-deploy.sh`)
+7. **Save** and **Publish** the agent
+
+> **Note:** Run `post-deploy.sh` once before this step so the prompt exists. Then after creating the agent, run `post-deploy.sh` again to version the agent and wire it into the flow.
+
+#### 2c. Enable Lex Bot Management
+
+1. Go to **Amazon Connect** in AWS Console → select your instance
+2. Go to **Flows** → **Amazon Lex**
 3. Enable both checkboxes:
-   - **Enable Lex Bot Management in Amazon Connect**
-   - **Enable Bot Analytics and Transcripts in Amazon Connect**
+   - Enable Lex Bot Management in Amazon Connect
+   - Enable Bot Analytics and Transcripts in Amazon Connect
 4. Save
 
-### 1. Create Connect AI Agent Domain (AWS Console)
+### Step 3: Run Post-Deploy Script
 
-1. In the left navigation, choose **AI agents** → **Add domain**
-2. Create a new domain with a friendly name (e.g., "riverside-tax")
-3. Use default encryption or create a KMS key
-4. Click **Add domain**
+```bash
+bash post-deploy.sh
+```
 
-### 2. Register AgentCore Gateway as MCP Server
+This script:
+- Uploads refund data to S3
+- Creates/updates the AI orchestration prompt from `config.yaml` (prompt text for the agent)
+- Finds the `tax-refund-agent` ORCHESTRATION agent and creates a new version
+- Creates/updates the contact flow with resolved ARNs
+- Claims a phone number and associates it with the flow
 
-1. Go to **Third-party applications** → **Add application**
-2. Configure:
-   - **Display name**: `Tax Lookup Gateway`
-   - **Application type**: Select **MCP server**
-3. In **Instance association**:
-   - Select your Connect instance
-4. Click **Add application**
+**First-time deployment order:**
+1. Run `post-deploy.sh` → creates the prompt (agent step will fail — that's OK)
+2. Complete Step 2b in the console (create agent, select prompt and tool)
+3. Run `post-deploy.sh` again → versions the agent and wires it into the flow
 
-> **Note:** This step must be done after `cdk deploy` completes. The CDK stack creates the gateway and sets the correct `allowedAudience` automatically, but registering it as a third-party application in Connect has no CloudFormation resource and must be done manually.
+**Subsequent runs:** Just run `post-deploy.sh` — it updates the prompt, versions the agent, and updates the flow.
 
-### Amazon Connect Admin Website
+### Step 4: Configure Nova Sonic (Optional, for Voice)
 
-### 3. Add Tool to AI Agent
+1. In the Connect admin site, go to **Routing** → **Flows** → **Conversational AI**
+2. Select your bot, go to **Configuration** → select locale (e.g., en-US)
+3. In **Speech model** → **Edit** → set **Model type** to **Speech-to-Speech**
+4. Set **Voice provider** to **Amazon Nova Sonic**
+5. **Confirm**, then **Build language**
 
-1. Go to **AI agent designer** → **AI Agents** → **Create AI Agent**
-2. Select **Orchestration** type
-3. In the **Tools** section, click **Add tool** → **MCP tool**
-4. Select `Tax Lookup Gateway` and add the `tax_lookup` tool
-5. Save and Publish the AI agent
+## Testing
 
-### 4. Configure Nova Sonic Speech-to-Speech
+### Chat Test (Programmatic)
 
-1. Go to **Routing** → **Flows** → **Conversational AI** tab
-3. Select your bot name
-4. Go to **Configuration** tab, select your locale (e.g., en-US)
-5. In **Speech model** section → **Edit**
-6. Set **Model type** to **Speech-to-Speech**
-7. Set **Voice provider** to **Amazon Nova Sonic**
-8. Click **Confirm**, then **Build language**
+```bash
+python3 test_chat.py
+```
 
-### 5. Configure Contact Flow Voice
+### Web Widget
 
-1. Open your contact flow in Flow designer
-2. Add/edit a **Set voice** block
-3. In **Other settings**, set **Override speaking style** → **Generative**
-4. Select a Nova Sonic compatible voice:
-   - Matthew (en-US, Masculine)
-   - Amy (en-GB, Feminine)
-   - Olivia (en-AU, Feminine)
-   - Lupe (es-US, Feminine)
-5. **Save** and **Publish** the flow
+Ensure `http://localhost:8000` is an accepted domain in Connect.
 
-### 6. Enable Communications Widget
-
-1. Go to **Channels** → **Communications widget** → **Add widget**
-2. Select Add chat and Add web calling
-3. Select your contact flow under Chat contact flow and Web calling contact flow
-4. Customize the widget's appearance to your liking
-5. Add the URL which the bot will be hosted on to required domains
-6. Copy and paste the connect widget script onto your website
-
-## Local Testing
-
-Ensure that `http://localhost:8000/test-widget.html` is an accepted domain.
 ```bash
 python3 -m http.server 8000
 # Visit http://localhost:8000/test-widget.html
 ```
+
+### Verify Tool Invocation
+
+Check Lambda logs for MCP gateway calls (not just Lex calls):
+
+```bash
+aws logs filter-log-events \
+  --log-group-name "/aws/lambda/riverside-tax-lookup" \
+  --region us-west-2 --start-time $(date -v-5M +%s000) \
+  --query 'events[?contains(message, `customer_name`)].message' --output text
+```
+
+If this returns results, the MCP gateway → Lambda path is working. If empty, only Lex DialogCodeHook calls are happening (tool not invoked).
+
+## Troubleshooting
+
+See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for detailed learnings and a troubleshooting table.
+
+Common issues:
+- **`CreateWisdomSession` errors**: Agent ARN in flow must be an ORCHESTRATION agent, not SELF_SERVICE
+- **Bot says "I don't have an answer"**: MCP tool not configured on agent, or gateway not registered
+- **Bot hallucinates lookup results**: Agent version doesn't have tool — create new version after configuring tool in console, re-run `post-deploy.sh`
+- **`post-deploy.sh` exits with "No ORCHESTRATION agent found"**: Complete Step 2b first

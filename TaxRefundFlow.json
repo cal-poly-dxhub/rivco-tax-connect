@@ -15,6 +15,7 @@
         "parameters": { "TextToSpeechVoice": { "languageCode": "es-US" } },
         "overrideConsoleVoice": true
       },
+      "action-set-caller-phone": { "position": { "x": 1050, "y": -40 } },
       "action-wisdom-session-1": { "position": { "x": 1100, "y": -200 },
         "children": ["action-update-contact-1"],
         "parameters": {
@@ -88,29 +89,26 @@
       "Identifier": "action-check-channel",
       "Type": "Compare",
       "Transitions": {
-        "NextAction": "action-wisdom-session-1",
+        "NextAction": "action-set-caller-phone",
         "Conditions": [
           {
             "NextAction": "action-language-prompt",
             "Condition": { "Operator": "Equals", "Operands": ["VOICE"] }
           },
           {
-            "NextAction": "action-wisdom-session-1",
+            "NextAction": "action-set-caller-phone",
             "Condition": { "Operator": "Equals", "Operands": ["CHAT"] }
           }
         ],
         "Errors": [
-          { "NextAction": "action-wisdom-session-1", "ErrorType": "NoMatchingCondition" },
-          { "NextAction": "action-error", "ErrorType": "NoMatchingError" }
+          { "NextAction": "action-set-caller-phone", "ErrorType": "NoMatchingCondition" }
         ]
       }
     },
     {
       "Parameters": {
+        "StoreInput": "False",
         "Text": "For English, press 1 or say English. Para español, presione 2 o diga español.",
-        "DTMFConfiguration": {
-          "InputTimeLimitSeconds": "5"
-        },
         "InputTimeLimitSeconds": "5"
       },
       "Identifier": "action-language-prompt",
@@ -143,8 +141,8 @@
       "Identifier": "action-set-voice-english",
       "Type": "UpdateContactTextToSpeechVoice",
       "Transitions": {
-        "NextAction": "action-wisdom-session-1",
-        "Errors": [{ "NextAction": "action-wisdom-session-1", "ErrorType": "NoMatchingError" }]
+        "NextAction": "action-set-caller-phone",
+        "Errors": [{ "NextAction": "action-set-caller-phone", "ErrorType": "NoMatchingError" }]
       }
     },
     {
@@ -155,6 +153,19 @@
       },
       "Identifier": "action-set-voice-spanish",
       "Type": "UpdateContactTextToSpeechVoice",
+      "Transitions": {
+        "NextAction": "action-set-caller-phone",
+        "Errors": [{ "NextAction": "action-set-caller-phone", "ErrorType": "NoMatchingError" }]
+      }
+    },
+    {
+      "Parameters": {
+        "Attributes": {
+          "callerPhone": "$.CustomerEndpoint.Address"
+        }
+      },
+      "Identifier": "action-set-caller-phone",
+      "Type": "UpdateContactAttributes",
       "Transitions": {
         "NextAction": "action-wisdom-session-1",
         "Errors": [{ "NextAction": "action-wisdom-session-1", "ErrorType": "NoMatchingError" }]
@@ -231,13 +242,12 @@
         "NextAction": "action-goodbye",
         "Conditions": [
           {
-            "NextAction": "action-transfer-to-queue",
+            "NextAction": "action-set-working-queue",
             "Condition": { "Operator": "Equals", "Operands": ["true"] }
           }
         ],
         "Errors": [
-          { "NextAction": "action-goodbye", "ErrorType": "NoMatchingCondition" },
-          { "NextAction": "action-goodbye", "ErrorType": "NoMatchingError" }
+          { "NextAction": "action-goodbye", "ErrorType": "NoMatchingCondition" }
         ]
       }
     },
@@ -245,8 +255,19 @@
       "Parameters": {
         "QueueId": "${QueueArn}"
       },
+      "Identifier": "action-set-working-queue",
+      "Type": "UpdateContactTargetQueue",
+      "Transitions": {
+        "NextAction": "action-transfer-to-queue",
+        "Errors": [
+          { "NextAction": "action-error", "ErrorType": "NoMatchingError" }
+        ]
+      }
+    },
+    {
+      "Parameters": {},
       "Identifier": "action-transfer-to-queue",
-      "Type": "TransferToQueue",
+      "Type": "TransferContactToQueue",
       "Transitions": {
         "NextAction": "action-error",
         "Errors": [

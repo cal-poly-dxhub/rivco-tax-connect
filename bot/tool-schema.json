@@ -1,14 +1,34 @@
-{
-  "name": "tax_lookup",
-  "description": "Look up tax refunds for a customer by their name. Returns a JSON array of matching refund records with name, refund_type (PROPERTY_TAX, STALE_WARRANT, or PAYROLL), amount, claim_deadline, address, and claim_url. Returns a no-match message string if no refunds are found.",
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "customer_name": {
-        "type": "string",
-        "description": "The customer's full name to search for refunds"
-      }
-    },
-    "required": ["customer_name"]
+[
+  {
+    "name": "tax_lookup",
+    "description": "Look up tax refunds for a customer by their name. Returns a JSON array of matching refund records with name, refund_type (PROPERTY_TAX, STALE_WARRANT, or PAYROLL), amount, claim_deadline, address, and claim_url. Returns a no-match message string if no refunds are found.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "customer_name": {
+          "type": "string",
+          "description": "The customer's full name to search for refunds"
+        }
+      },
+      "required": ["customer_name"]
+    }
+  },
+  {
+    "name": "send_sms",
+    "description": "Send an SMS text message to a US phone number. Use this to send refund claim links to voice callers who cannot click links. Only send when the caller confirms they want to receive a text.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "phone_number": {
+          "type": "string",
+          "description": "US phone number in E.164 format (e.g. +12125551234)"
+        },
+        "message": {
+          "type": "string",
+          "description": "The SMS message body to send (max 160 characters)"
+        }
+      },
+      "required": ["phone_number", "message"]
+    }
   }
-}
+]

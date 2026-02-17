@@ -1,7 +1,7 @@
 import json
 import yaml
 from aws_cdk import (
-    Stack, Duration, RemovalPolicy, CfnOutput, Fn, BundlingOptions, BundlingFileAccess,
+    Stack, Duration, RemovalPolicy, CfnOutput, BundlingOptions, BundlingFileAccess,
     aws_s3 as s3,
     aws_lambda as _lambda,
     aws_iam as iam,
@@ -9,6 +9,7 @@ from aws_cdk import (
     aws_connect as connect,
     aws_wisdom as wisdom,
     aws_logs as logs,
+    aws_bedrockagentcore as agentcore,
     custom_resources as cr,
 )
 from constructs import Construct
@@ -40,6 +41,12 @@ class NovaSonicConnectStack(Stack):
             managed_policies=[iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSLambdaBasicExecutionRole")],
         )
         bucket.grant_read(role)
+        # SMS sending — scoped to direct phone publish only (no topic ARNs).
+        # Invocation chain security: Q in Connect agent → MCP gateway → Lambda.
+        role.add_to_policy(iam.PolicyStatement(
+            actions=["sns:Publish"],
+            resources=["*"],
+        ))
 
         # Lambda environment
         env = {
@@ -311,43 +318,115 @@ class NovaSonicConnectStack(Stack):
             ],
         )
 
-        # Associate Wisdom assistant with Connect
-        wisdom_assoc = connect.CfnIntegrationAssociation(
-            self, "WisdomAssociation",
+        # Associate Lambda with Connect instance (required for Lex code hooks within Connect)
+        lambda_assoc = connect.CfnIntegrationAssociation(
+            self, "LambdaAssociation",
             instance_id=instance.attr_arn,
-            integration_type="WISDOM_ASSISTANT",
-            integration_arn=assistant.attr_assistant_arn,
+            integration_type="LAMBDA_FUNCTION",
+            integration_arn=fn.function_arn,
         )
 
-        # Contact flow — loaded from JSON with parameterized ARNs
+        # Associate Wisdom assistant with Connect via custom resource
+        # (WISDOM_ASSISTANT is not a valid IntegrationType for CfnIntegrationAssociation)
+        wisdom_assoc_cr = cr.AwsCustomResource(
+            self, "WisdomAssociation",
+            on_create=cr.AwsSdkCall(
+                service="Connect",
+                action="createIntegrationAssociation",
+                parameters={
+                    "InstanceId": instance.attr_id,
+                    "IntegrationType": "WISDOM_ASSISTANT",
+                    "IntegrationArn": assistant.attr_assistant_arn,
+                },
+                physical_resource_id=cr.PhysicalResourceId.from_response("IntegrationAssociationId"),
+            ),
+            on_delete=cr.AwsSdkCall(
+                service="Connect",
+                action="deleteIntegrationAssociation",
+                parameters={
+                    "InstanceId": instance.attr_id,
+                    "IntegrationAssociationId": cr.PhysicalResourceIdReference(),
+                },
+            ),
+            policy=cr.AwsCustomResourcePolicy.from_statements([
+                iam.PolicyStatement(
+                    actions=[
+                        "connect:CreateIntegrationAssociation",
+                        "connect:DeleteIntegrationAssociation",
+                        "connect:ListIntegrationAssociations",
+                    ],
+                    resources=[instance.attr_arn, f"{instance.attr_arn}/*"],
+                ),
+                iam.PolicyStatement(
+                    actions=["wisdom:GetAssistant", "wisdom:TagResource"],
+                    resources=[assistant.attr_assistant_arn],
+                ),
+            ]),
+        )
+
+        # Contact flow ARNs needed for post-deploy script
         bot_alias_arn = f"arn:aws:lex:{self.region}:{self.account}:bot-alias/{bot.attr_id}/{alias.attr_bot_alias_id}"
-        ai_agent_arn = cfg['connect']['ai_agent_version_arn']
 
-        with open(cfg['connect']['flow_file']) as f:
-            flow_template = f.read()
-
-        flow = connect.CfnContactFlow(
-            self, "ContactFlow",
-            instance_arn=instance.attr_arn,
-            name=cfg['connect']['flow_name'],
-            type="CONTACT_FLOW",
-            content=Fn.sub(flow_template, {
-                "AssistantArn": assistant.attr_assistant_arn,
-                "AIAgentArn": ai_agent_arn,
-                "BotAliasArn": bot_alias_arn,
-                "QueueArn": queue.attr_queue_arn,
-            }),
+        # Associate Lex bot with Connect instance (required for ConnectParticipantWithLexBot)
+        lex_assoc = connect.CfnIntegrationAssociation(
+            self, "LexBotAssociation",
+            instance_id=instance.attr_arn,
+            integration_type="LEX_BOT",
+            integration_arn=bot_alias_arn,
         )
-        flow.add_dependency(wisdom_assoc)
+
+        # --- AgentCore MCP Gateway for tax_lookup tool ---
+        gateway_role = iam.Role(
+            self, "GatewayRole",
+            role_name=f"{proj}-gateway-role",
+            assumed_by=iam.ServicePrincipal("bedrock-agentcore.amazonaws.com"),
+        )
+        fn.grant_invoke(gateway_role)
+
+        # Load tool schemas from file
+        with open("bot/tool-schema.json") as f:
+            tool_schemas = json.load(f)
+
+        gateway = agentcore.CfnGateway(
+            self, "McpGateway",
+            name=f"{proj}-mcp-gateway",
+            protocol_type="MCP",
+            authorizer_type="NONE",
+            role_arn=gateway_role.role_arn,
+            description="MCP gateway for tax refund lookup tool",
+        )
+
+        gateway_target = agentcore.CfnGatewayTarget(
+            self, "McpGatewayTarget",
+            gateway_identifier=gateway.attr_gateway_identifier,
+            name="tax-lookup-target",
+            target_configuration={
+                "mcp": {
+                    "lambda": {
+                        "lambdaArn": fn.function_arn,
+                        "toolSchema": {
+                            "inlinePayload": tool_schemas,
+                        },
+                    }
+                }
+            },
+            credential_provider_configurations=[{
+                "credentialProviderType": "GATEWAY_IAM_ROLE",
+            }],
+        )
+
+        CfnOutput(self, "GatewayArn", value=gateway.attr_gateway_arn)
+        CfnOutput(self, "GatewayId", value=gateway.attr_gateway_identifier)
+        CfnOutput(self, "GatewayUrl", value=gateway.attr_gateway_url)
 
         CfnOutput(self, "BucketName", value=bucket.bucket_name)
         CfnOutput(self, "LambdaArn", value=fn.function_arn)
         CfnOutput(self, "BotId", value=bot.attr_id)
         CfnOutput(self, "BotAliasId", value=alias.attr_bot_alias_id)
+        CfnOutput(self, "BotAliasArn", value=bot_alias_arn)
         CfnOutput(self, "AssistantArn", value=assistant.attr_assistant_arn)
         CfnOutput(self, "ConnectInstanceId", value=instance.attr_id)
         CfnOutput(self, "ConnectInstanceArn", value=instance.attr_arn)
-        CfnOutput(self, "ContactFlowArn", value=flow.attr_contact_flow_arn)
         CfnOutput(self, "QueueArn", value=queue.attr_queue_arn)
         CfnOutput(self, "RoutingProfileArn", value=routing_profile.attr_routing_profile_arn)
         CfnOutput(self, "KnowledgeBaseId", value=kb.attr_knowledge_base_id)
