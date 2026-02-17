@@ -1,19 +1,21 @@
 import json
 import logging
 import os
+from datetime import datetime
 
 import boto3
 import jellyfish
-from bs4 import BeautifulSoup
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 s3 = boto3.client('s3')
 BUCKET = os.environ.get('S3_BUCKET')
-FILE_KEY = os.environ.get('DATA_FILE', 'UnclaimedRefunds.xls')
-CLAIM_URL = os.environ.get('CLAIM_URL', 'https://apps.auditorcontroller.org/unclaimedrefund/refundform.aspx')
+FILE_KEY = os.environ.get('DATA_FILE', 'refunds_demo_balanced.jsonl')
 FUZZY_THRESHOLD = float(os.environ.get('FUZZY_THRESHOLD', '0.8'))
+
+PROPERTY_TAX_URL = 'https://apps.auditorcontroller.org/unclaimedrefund/refundform.aspx'
+AP13_PDF_URL = 'https://auditorcontroller.org/sites/g/files/aldnop171/files/2024-10/AP13AffidavitfortheReplaceofStlDtdWarr%2010_30_24.pdf'
 
 _records_cache = None
 
@@ -22,18 +24,25 @@ def load_records():
     global _records_cache
     if _records_cache is not None:
         return _records_cache
+
     response = s3.get_object(Bucket=BUCKET, Key=FILE_KEY)
-    html = response['Body'].read().decode('utf-8')
-    soup = BeautifulSoup(html, 'html.parser')
+    body = response['Body'].read().decode('utf-8')
+    today = datetime.now()
     records = []
-    for row in soup.find_all('tr')[1:]:
-        cells = row.find_all('td')
-        if len(cells) >= 5:
-            amount_str = cells[3].get_text(strip=True)
-            amount = float(amount_str.replace('$', '').replace(',', '')) if amount_str else 0.0
-            records.append({'name': cells[0].get_text(strip=True), 'amount': amount})
+    for line in body.strip().splitlines():
+        r = json.loads(line)
+        deadline = datetime.strptime(r['claim_deadline'], '%m/%d/%Y')
+        if deadline >= today:
+            records.append(r)
     _records_cache = records
     return records
+
+
+def build_claim_url(record):
+    if record['refund_type'] == 'PROPERTY_TAX':
+        params = '&'.join(f'{k}={record[k]}' for k in ('index', 'assessment', 'taxyear'))
+        return f"{PROPERTY_TAX_URL}?{params}&amount={record['amount']}"
+    return AP13_PDF_URL
 
 
 def find_best_match(query):
@@ -59,10 +68,7 @@ def find_best_match(query):
 
     best_name = best_record['name']
     matching_records = [r for r in records if r['name'] == best_name]
-
-    total = sum(r['amount'] for r in matching_records)
-    logger.info("Matched: '%s' (score=%.3f) | %d record(s) | Total: $%.2f",
-                best_name, best_score, len(matching_records), total)
+    logger.info("Matched: '%s' (score=%.3f) | %d record(s)", best_name, best_score, len(matching_records))
 
     return best_name, matching_records
 
@@ -70,15 +76,23 @@ def find_best_match(query):
 def lookup(name):
     best_name, records = find_best_match(name)
     if not best_name:
-        return f"No refunds found for {name}."
+        return (
+            f"We found no refunds for {name}. "
+            "You may have no refunds or your refund may have passed its claim deadline."
+        )
 
-    total = sum(r['amount'] for r in records)
-    return (
-        f"Match: {best_name} | "
-        f"Refunds: {len(records)} | "
-        f"Total: ${total:,.2f} | "
-        f"Claim URL: {CLAIM_URL}"
-    )
+    results = []
+    for r in records:
+        results.append({
+            'name': r['name'],
+            'refund_type': r['refund_type'],
+            'amount': f"${r['amount']:,.2f}",
+            'claim_deadline': r['claim_deadline'],
+            'address': r.get('address', ''),
+            'claim_url': build_claim_url(r),
+        })
+
+    return json.dumps(results)
 
 
 def lambda_handler(event, context):
