@@ -8,10 +8,7 @@
     },
     "ActionMetadata": {
       "85923aed-ba70-4b9b-9d4b-ddcadb6f590b": {
-        "position": {
-          "x": 309.6,
-          "y": 175.2
-        },
+        "position": { "x": 309.6, "y": 175.2 },
         "children": ["2cae1541-8d08-487d-892a-8131f251b474"],
         "parameters": {
           "OrchestrationAIAgentConfiguration": {
@@ -21,24 +18,16 @@
             }
           }
         },
-        "fragments": {
-          "SetContactData": "2cae1541-8d08-487d-892a-8131f251b474"
-        },
+        "fragments": { "SetContactData": "2cae1541-8d08-487d-892a-8131f251b474" },
         "useAIAgentDropdown": true,
         "aiAgentName": "tax-refund-agent"
       },
       "2cae1541-8d08-487d-892a-8131f251b474": {
-        "position": {
-          "x": 309.6,
-          "y": 175.2
-        },
+        "position": { "x": 309.6, "y": 175.2 },
         "dynamicParams": []
       },
       "658ef1c7-7490-452e-bc5c-7445e6e00e03": {
-        "position": {
-          "x": 1032.8,
-          "y": -164.8
-        },
+        "position": { "x": 1032.8, "y": -164.8 },
         "children": [
           "4f5ccb5e-5fba-4ccc-adbe-b7058f05fac5",
           "32f0b559-6fb4-4f2c-9267-82a75cd65bb0"
@@ -47,28 +36,20 @@
           "WisdomAssistantArn": {
             "useAIAgentDropdown": true,
             "aiAgentName": "tax-refund-agent",
-            "aiAgentVersionArn": "arn:aws:wisdom:us-west-2:123456789012:ai-agent/ecda3140-e1d1-4609-a2a0-8bf600ace278/4c8ffe48-7f58-4eca-bc5e-6e11adf8d106:$LATEST"
+            "aiAgentVersionArn": "${AIAgentArn}"
           }
         },
-        "fragments": {
-          "SetContactData": "4f5ccb5e-5fba-4ccc-adbe-b7058f05fac5"
-        },
+        "fragments": { "SetContactData": "4f5ccb5e-5fba-4ccc-adbe-b7058f05fac5" },
         "useAIAgentDropdown": true,
         "aiAgentName": "tax-refund-agent",
-        "aiAgentVersionArn": "arn:aws:wisdom:us-west-2:123456789012:ai-agent/ecda3140-e1d1-4609-a2a0-8bf600ace278/4c8ffe48-7f58-4eca-bc5e-6e11adf8d106:$LATEST"
+        "aiAgentVersionArn": "${AIAgentArn}"
       },
       "4f5ccb5e-5fba-4ccc-adbe-b7058f05fac5": {
-        "position": {
-          "x": 1032.8,
-          "y": -164.8
-        },
+        "position": { "x": 1032.8, "y": -164.8 },
         "dynamicParams": []
       },
       "32f0b559-6fb4-4f2c-9267-82a75cd65bb0": {
-        "position": {
-          "x": 1032.8,
-          "y": -164.8
-        },
+        "position": { "x": 1032.8, "y": -164.8 },
         "parameters": {
           "LexV2Bot": {
             "AliasArn": {
@@ -78,49 +59,30 @@
             }
           }
         },
-        "dynamicMetadata": {
-          "x-amz-lex:q-in-connect:ai-agent-arn": false
-        },
+        "dynamicMetadata": { "x-amz-lex:q-in-connect:ai-agent-arn": false },
         "useLexBotDropdown": true,
         "lexV2BotName": "TaxRefundBot",
         "lexV2BotAliasName": "live",
         "conditionMetadata": []
       },
       "48e816e1-9459-4fc3-b10c-3449cfa8e14a": {
-        "position": {
-          "x": 1513.6,
-          "y": 340.8
-        }
+        "position": { "x": 1513.6, "y": 340.8 }
       },
       "007178da-9e33-4e33-b0a1-8c3a0c662f9b": {
-        "position": {
-          "x": 89.6,
-          "y": -40
-        }
+        "position": { "x": 89.6, "y": -40 }
       },
       "43f6751e-c1b2-48ee-b340-ce4014982e4f": {
-        "position": {
-          "x": 1178.4,
-          "y": 15.2
-        }
+        "position": { "x": 1178.4, "y": 15.2 }
       },
       "4a23dff9-1dcd-45f1-9e8f-edbcef71ae69": {
-        "position": {
-          "x": 764.8,
-          "y": -69.6
-        },
+        "position": { "x": 764.8, "y": -69.6 },
         "parameters": {
-          "TextToSpeechVoice": {
-            "languageCode": "en-US"
-          }
+          "TextToSpeechVoice": { "languageCode": "en-US" }
         },
         "overrideConsoleVoice": true
       },
       "9a1e367a-a2e7-4864-8395-ad9b36c641dc": {
-        "position": {
-          "x": 816,
-          "y": 425.6
-        }
+        "position": { "x": 816, "y": 425.6 }
       }
     },
     "Annotations": [],
@@ -133,79 +95,53 @@
   "Actions": [
     {
       "Parameters": {
-        "WisdomAssistantArn": "arn:aws:wisdom:us-west-2:123456789012:assistant/ecda3140-e1d1-4609-a2a0-8bf600ace278",
+        "WisdomAssistantArn": "${AssistantArn}",
         "OrchestrationAIAgentConfiguration": {
-          "AgentAssistanceAgentVersionArn": "arn:aws:wisdom:us-west-2:123456789012:ai-agent/ecda3140-e1d1-4609-a2a0-8bf600ace278/4c8ffe48-7f58-4eca-bc5e-6e11adf8d106:$LATEST"
+          "AgentAssistanceAgentVersionArn": "${AIAgentArn}"
         }
       },
       "Identifier": "85923aed-ba70-4b9b-9d4b-ddcadb6f590b",
       "Type": "CreateWisdomSession",
       "Transitions": {
         "NextAction": "2cae1541-8d08-487d-892a-8131f251b474",
-        "Errors": [
-          {
-            "NextAction": "9a1e367a-a2e7-4864-8395-ad9b36c641dc",
-            "ErrorType": "NoMatchingError"
-          }
-        ]
+        "Errors": [{ "NextAction": "9a1e367a-a2e7-4864-8395-ad9b36c641dc", "ErrorType": "NoMatchingError" }]
       }
     },
     {
-      "Parameters": {
-        "WisdomSessionArn": "$.Wisdom.SessionArn"
-      },
+      "Parameters": { "WisdomSessionArn": "$.Wisdom.SessionArn" },
       "Identifier": "2cae1541-8d08-487d-892a-8131f251b474",
       "Type": "UpdateContactData",
       "Transitions": {
         "NextAction": "4a23dff9-1dcd-45f1-9e8f-edbcef71ae69",
-        "Errors": [
-          {
-            "NextAction": "9a1e367a-a2e7-4864-8395-ad9b36c641dc",
-            "ErrorType": "NoMatchingError"
-          }
-        ]
+        "Errors": [{ "NextAction": "9a1e367a-a2e7-4864-8395-ad9b36c641dc", "ErrorType": "NoMatchingError" }]
       }
     },
     {
       "Parameters": {
-        "WisdomAssistantArn": "arn:aws:wisdom:us-west-2:123456789012:assistant/ecda3140-e1d1-4609-a2a0-8bf600ace278"
+        "WisdomAssistantArn": "${AssistantArn}"
       },
       "Identifier": "658ef1c7-7490-452e-bc5c-7445e6e00e03",
       "Type": "CreateWisdomSession",
       "Transitions": {
         "NextAction": "4f5ccb5e-5fba-4ccc-adbe-b7058f05fac5",
-        "Errors": [
-          {
-            "NextAction": "9a1e367a-a2e7-4864-8395-ad9b36c641dc",
-            "ErrorType": "NoMatchingError"
-          }
-        ]
+        "Errors": [{ "NextAction": "9a1e367a-a2e7-4864-8395-ad9b36c641dc", "ErrorType": "NoMatchingError" }]
       }
     },
     {
-      "Parameters": {
-        "WisdomSessionArn": "$.Wisdom.SessionArn"
-      },
+      "Parameters": { "WisdomSessionArn": "$.Wisdom.SessionArn" },
       "Identifier": "4f5ccb5e-5fba-4ccc-adbe-b7058f05fac5",
       "Type": "UpdateContactData",
       "Transitions": {
         "NextAction": "32f0b559-6fb4-4f2c-9267-82a75cd65bb0",
-        "Errors": [
-          {
-            "NextAction": "9a1e367a-a2e7-4864-8395-ad9b36c641dc",
-            "ErrorType": "NoMatchingError"
-          }
-        ]
+        "Errors": [{ "NextAction": "9a1e367a-a2e7-4864-8395-ad9b36c641dc", "ErrorType": "NoMatchingError" }]
       }
     },
     {
       "Parameters": {
         "Text": "Hello! Welcome to Riverside County's unclaimed tax refund lookup. To get started, please provide your name or company name.",
-        "LexV2Bot": {
-          "AliasArn": "arn:aws:lex:us-west-2:123456789012:bot-alias/MPUFEFE421/83YT0JV60S"
-        },
+        "LexV2Bot": { "AliasArn": "${BotAliasArn}" },
         "LexSessionAttributes": {
-          "x-amz-lex:q-in-connect:ai-agent-arn": "arn:aws:wisdom:us-west-2:123456789012:ai-agent/ecda3140-e1d1-4609-a2a0-8bf600ace278/4c8ffe48-7f58-4eca-bc5e-6e11adf8d106:$LATEST"
+          "x-amz-lex:q-in-connect:ai-agent-arn": "${AIAgentArn}"
         }
       },
       "Identifier": "32f0b559-6fb4-4f2c-9267-82a75cd65bb0",
@@ -213,14 +149,8 @@
       "Transitions": {
         "NextAction": "9a1e367a-a2e7-4864-8395-ad9b36c641dc",
         "Errors": [
-          {
-            "NextAction": "43f6751e-c1b2-48ee-b340-ce4014982e4f",
-            "ErrorType": "NoMatchingCondition"
-          },
-          {
-            "NextAction": "9a1e367a-a2e7-4864-8395-ad9b36c641dc",
-            "ErrorType": "NoMatchingError"
-          }
+          { "NextAction": "43f6751e-c1b2-48ee-b340-ce4014982e4f", "ErrorType": "NoMatchingCondition" },
+          { "NextAction": "9a1e367a-a2e7-4864-8395-ad9b36c641dc", "ErrorType": "NoMatchingError" }
         ]
       }
     },
@@ -231,29 +161,18 @@
       "Transitions": {}
     },
     {
-      "Parameters": {
-        "FlowLoggingBehavior": "Enabled"
-      },
+      "Parameters": { "FlowLoggingBehavior": "Enabled" },
       "Identifier": "007178da-9e33-4e33-b0a1-8c3a0c662f9b",
       "Type": "UpdateFlowLoggingBehavior",
-      "Transitions": {
-        "NextAction": "85923aed-ba70-4b9b-9d4b-ddcadb6f590b"
-      }
+      "Transitions": { "NextAction": "85923aed-ba70-4b9b-9d4b-ddcadb6f590b" }
     },
     {
-      "Parameters": {
-        "Text": "Goodbye"
-      },
+      "Parameters": { "Text": "Goodbye" },
       "Identifier": "43f6751e-c1b2-48ee-b340-ce4014982e4f",
       "Type": "MessageParticipant",
       "Transitions": {
         "NextAction": "48e816e1-9459-4fc3-b10c-3449cfa8e14a",
-        "Errors": [
-          {
-            "NextAction": "48e816e1-9459-4fc3-b10c-3449cfa8e14a",
-            "ErrorType": "NoMatchingError"
-          }
-        ]
+        "Errors": [{ "NextAction": "48e816e1-9459-4fc3-b10c-3449cfa8e14a", "ErrorType": "NoMatchingError" }]
       }
     },
     {
@@ -266,28 +185,16 @@
       "Type": "UpdateContactTextToSpeechVoice",
       "Transitions": {
         "NextAction": "658ef1c7-7490-452e-bc5c-7445e6e00e03",
-        "Errors": [
-          {
-            "NextAction": "658ef1c7-7490-452e-bc5c-7445e6e00e03",
-            "ErrorType": "NoMatchingError"
-          }
-        ]
+        "Errors": [{ "NextAction": "658ef1c7-7490-452e-bc5c-7445e6e00e03", "ErrorType": "NoMatchingError" }]
       }
     },
     {
-      "Parameters": {
-        "Text": "Error"
-      },
+      "Parameters": { "Text": "Error" },
       "Identifier": "9a1e367a-a2e7-4864-8395-ad9b36c641dc",
       "Type": "MessageParticipant",
       "Transitions": {
         "NextAction": "48e816e1-9459-4fc3-b10c-3449cfa8e14a",
-        "Errors": [
-          {
-            "NextAction": "48e816e1-9459-4fc3-b10c-3449cfa8e14a",
-            "ErrorType": "NoMatchingError"
-          }
-        ]
+        "Errors": [{ "NextAction": "48e816e1-9459-4fc3-b10c-3449cfa8e14a", "ErrorType": "NoMatchingError" }]
       }
     }
   ]

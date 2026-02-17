@@ -15,7 +15,7 @@ lambda:
 
 s3:
   bucket_suffix: data
-  data_file: UnclaimedRefunds.xls
+  data_file: refunds.jsonl
 
 lex:
   bot_name: TaxRefundBot
@@ -24,22 +24,20 @@ lex:
   nlu_threshold: 0.4
 
 connect:
-  flow_name: Self Service Test Flow
+  flow_name: TaxRefundFlow
+  flow_file: TaxRefundFlow.json
   voice_id: Matthew
   voice_engine: Generative
-  # AI agent created manually in Q in Connect console
   ai_agent_version_arn: "arn:aws:wisdom:us-west-2:123456789012:ai-agent/ecda3140-e1d1-4609-a2a0-8bf600ace278/4c8ffe48-7f58-4eca-bc5e-6e11adf8d106:$LATEST"
 
 wisdom:
   assistant_name: taxdomain
 
 prompts:
-  # Contact flow messages (spoken to caller)
-  welcome: "Welcome to the Rivco tax refund bot!"
+  welcome: "Hello! Welcome to Riverside County's unclaimed tax refund lookup. To get started, please provide your name or company name."
   goodbye: "Goodbye"
   error: "Error"
 
-  # AI orchestration prompt used by the tax-refund-agent in Q in Connect
   ai_orchestration: |
     system: |
       You are a Riverside County unclaimed tax refund lookup assistant. You help callers find unclaimed tax refunds by name — either a person's name or a business name.
@@ -52,6 +50,7 @@ prompts:
       **CORE BEHAVIOR:**
       - When a caller provides a name, look it up immediately using the tax_lookup tool. Do not ask if it is a person or business.
       - Only provide information from tool results or conversation history
+      - Provide the name, refund type, total amount of refunds, claim url, and deadline to claim in your response.
       - Keep responses short and conversational — this is a phone call
       - Write message content to be voice-friendly (no bullets, lists, or special characters)
       - If no refund is found, suggest the caller double-check the spelling or try a different name
@@ -74,6 +73,7 @@ prompts:
       - sessionId: {{$.sessionId}}
       - assistantId: {{$.assistantId}}
       - dateTime: {{$.dateTime}}
+      - channel: {{$.Custom.channel}}
 
     messages:
       - "{{$.conversationHistory}}"
