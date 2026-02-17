@@ -1,7 +1,7 @@
 import json
 import yaml
 from aws_cdk import (
-    Stack, Duration, RemovalPolicy, CfnOutput, Fn, BundlingOptions,
+    Stack, Duration, RemovalPolicy, CfnOutput, Fn, BundlingOptions, BundlingFileAccess,
     aws_s3 as s3,
     aws_lambda as _lambda,
     aws_iam as iam,
@@ -59,6 +59,7 @@ class NovaSonicConnectStack(Stack):
                 bundling=BundlingOptions(
                     image=_lambda.Runtime.PYTHON_3_12.bundling_image,
                     platform="linux/amd64",
+                    bundling_file_access=BundlingFileAccess.VOLUME_COPY,
                     command=[
                         "bash", "-c",
                         "pip install -r requirements.txt -t /asset-output && cp -au . /asset-output"
@@ -96,7 +97,84 @@ class NovaSonicConnectStack(Stack):
             type="AGENT",
         )
 
-        # Lex bot
+        # --- Task 7: Website Q&A Knowledge Base (web crawler) ---
+        kb = wisdom.CfnKnowledgeBase(
+            self, "WebsiteKB",
+            name=f"{proj}-auditor-website",
+            knowledge_base_type="MANAGED",
+            description="Riverside County Auditor-Controller website content for general Q&A",
+            source_configuration={
+                "managedSourceConfiguration": {
+                    "webCrawlerConfiguration": {
+                        "urlConfiguration": {
+                            "seedUrls": [{"url": "https://auditorcontroller.org/"}]
+                        },
+                        "scope": "HOST_ONLY",
+                        "crawlerLimits": {"rateLimit": 10},
+                        "inclusionFilters": [".*auditorcontroller\\.org.*"],
+                    }
+                }
+            },
+        )
+
+        kb_assoc = wisdom.CfnAssistantAssociation(
+            self, "WebsiteKBAssociation",
+            assistant_id=assistant.attr_assistant_id,
+            association_type="KNOWLEDGE_BASE",
+            association={"knowledgeBaseId": kb.attr_knowledge_base_id},
+        )
+
+        # --- Task 5: Shared intent definitions for both locales ---
+        def make_intents(assistant_arn):
+            return [
+                {
+                    "name": "FallbackIntent",
+                    "parentIntentSignature": "AMAZON.FallbackIntent",
+                    "initialResponseSetting": {
+                        "nextStep": {"dialogAction": {"type": "InvokeDialogCodeHook"}},
+                        "codeHook": {
+                            "enableCodeHookInvocation": True,
+                            "isActive": True,
+                            "postCodeHookSpecification": {
+                                "successNextStep": {"dialogAction": {"type": "EndConversation"}},
+                                "failureNextStep": {"dialogAction": {"type": "EndConversation"}},
+                                "timeoutNextStep": {"dialogAction": {"type": "EndConversation"}},
+                            }
+                        }
+                    },
+                },
+                {
+                    "name": "QInConnectIntent",
+                    "parentIntentSignature": "AMAZON.QInConnectIntent",
+                    "dialogCodeHook": {"enabled": True},
+                    "fulfillmentCodeHook": {
+                        "enabled": False,
+                        "isActive": True,
+                        "postFulfillmentStatusSpecification": {
+                            "successResponse": {
+                                "messageGroupsList": [{
+                                    "message": {
+                                        "plainTextMessage": {"value": "((x-amz-lex:q-in-connect-response))"}
+                                    }
+                                }],
+                                "allowInterrupt": True,
+                            },
+                            "successNextStep": {"dialogAction": {"type": "EndConversation"}},
+                            "failureNextStep": {"dialogAction": {"type": "EndConversation"}},
+                            "timeoutNextStep": {"dialogAction": {"type": "EndConversation"}},
+                        }
+                    },
+                    "qInConnectIntentConfiguration": {
+                        "qInConnectAssistantConfiguration": {
+                            "assistantArn": assistant_arn
+                        }
+                    },
+                }
+            ]
+
+        nlu = cfg['lex']['nlu_threshold']
+
+        # Lex bot — en_US + es_US locales
         bot = lex.CfnBot(
             self, "Bot",
             name=cfg['lex']['bot_name'],
@@ -104,66 +182,29 @@ class NovaSonicConnectStack(Stack):
             data_privacy={"ChildDirected": False},
             idle_session_ttl_in_seconds=300,
             auto_build_bot_locales=True,
-            bot_locales=[{
-                "localeId": cfg['lex']['locale'],
-                "nluConfidenceThreshold": cfg['lex']['nlu_threshold'],
-                "intents": [
-                    {
-                        "name": "FallbackIntent",
-                        "parentIntentSignature": "AMAZON.FallbackIntent",
-                        "initialResponseSetting": {
-                            "nextStep": {"dialogAction": {"type": "InvokeDialogCodeHook"}},
-                            "codeHook": {
-                                "enableCodeHookInvocation": True,
-                                "isActive": True,
-                                "postCodeHookSpecification": {
-                                    "successNextStep": {"dialogAction": {"type": "EndConversation"}},
-                                    "failureNextStep": {"dialogAction": {"type": "EndConversation"}},
-                                    "timeoutNextStep": {"dialogAction": {"type": "EndConversation"}},
-                                }
-                            }
-                        },
-                    },
-                    {
-                        "name": "QInConnectIntent",
-                        "parentIntentSignature": "AMAZON.QInConnectIntent",
-                        "dialogCodeHook": {"enabled": True},
-                        "fulfillmentCodeHook": {
-                            "enabled": False,
-                            "isActive": True,
-                            "postFulfillmentStatusSpecification": {
-                                "successResponse": {
-                                    "messageGroupsList": [{
-                                        "message": {
-                                            "plainTextMessage": {"value": "((x-amz-lex:q-in-connect-response))"}
-                                        }
-                                    }],
-                                    "allowInterrupt": True,
-                                },
-                                "successNextStep": {"dialogAction": {"type": "EndConversation"}},
-                                "failureNextStep": {"dialogAction": {"type": "EndConversation"}},
-                                "timeoutNextStep": {"dialogAction": {"type": "EndConversation"}},
-                            }
-                        },
-                        "qInConnectIntentConfiguration": {
-                            "qInConnectAssistantConfiguration": {
-                                "assistantArn": assistant.attr_assistant_arn
-                            }
-                        },
-                    }
-                ]
-            }],
+            bot_locales=[
+                {
+                    "localeId": "en_US",
+                    "nluConfidenceThreshold": nlu,
+                    "intents": make_intents(assistant.attr_assistant_arn),
+                },
+                {
+                    "localeId": "es_US",
+                    "nluConfidenceThreshold": nlu,
+                    "intents": make_intents(assistant.attr_assistant_arn),
+                },
+            ],
         )
         bot.add_dependency(assistant)
 
-        # Bot version
+        # Bot version — both locales
         bot_version = lex.CfnBotVersion(
             self, "BotVersion",
             bot_id=bot.attr_id,
-            bot_version_locale_specification=[{
-                "localeId": cfg['lex']['locale'],
-                "botVersionLocaleDetails": {"sourceBotVersion": "DRAFT"}
-            }],
+            bot_version_locale_specification=[
+                {"localeId": "en_US", "botVersionLocaleDetails": {"sourceBotVersion": "DRAFT"}},
+                {"localeId": "es_US", "botVersionLocaleDetails": {"sourceBotVersion": "DRAFT"}},
+            ],
         )
 
         # CloudWatch log group for Lex conversation logs
@@ -173,19 +214,26 @@ class NovaSonicConnectStack(Stack):
             removal_policy=RemovalPolicy.DESTROY,
         )
 
-        # Bot alias
+        # Bot alias — both locales with Lambda code hooks
+        lambda_hook = {
+            "enabled": True,
+            "codeHookSpecification": {
+                "lambdaCodeHook": {
+                    "lambdaArn": fn.function_arn,
+                    "codeHookInterfaceVersion": "1.0",
+                }
+            }
+        }
+
         alias = lex.CfnBotAlias(
             self, "BotAlias",
             bot_alias_name=cfg['lex']['alias_name'],
             bot_id=bot.attr_id,
             bot_version=bot_version.attr_bot_version,
-            bot_alias_locale_settings=[{
-                "localeId": cfg['lex']['locale'],
-                "botAliasLocaleSetting": {
-                    "enabled": True,
-                    "codeHookSpecification": {"lambdaCodeHook": {"lambdaArn": fn.function_arn, "codeHookInterfaceVersion": "1.0"}}
-                }
-            }],
+            bot_alias_locale_settings=[
+                {"localeId": "en_US", "botAliasLocaleSetting": lambda_hook},
+                {"localeId": "es_US", "botAliasLocaleSetting": lambda_hook},
+            ],
             conversation_log_settings=lex.CfnBotAlias.ConversationLogSettingsProperty(
                 text_log_settings=[lex.CfnBotAlias.TextLogSettingProperty(
                     enabled=True,
@@ -212,6 +260,57 @@ class NovaSonicConnectStack(Stack):
             ),
         )
 
+        # --- Task 4: Live Agent Handoff — Hours, Queue, Routing Profile ---
+        hours = connect.CfnHoursOfOperation(
+            self, "HoursOfOperation",
+            instance_arn=instance.attr_arn,
+            name="TaxRefundHours",
+            time_zone="America/Los_Angeles",
+            config=[{
+                "day": day,
+                "startTime": {"hours": 8, "minutes": 0},
+                "endTime": {"hours": 17, "minutes": 0},
+            } for day in ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY"]],
+        )
+
+        queue = connect.CfnQueue(
+            self, "LiveAgentQueue",
+            instance_arn=instance.attr_arn,
+            name="TaxRefundLiveAgents",
+            hours_of_operation_arn=hours.attr_hours_of_operation_arn,
+            description="Queue for live agent handoff from tax refund bot",
+        )
+
+        routing_profile = connect.CfnRoutingProfile(
+            self, "AgentRoutingProfile",
+            instance_arn=instance.attr_arn,
+            name="TaxRefundAgentProfile",
+            description="Routing profile for tax refund live agents",
+            default_outbound_queue_arn=queue.attr_queue_arn,
+            media_concurrencies=[
+                {"channel": "VOICE", "concurrency": 1},
+                {"channel": "CHAT", "concurrency": 5},
+            ],
+            queue_configs=[
+                {
+                    "delay": 0,
+                    "priority": 1,
+                    "queueReference": {
+                        "channel": "VOICE",
+                        "queueArn": queue.attr_queue_arn,
+                    },
+                },
+                {
+                    "delay": 0,
+                    "priority": 1,
+                    "queueReference": {
+                        "channel": "CHAT",
+                        "queueArn": queue.attr_queue_arn,
+                    },
+                },
+            ],
+        )
+
         # Associate Wisdom assistant with Connect
         wisdom_assoc = connect.CfnIntegrationAssociation(
             self, "WisdomAssociation",
@@ -236,6 +335,7 @@ class NovaSonicConnectStack(Stack):
                 "AssistantArn": assistant.attr_assistant_arn,
                 "AIAgentArn": ai_agent_arn,
                 "BotAliasArn": bot_alias_arn,
+                "QueueArn": queue.attr_queue_arn,
             }),
         )
         flow.add_dependency(wisdom_assoc)
@@ -248,3 +348,6 @@ class NovaSonicConnectStack(Stack):
         CfnOutput(self, "ConnectInstanceId", value=instance.attr_id)
         CfnOutput(self, "ConnectInstanceArn", value=instance.attr_arn)
         CfnOutput(self, "ContactFlowArn", value=flow.attr_contact_flow_arn)
+        CfnOutput(self, "QueueArn", value=queue.attr_queue_arn)
+        CfnOutput(self, "RoutingProfileArn", value=routing_profile.attr_routing_profile_arn)
+        CfnOutput(self, "KnowledgeBaseId", value=kb.attr_knowledge_base_id)

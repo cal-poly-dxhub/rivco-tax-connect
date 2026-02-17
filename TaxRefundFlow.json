@@ -1,15 +1,22 @@
 {
   "Version": "2019-10-30",
-  "StartAction": "007178da-9e33-4e33-b0a1-8c3a0c662f9b",
+  "StartAction": "action-enable-logging",
   "Metadata": {
-    "entryPointPosition": {
-      "x": -69.6,
-      "y": -224
-    },
+    "entryPointPosition": { "x": -70, "y": -224 },
     "ActionMetadata": {
-      "85923aed-ba70-4b9b-9d4b-ddcadb6f590b": {
-        "position": { "x": 309.6, "y": 175.2 },
-        "children": ["2cae1541-8d08-487d-892a-8131f251b474"],
+      "action-enable-logging": { "position": { "x": 90, "y": -40 } },
+      "action-check-channel": { "position": { "x": 310, "y": -40 } },
+      "action-language-prompt": { "position": { "x": 550, "y": -200 } },
+      "action-set-voice-english": { "position": { "x": 830, "y": -300 },
+        "parameters": { "TextToSpeechVoice": { "languageCode": "en-US" } },
+        "overrideConsoleVoice": true
+      },
+      "action-set-voice-spanish": { "position": { "x": 830, "y": -100 },
+        "parameters": { "TextToSpeechVoice": { "languageCode": "es-US" } },
+        "overrideConsoleVoice": true
+      },
+      "action-wisdom-session-1": { "position": { "x": 1100, "y": -200 },
+        "children": ["action-update-contact-1"],
         "parameters": {
           "OrchestrationAIAgentConfiguration": {
             "AgentAssistanceAgentVersionArn": {
@@ -18,20 +25,13 @@
             }
           }
         },
-        "fragments": { "SetContactData": "2cae1541-8d08-487d-892a-8131f251b474" },
+        "fragments": { "SetContactData": "action-update-contact-1" },
         "useAIAgentDropdown": true,
         "aiAgentName": "tax-refund-agent"
       },
-      "2cae1541-8d08-487d-892a-8131f251b474": {
-        "position": { "x": 309.6, "y": 175.2 },
-        "dynamicParams": []
-      },
-      "658ef1c7-7490-452e-bc5c-7445e6e00e03": {
-        "position": { "x": 1032.8, "y": -164.8 },
-        "children": [
-          "4f5ccb5e-5fba-4ccc-adbe-b7058f05fac5",
-          "32f0b559-6fb4-4f2c-9267-82a75cd65bb0"
-        ],
+      "action-update-contact-1": { "position": { "x": 1100, "y": -200 }, "dynamicParams": [] },
+      "action-wisdom-session-2": { "position": { "x": 1380, "y": -200 },
+        "children": ["action-update-contact-2", "action-lex-bot"],
         "parameters": {
           "WisdomAssistantArn": {
             "useAIAgentDropdown": true,
@@ -39,17 +39,13 @@
             "aiAgentVersionArn": "${AIAgentArn}"
           }
         },
-        "fragments": { "SetContactData": "4f5ccb5e-5fba-4ccc-adbe-b7058f05fac5" },
+        "fragments": { "SetContactData": "action-update-contact-2" },
         "useAIAgentDropdown": true,
         "aiAgentName": "tax-refund-agent",
         "aiAgentVersionArn": "${AIAgentArn}"
       },
-      "4f5ccb5e-5fba-4ccc-adbe-b7058f05fac5": {
-        "position": { "x": 1032.8, "y": -164.8 },
-        "dynamicParams": []
-      },
-      "32f0b559-6fb4-4f2c-9267-82a75cd65bb0": {
-        "position": { "x": 1032.8, "y": -164.8 },
+      "action-update-contact-2": { "position": { "x": 1380, "y": -200 }, "dynamicParams": [] },
+      "action-lex-bot": { "position": { "x": 1380, "y": -200 },
         "parameters": {
           "LexV2Bot": {
             "AliasArn": {
@@ -65,34 +61,105 @@
         "lexV2BotAliasName": "live",
         "conditionMetadata": []
       },
-      "48e816e1-9459-4fc3-b10c-3449cfa8e14a": {
-        "position": { "x": 1513.6, "y": 340.8 }
-      },
-      "007178da-9e33-4e33-b0a1-8c3a0c662f9b": {
-        "position": { "x": 89.6, "y": -40 }
-      },
-      "43f6751e-c1b2-48ee-b340-ce4014982e4f": {
-        "position": { "x": 1178.4, "y": 15.2 }
-      },
-      "4a23dff9-1dcd-45f1-9e8f-edbcef71ae69": {
-        "position": { "x": 764.8, "y": -69.6 },
-        "parameters": {
-          "TextToSpeechVoice": { "languageCode": "en-US" }
-        },
-        "overrideConsoleVoice": true
-      },
-      "9a1e367a-a2e7-4864-8395-ad9b36c641dc": {
-        "position": { "x": 816, "y": 425.6 }
-      }
+      "action-check-transfer": { "position": { "x": 1660, "y": -200 } },
+      "action-transfer-to-queue": { "position": { "x": 1940, "y": -300 } },
+      "action-goodbye": { "position": { "x": 1940, "y": -100 } },
+      "action-disconnect": { "position": { "x": 2200, "y": -100 } },
+      "action-error": { "position": { "x": 1660, "y": 200 } }
     },
     "Annotations": [],
-    "name": "TaxRefundFlowV3",
-    "description": "",
+    "name": "TaxRefundFlowV4",
+    "description": "Channel-branching flow with Spanish support and live agent handoff",
     "type": "contactFlow",
     "status": "PUBLISHED",
     "hash": {}
   },
   "Actions": [
+    {
+      "Parameters": { "FlowLoggingBehavior": "Enabled" },
+      "Identifier": "action-enable-logging",
+      "Type": "UpdateFlowLoggingBehavior",
+      "Transitions": { "NextAction": "action-check-channel" }
+    },
+    {
+      "Parameters": {
+        "ComparisonValue": "$.Channel"
+      },
+      "Identifier": "action-check-channel",
+      "Type": "Compare",
+      "Transitions": {
+        "NextAction": "action-wisdom-session-1",
+        "Conditions": [
+          {
+            "NextAction": "action-language-prompt",
+            "Condition": { "Operator": "Equals", "Operands": ["VOICE"] }
+          },
+          {
+            "NextAction": "action-wisdom-session-1",
+            "Condition": { "Operator": "Equals", "Operands": ["CHAT"] }
+          }
+        ],
+        "Errors": [
+          { "NextAction": "action-wisdom-session-1", "ErrorType": "NoMatchingCondition" },
+          { "NextAction": "action-error", "ErrorType": "NoMatchingError" }
+        ]
+      }
+    },
+    {
+      "Parameters": {
+        "Text": "For English, press 1 or say English. Para español, presione 2 o diga español.",
+        "DTMFConfiguration": {
+          "InputTimeLimitSeconds": "5"
+        },
+        "InputTimeLimitSeconds": "5"
+      },
+      "Identifier": "action-language-prompt",
+      "Type": "GetParticipantInput",
+      "Transitions": {
+        "NextAction": "action-set-voice-english",
+        "Conditions": [
+          {
+            "NextAction": "action-set-voice-english",
+            "Condition": { "Operator": "Equals", "Operands": ["1"] }
+          },
+          {
+            "NextAction": "action-set-voice-spanish",
+            "Condition": { "Operator": "Equals", "Operands": ["2"] }
+          }
+        ],
+        "Errors": [
+          { "NextAction": "action-set-voice-english", "ErrorType": "InputTimeLimitExceeded" },
+          { "NextAction": "action-set-voice-english", "ErrorType": "NoMatchingCondition" },
+          { "NextAction": "action-error", "ErrorType": "NoMatchingError" }
+        ]
+      }
+    },
+    {
+      "Parameters": {
+        "TextToSpeechVoice": "Matthew",
+        "TextToSpeechEngine": "Generative",
+        "TextToSpeechStyle": "None"
+      },
+      "Identifier": "action-set-voice-english",
+      "Type": "UpdateContactTextToSpeechVoice",
+      "Transitions": {
+        "NextAction": "action-wisdom-session-1",
+        "Errors": [{ "NextAction": "action-wisdom-session-1", "ErrorType": "NoMatchingError" }]
+      }
+    },
+    {
+      "Parameters": {
+        "TextToSpeechVoice": "Lupe",
+        "TextToSpeechEngine": "Generative",
+        "TextToSpeechStyle": "None"
+      },
+      "Identifier": "action-set-voice-spanish",
+      "Type": "UpdateContactTextToSpeechVoice",
+      "Transitions": {
+        "NextAction": "action-wisdom-session-1",
+        "Errors": [{ "NextAction": "action-wisdom-session-1", "ErrorType": "NoMatchingError" }]
+      }
+    },
     {
       "Parameters": {
         "WisdomAssistantArn": "${AssistantArn}",
@@ -100,40 +167,40 @@
           "AgentAssistanceAgentVersionArn": "${AIAgentArn}"
         }
       },
-      "Identifier": "85923aed-ba70-4b9b-9d4b-ddcadb6f590b",
+      "Identifier": "action-wisdom-session-1",
       "Type": "CreateWisdomSession",
       "Transitions": {
-        "NextAction": "2cae1541-8d08-487d-892a-8131f251b474",
-        "Errors": [{ "NextAction": "9a1e367a-a2e7-4864-8395-ad9b36c641dc", "ErrorType": "NoMatchingError" }]
+        "NextAction": "action-update-contact-1",
+        "Errors": [{ "NextAction": "action-error", "ErrorType": "NoMatchingError" }]
       }
     },
     {
       "Parameters": { "WisdomSessionArn": "$.Wisdom.SessionArn" },
-      "Identifier": "2cae1541-8d08-487d-892a-8131f251b474",
+      "Identifier": "action-update-contact-1",
       "Type": "UpdateContactData",
       "Transitions": {
-        "NextAction": "4a23dff9-1dcd-45f1-9e8f-edbcef71ae69",
-        "Errors": [{ "NextAction": "9a1e367a-a2e7-4864-8395-ad9b36c641dc", "ErrorType": "NoMatchingError" }]
+        "NextAction": "action-wisdom-session-2",
+        "Errors": [{ "NextAction": "action-error", "ErrorType": "NoMatchingError" }]
       }
     },
     {
       "Parameters": {
         "WisdomAssistantArn": "${AssistantArn}"
       },
-      "Identifier": "658ef1c7-7490-452e-bc5c-7445e6e00e03",
+      "Identifier": "action-wisdom-session-2",
       "Type": "CreateWisdomSession",
       "Transitions": {
-        "NextAction": "4f5ccb5e-5fba-4ccc-adbe-b7058f05fac5",
-        "Errors": [{ "NextAction": "9a1e367a-a2e7-4864-8395-ad9b36c641dc", "ErrorType": "NoMatchingError" }]
+        "NextAction": "action-update-contact-2",
+        "Errors": [{ "NextAction": "action-error", "ErrorType": "NoMatchingError" }]
       }
     },
     {
       "Parameters": { "WisdomSessionArn": "$.Wisdom.SessionArn" },
-      "Identifier": "4f5ccb5e-5fba-4ccc-adbe-b7058f05fac5",
+      "Identifier": "action-update-contact-2",
       "Type": "UpdateContactData",
       "Transitions": {
-        "NextAction": "32f0b559-6fb4-4f2c-9267-82a75cd65bb0",
-        "Errors": [{ "NextAction": "9a1e367a-a2e7-4864-8395-ad9b36c641dc", "ErrorType": "NoMatchingError" }]
+        "NextAction": "action-lex-bot",
+        "Errors": [{ "NextAction": "action-error", "ErrorType": "NoMatchingError" }]
       }
     },
     {
@@ -144,57 +211,72 @@
           "x-amz-lex:q-in-connect:ai-agent-arn": "${AIAgentArn}"
         }
       },
-      "Identifier": "32f0b559-6fb4-4f2c-9267-82a75cd65bb0",
+      "Identifier": "action-lex-bot",
       "Type": "ConnectParticipantWithLexBot",
       "Transitions": {
-        "NextAction": "9a1e367a-a2e7-4864-8395-ad9b36c641dc",
+        "NextAction": "action-check-transfer",
         "Errors": [
-          { "NextAction": "43f6751e-c1b2-48ee-b340-ce4014982e4f", "ErrorType": "NoMatchingCondition" },
-          { "NextAction": "9a1e367a-a2e7-4864-8395-ad9b36c641dc", "ErrorType": "NoMatchingError" }
+          { "NextAction": "action-check-transfer", "ErrorType": "NoMatchingCondition" },
+          { "NextAction": "action-error", "ErrorType": "NoMatchingError" }
         ]
       }
     },
     {
-      "Parameters": {},
-      "Identifier": "48e816e1-9459-4fc3-b10c-3449cfa8e14a",
-      "Type": "DisconnectParticipant",
-      "Transitions": {}
-    },
-    {
-      "Parameters": { "FlowLoggingBehavior": "Enabled" },
-      "Identifier": "007178da-9e33-4e33-b0a1-8c3a0c662f9b",
-      "Type": "UpdateFlowLoggingBehavior",
-      "Transitions": { "NextAction": "85923aed-ba70-4b9b-9d4b-ddcadb6f590b" }
-    },
-    {
-      "Parameters": { "Text": "Goodbye" },
-      "Identifier": "43f6751e-c1b2-48ee-b340-ce4014982e4f",
-      "Type": "MessageParticipant",
+      "Parameters": {
+        "ComparisonValue": "$.Attributes.transferToAgent"
+      },
+      "Identifier": "action-check-transfer",
+      "Type": "Compare",
       "Transitions": {
-        "NextAction": "48e816e1-9459-4fc3-b10c-3449cfa8e14a",
-        "Errors": [{ "NextAction": "48e816e1-9459-4fc3-b10c-3449cfa8e14a", "ErrorType": "NoMatchingError" }]
+        "NextAction": "action-goodbye",
+        "Conditions": [
+          {
+            "NextAction": "action-transfer-to-queue",
+            "Condition": { "Operator": "Equals", "Operands": ["true"] }
+          }
+        ],
+        "Errors": [
+          { "NextAction": "action-goodbye", "ErrorType": "NoMatchingCondition" },
+          { "NextAction": "action-goodbye", "ErrorType": "NoMatchingError" }
+        ]
       }
     },
     {
       "Parameters": {
-        "TextToSpeechVoice": "Matthew",
-        "TextToSpeechEngine": "Generative",
-        "TextToSpeechStyle": "None"
+        "QueueId": "${QueueArn}"
       },
-      "Identifier": "4a23dff9-1dcd-45f1-9e8f-edbcef71ae69",
-      "Type": "UpdateContactTextToSpeechVoice",
+      "Identifier": "action-transfer-to-queue",
+      "Type": "TransferToQueue",
       "Transitions": {
-        "NextAction": "658ef1c7-7490-452e-bc5c-7445e6e00e03",
-        "Errors": [{ "NextAction": "658ef1c7-7490-452e-bc5c-7445e6e00e03", "ErrorType": "NoMatchingError" }]
+        "NextAction": "action-error",
+        "Errors": [
+          { "NextAction": "action-error", "ErrorType": "QueueAtCapacity" },
+          { "NextAction": "action-error", "ErrorType": "NoMatchingError" }
+        ]
       }
     },
     {
-      "Parameters": { "Text": "Error" },
-      "Identifier": "9a1e367a-a2e7-4864-8395-ad9b36c641dc",
+      "Parameters": { "Text": "Goodbye" },
+      "Identifier": "action-goodbye",
       "Type": "MessageParticipant",
       "Transitions": {
-        "NextAction": "48e816e1-9459-4fc3-b10c-3449cfa8e14a",
-        "Errors": [{ "NextAction": "48e816e1-9459-4fc3-b10c-3449cfa8e14a", "ErrorType": "NoMatchingError" }]
+        "NextAction": "action-disconnect",
+        "Errors": [{ "NextAction": "action-disconnect", "ErrorType": "NoMatchingError" }]
+      }
+    },
+    {
+      "Parameters": {},
+      "Identifier": "action-disconnect",
+      "Type": "DisconnectParticipant",
+      "Transitions": {}
+    },
+    {
+      "Parameters": { "Text": "We're sorry, an error occurred. Please try again later." },
+      "Identifier": "action-error",
+      "Type": "MessageParticipant",
+      "Transitions": {
+        "NextAction": "action-disconnect",
+        "Errors": [{ "NextAction": "action-disconnect", "ErrorType": "NoMatchingError" }]
       }
     }
   ]
