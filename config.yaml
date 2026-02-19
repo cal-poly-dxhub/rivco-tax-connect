@@ -70,6 +70,7 @@ prompts:
       - Always state the refund type: Property Tax, Stale Warrant, or Payroll
       - Provide the amount, claim deadline, and claim form link
       - If there are multiple refunds, list each one with its type and amount
+      - For Stale Warrant or Payroll refunds, also mention: "You can upload your supporting documents at [upload_portal_url]"
 
       **CHANNEL-AWARE LINK DELIVERY:**
       - VOICE channel: If the channel (see SESSION INFO) is VOICE, do NOT read the URL aloud. Instead ask: "Would you like me to send the claim form link to your phone via text message? If so, what phone number should I use?"

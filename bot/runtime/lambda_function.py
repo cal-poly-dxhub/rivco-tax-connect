@@ -19,6 +19,7 @@ FUZZY_THRESHOLD = float(os.environ.get('FUZZY_THRESHOLD', '0.8'))
 
 PROPERTY_TAX_URL = 'https://apps.auditorcontroller.org/unclaimedrefund/refundform.aspx'
 AP13_PDF_URL = 'https://auditorcontroller.org/sites/g/files/aldnop171/files/2024-10/AP13AffidavitfortheReplaceofStlDtdWarr%2010_30_24.pdf'
+UPLOAD_PORTAL_URL = os.environ.get('UPLOAD_PORTAL_URL', '')
 
 _records_cache = None
 
@@ -93,6 +94,7 @@ def lookup(name):
             'claim_deadline': r['claim_deadline'],
             'address': r.get('address', ''),
             'claim_url': build_claim_url(r),
+            'upload_portal_url': UPLOAD_PORTAL_URL,
         })
 
     return json.dumps(results)

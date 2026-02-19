@@ -51,7 +51,7 @@ class NovaSonicConnectStack(Stack):
             resources=["*"],
         ))
 
-        # Lambda environment
+        # Lambda environment (UPLOAD_PORTAL_URL added after portal_bucket is created below)
         env = {
             "S3_BUCKET": bucket.bucket_name,
             "DATA_FILE": cfg['s3']['data_file'],
@@ -515,6 +515,9 @@ class NovaSonicConnectStack(Stack):
             sources=[s3deploy.Source.data("config.js", config_js)],
             destination_bucket=portal_bucket,
         )
+
+        # Wire upload portal URL into main Lambda so the bot can reference it
+        fn.add_environment("UPLOAD_PORTAL_URL", portal_bucket.bucket_website_url)
 
         CfnOutput(self, "UploadPortalUrl", value=portal_bucket.bucket_website_url)
         CfnOutput(self, "UploadApiUrl", value=upload_api.url)
