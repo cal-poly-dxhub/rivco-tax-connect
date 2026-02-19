@@ -54,12 +54,24 @@ These steps **must** be completed before running `post-deploy.sh`. They cannot b
 3. Name it `tax-refund-agent`
 4. In the **Tools** section, click **Add tool** → **MCP tool**
 5. Select `Tax Lookup Gateway` and add the `tax_lookup` tool
-6. In the **Prompt** section, select `tax-refund-orchestration-prompt` (created by `post-deploy.sh`)
-7. **Save** and **Publish** the agent
+6. Click **Add tool** → **MCP tool** again, and add the `send_sms` tool
+7. In the **Prompt** section, select `tax-refund-orchestration-prompt` (created by `post-deploy.sh`)
+8. **Save** and **Publish** the agent
+
+> **Adding new tools later:** The CLI cannot add tools to ORCHESTRATION agents. Any time a new MCP tool is added to the gateway (via CDK), you must also add it to the agent in the console, then Save and Publish.
+
+#### 2c. Add Third-Party App to Security Profile
+
+The MCP gateway app must be enabled in the security profile assigned to your agents:
+
+1. In the Connect admin site, go to **Users** → **Security profiles**
+2. Select the security profile used by your agents (e.g., `Admin` or `Agent`)
+3. Under **Agent Applications** → **Third-party applications**, enable `Tax Lookup Gateway`
+4. **Save**
 
 > **Note:** Run `post-deploy.sh` once before this step so the prompt exists. Then after creating the agent, run `post-deploy.sh` again to version the agent and wire it into the flow.
 
-#### 2c. Enable Lex Bot Management
+#### 2d. Enable Lex Bot Management
 
 1. Go to **Amazon Connect** in AWS Console → select your instance
 2. Go to **Flows** → **Amazon Lex**
