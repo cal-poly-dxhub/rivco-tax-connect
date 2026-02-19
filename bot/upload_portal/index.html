@@ -4,64 +4,435 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Riverside County — Claims Portal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700&family=Lato:wght@400;700&display=swap" rel="stylesheet">
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f7fa; color: #1a1a1a; }
-  .header { background: #1b3a5c; color: #fff; padding: 1.5rem 2rem; }
-  .header h1 { font-size: 1.4rem; font-weight: 600; }
-  .container { max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
-  .card { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.1); padding: 2rem; margin-bottom: 1.5rem; }
-  .card h2 { font-size: 1.2rem; margin-bottom: .5rem; }
-  .card p.subtitle { color: #555; font-size: .9rem; margin-bottom: 1rem; }
-  .step-badge { display: inline-block; background: #1b3a5c; color: #fff; border-radius: 50%; width: 28px; height: 28px; text-align: center; line-height: 28px; font-weight: 600; font-size: .85rem; margin-right: .5rem; }
-  .step-title { font-size: 1.1rem; font-weight: 600; margin-bottom: .75rem; }
-  .tabs { display: flex; gap: 0; margin-bottom: 0; }
-  .tab { padding: .6rem 1.2rem; background: #e8edf2; border: 1px solid #ccc; border-bottom: none; cursor: pointer; font-size: .9rem; border-radius: 6px 6px 0 0; }
-  .tab.active { background: #fff; border-bottom: 1px solid #fff; font-weight: 600; margin-bottom: -1px; z-index: 1; }
-  .tab-content { border: 1px solid #ccc; border-radius: 0 6px 6px 6px; min-height: 200px; }
-  .tab-pane { display: none; }
-  .tab-pane.active { display: block; }
-  .tab-pane iframe { width: 100%; border: none; min-height: 700px; }
-  label { display: block; font-weight: 500; margin-bottom: .3rem; font-size: .9rem; }
-  input, select { width: 100%; padding: .6rem .75rem; border: 1px solid #ccc; border-radius: 4px; font-size: .95rem; margin-bottom: 1rem; }
-  input:focus, select:focus { outline: none; border-color: #1b3a5c; box-shadow: 0 0 0 2px rgba(27,58,92,.15); }
-  .file-group { margin-bottom: 1.2rem; }
-  .file-group small { color: #666; font-size: .8rem; }
-  .checkbox-group { margin-bottom: 1rem; }
-  .checkbox-group label { display: block; margin: .4rem 0; cursor: pointer; }
-  .checkbox-group input { width: auto; margin-right: .5rem; }
-  button { background: #1b3a5c; color: #fff; border: none; padding: .75rem 1.5rem; border-radius: 4px; font-size: 1rem; cursor: pointer; width: 100%; }
-  button:hover { background: #15304d; }
-  button:disabled { background: #999; cursor: not-allowed; }
-  .status { margin-top: 1rem; padding: .75rem; border-radius: 4px; font-size: .9rem; display: none; }
-  .status.ok { display: block; background: #e8f5e9; color: #2e7d32; }
-  .status.err { display: block; background: #fce4ec; color: #c62828; }
-  .status.loading { display: block; background: #e3f2fd; color: #1565c0; }
-  .required::after { content: " *"; color: #c62828; }
-  .hidden { display: none; }
-  .ap13-status { padding: .75rem; border-radius: 4px; margin-bottom: 1rem; font-size: .9rem; }
-  .ap13-status.pending { background: #fff3e0; color: #e65100; }
-  .ap13-status.done { background: #e8f5e9; color: #2e7d32; }
-  .or-divider { text-align: center; color: #888; font-weight: 600; font-size: .85rem; margin: .5rem 0 1rem; }
+:root {
+  --navy: #002f87;
+  --navy-dark: #020d40;
+  --blue: #0c71ca;
+  --yellow: #ffc629;
+  --yellow-dim: rgba(255,198,41,.12);
+  --bg: #f4f6f9;
+  --surface: #ffffff;
+  --border: #d6dce2;
+  --text: #1a1a2e;
+  --text-muted: #556575;
+  --red: #c61f1f;
+  --green: #2e7d32;
+  --radius: 8px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Lato', sans-serif;
+  background-color: var(--bg);
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 20px,
+    rgba(0,47,135,.028) 20px,
+    rgba(0,47,135,.028) 21px
+  );
+  color: var(--text);
+  min-height: 100vh;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+/* ── Header (matches auditorcontroller.org) ── */
+.site-header {
+  background: #fff;
+  box-shadow: 0px 4px 8px rgba(0,0,0,.05);
+  position: relative;
+}
+
+.utilities-bar {
+  background-color: rgb(2,13,64);
+  height: 2.5rem;
+  display: flex;
+  align-items: center;
+  padding: 0.25rem 2rem;
+  gap: 0;
+}
+
+.utilities-bar img {
+  max-height: 100%;
+  height: 2rem;
+}
+
+.utilities-bar a.rivco-link {
+  font-family: 'Montserrat', sans-serif;
+  font-weight: 500;
+  font-size: 0.8125rem;
+  color: #fff;
+  text-decoration: none;
+  margin-left: 1.5rem;
+}
+.utilities-bar a.rivco-link::before {
+  content: "★ ";
+  color: #ffc629;
+}
+.utilities-bar a.rivco-link:hover { color: #ffc629; }
+
+.header-main {
+  display: flex;
+  align-items: center;
+  padding: 0.5rem 2rem;
+  min-height: 3.75rem;
+}
+
+.header-main img.logo {
+  max-height: 3.75rem;
+  width: auto;
+}
+
+.header-page-title {
+  margin-left: 2rem;
+  padding-left: 2rem;
+  border-left: 1px solid #d6dce2;
+  font-family: 'Montserrat', sans-serif;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #002f87;
+  line-height: 1.3;
+}
+.header-page-title span {
+  display: block;
+  font-weight: 400;
+  font-size: 0.75rem;
+  color: #556575;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+
+/* ── Layout ── */
+.container { max-width: 780px; margin: 2rem auto; padding: 0 1.25rem 4rem; }
+
+/* ── Cards ── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2rem;
+  margin-bottom: 1.25rem;
+  box-shadow: 0 1px 4px rgba(0,0,0,.06);
+  animation: fadeUp .35s ease both;
+}
+.card + .card { animation-delay: .07s; }
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Step header ── */
+.step-title {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  margin-bottom: .5rem;
+}
+
+.step-badge {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  background: var(--navy);
+  color: #fff;
+  font-size: .8rem;
+  font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  font-family: 'Montserrat', sans-serif;
+}
+
+.step-title h2 {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--navy);
+}
+
+.subtitle {
+  color: var(--text-muted);
+  font-size: .875rem;
+  margin-bottom: 1.5rem;
+  padding-left: 2.75rem;
+}
+
+/* ── Tabs ── */
+.tabs { display: flex; gap: 0; margin-bottom: 0; padding-left: 2.75rem; }
+
+.tab {
+  padding: .5rem 1.1rem;
+  background: #eef1f5;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  cursor: pointer;
+  font-size: .85rem;
+  font-family: 'Montserrat', sans-serif;
+  font-weight: 500;
+  border-radius: 6px 6px 0 0;
+  color: var(--text-muted);
+  transition: color .15s, background .15s;
+}
+
+.tab.active {
+  background: var(--surface);
+  color: var(--navy);
+  border-bottom: 1px solid var(--surface);
+  font-weight: 600;
+  margin-bottom: -1px;
+  z-index: 1;
+}
+
+.tab-content {
+  border: 1px solid var(--border);
+  border-radius: 0 6px 6px 6px;
+  background: #fff;
+  min-height: 200px;
+  margin-left: 2.75rem;
+}
+
+.tab-pane { display: none; }
+.tab-pane.active { display: block; }
+.tab-pane iframe { width: 100%; border: none; min-height: 700px; border-radius: 0 6px 6px 6px; }
+
+/* ── Form elements ── */
+label {
+  display: block;
+  font-family: 'Montserrat', sans-serif;
+  font-weight: 600;
+  font-size: .8rem;
+  color: var(--text-muted);
+  margin-bottom: .35rem;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+input[type="text"],
+input[type="password"],
+select {
+  width: 100%;
+  padding: .65rem .9rem;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: .95rem;
+  font-family: 'Lato', sans-serif;
+  color: var(--text);
+  margin-bottom: 1.25rem;
+  transition: border-color .2s, box-shadow .2s;
+  outline: none;
+}
+
+input[type="text"]:focus,
+input[type="password"]:focus,
+select:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(12,113,202,.12);
+}
+
+input[type="text"]::placeholder,
+input[type="password"]::placeholder { color: #aab4be; }
+
+/* Checkboxes */
+.checkbox-group { margin-bottom: 1.25rem; }
+
+.checkbox-group label {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  margin: .45rem 0;
+  cursor: pointer;
+  text-transform: none;
+  font-size: .9rem;
+  color: var(--text);
+  letter-spacing: 0;
+  font-weight: 400;
+  font-family: 'Lato', sans-serif;
+}
+
+.checkbox-group input[type="checkbox"] {
+  width: 16px; height: 16px;
+  accent-color: var(--navy);
+  cursor: pointer;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+/* File upload zones */
+.file-group { margin-bottom: 1.25rem; }
+.file-group small { display: block; color: var(--text-muted); font-size: .8rem; margin-bottom: .5rem; }
+
+.upload-zone {
+  position: relative;
+  border: 2px dashed #b0bec5;
+  border-radius: 6px;
+  background: #f9fafb;
+  padding: 1.25rem 1rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .2s, background .2s;
+}
+.upload-zone:hover, .upload-zone.has-file {
+  border-color: var(--blue);
+  background: #e8f0fb;
+}
+.upload-zone input[type="file"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+}
+.upload-zone-icon {
+  font-size: 1.5rem;
+  margin-bottom: .35rem;
+  color: #90a4ae;
+  line-height: 1;
+}
+.upload-zone-text {
+  font-size: .85rem;
+  color: var(--text-muted);
+  font-family: 'Montserrat', sans-serif;
+  font-weight: 500;
+}
+.upload-zone-text strong { color: var(--blue); }
+.upload-zone-filename {
+  font-size: .8rem;
+  color: var(--navy);
+  font-weight: 700;
+  margin-top: .25rem;
+  display: none;
+}
+
+/* Button */
+button[type="submit"] {
+  width: 100%;
+  padding: .85rem 1.5rem;
+  background: var(--yellow);
+  color: var(--navy-dark);
+  border: none;
+  border-radius: 4px;
+  font-size: .95rem;
+  font-weight: 700;
+  font-family: 'Montserrat', sans-serif;
+  cursor: pointer;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  margin-top: .5rem;
+  transition: background .2s, transform .1s, box-shadow .2s;
+  box-shadow: 0 2px 6px rgba(255,198,41,.35);
+}
+
+button[type="submit"]:hover {
+  background: #fed23a;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(255,198,41,.4);
+}
+button[type="submit"]:active { transform: translateY(0); }
+button[type="submit"]:disabled {
+  background: #e0e0e0;
+  color: #999;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+/* Status messages */
+.status {
+  margin-top: 1rem;
+  padding: .75rem 1rem;
+  border-radius: 4px;
+  font-size: .875rem;
+  display: none;
+  border-left: 3px solid;
+}
+.status.ok      { display: block; background: #e8f5e9; border-color: var(--green); color: #2e7d32; }
+.status.err     { display: block; background: #fce4ec; border-color: var(--red);   color: #c62828; }
+.status.loading { display: block; background: #e3f2fd; border-color: var(--blue);  color: #1565c0; }
+
+/* AP13 / PT status banners */
+.ap13-status {
+  padding: .7rem 1rem;
+  border-radius: 4px;
+  margin-bottom: 1.25rem;
+  font-size: .875rem;
+  border-left: 3px solid;
+}
+.ap13-status.pending { background: #fff8e1; border-color: #f9a825; color: #7a5800; }
+.ap13-status.done    { background: #e8f5e9; border-color: var(--green); color: #2e7d32; }
+
+.or-divider {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: .8rem;
+  font-weight: 600;
+  font-family: 'Montserrat', sans-serif;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  margin: .25rem 0 1rem;
+  position: relative;
+}
+.or-divider::before, .or-divider::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: 42%;
+  height: 1px;
+  background: var(--border);
+}
+.or-divider::before { left: 0; }
+.or-divider::after  { right: 0; }
+
+.required::after { content: " *"; color: var(--red); }
+.hidden { display: none; }
+
+.field-section { margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border); }
 </style>
 </head>
 <body>
-<div class="header"><h1>Riverside County Auditor-Controller — Claims Portal</h1></div>
+
+<div class="site-header">
+  <div class="header-main">
+    <img src="images/ACO_Logo_Small.png" alt="Auditor Controller County of Riverside" class="logo">
+    <div class="header-page-title">
+      Unclaimed Refunds — Claims Portal
+      <span>Auditor-Controller · County of Riverside</span>
+    </div>
+  </div>
+</div>
+
 <div class="container">
 
   <!-- STEP 1: Required Forms -->
   <div id="formsSection" class="card hidden">
-    <div class="step-title"><span class="step-badge">1</span> Complete Your Claim Form(s)</div>
-    <p class="subtitle">Fill out the required form(s) below. Pre-filled fields are highlighted in blue. For the AP13 affidavit, sign and click "Submit Digitally" when done.</p>
+    <div class="step-title">
+      <span class="step-badge">1</span>
+      <h2>Complete Your Claim Form(s)</h2>
+    </div>
+    <p class="subtitle">Fill out the required form(s) below. Pre-filled fields are highlighted. For the AP13 affidavit, sign and click "Submit Digitally" when done.</p>
     <div id="formTabs" class="tabs"></div>
     <div id="formTabContent" class="tab-content"></div>
   </div>
 
   <!-- STEP 2: Upload Documents -->
   <div class="card">
-    <div class="step-title"><span id="uploadStep" class="step-badge">1</span> Upload Supporting Documents</div>
+    <div class="step-title">
+      <span id="uploadStep" class="step-badge">1</span>
+      <h2>Upload Supporting Documents</h2>
+    </div>
     <p class="subtitle" id="uploadSubtitle">Submit the documents required for your claim. Accepted formats: PDF, JPEG, PNG. Max 10 MB per file.</p>
+
     <form id="uploadForm" aria-label="Document upload form">
+
       <label for="name" class="required">Full Name</label>
       <input type="text" id="name" required placeholder="Jane Doe" autocomplete="name">
 
@@ -75,51 +446,68 @@
       <label for="password" class="required">Upload Password</label>
       <input type="password" id="password" required placeholder="Provided by the refund lookup assistant">
 
-      <!-- AP13 digital submission status (for stale warrant / payroll) -->
       <div id="ap13Status" class="ap13-status pending hidden">
         ⏳ AP13 Affidavit not yet submitted — please complete and sign the form in Step 1 above.
       </div>
-
-      <!-- Property Tax digital submission status -->
       <div id="ptStatus" class="ap13-status pending hidden">
         ⏳ Property Tax Claim not yet submitted — please complete and sign the form in Step 1 above.
       </div>
 
-      <!-- Common: Photo ID -->
-      <div class="file-group">
-        <label for="fileId" class="required">Government-Issued Photo ID</label>
-        <small>Driver's license, state ID, or passport</small>
-        <input type="file" id="fileId" accept=".pdf,.jpg,.jpeg,.png,.heic" required>
-      </div>
-
-      <!-- Stale Warrant / Payroll docs -->
-      <div id="swDocs" class="hidden">
+      <div class="field-section">
         <div class="file-group">
-          <label for="fileAddress" class="required">Proof of Current Address</label>
-          <small>Utility bill, bank statement, or lease agreement</small>
-          <input type="file" id="fileAddress" accept=".pdf,.jpg,.jpeg,.png,.heic">
+          <label for="fileId" class="required">Government-Issued Photo ID</label>
+          <small>Driver's license, state ID, or passport</small>
+          <div class="upload-zone" id="zoneId">
+            <input type="file" id="fileId" accept=".pdf,.jpg,.jpeg,.png,.heic" required>
+            <div class="upload-zone-icon">📎</div>
+            <div class="upload-zone-text"><strong>Click to upload</strong> or drag &amp; drop</div>
+            <div class="upload-zone-filename" id="nameId"></div>
+          </div>
+        </div>
+
+        <div id="swDocs" class="hidden">
+          <div class="file-group">
+            <label for="fileAddress" class="required">Proof of Current Address</label>
+            <small>Utility bill, bank statement, or lease agreement</small>
+            <div class="upload-zone" id="zoneAddress">
+              <input type="file" id="fileAddress" accept=".pdf,.jpg,.jpeg,.png,.heic">
+              <div class="upload-zone-icon">📎</div>
+              <div class="upload-zone-text"><strong>Click to upload</strong> or drag &amp; drop</div>
+              <div class="upload-zone-filename" id="nameAddress"></div>
+            </div>
+          </div>
+        </div>
+
+        <div id="ptDocs" class="hidden">
+          <div class="file-group">
+            <label for="filePayment">Proof of Payment for the Fiscal Year(s) of the Refund</label>
+            <small>Canceled checks, bank statements, or escrow papers showing breakdown of payments</small>
+            <div class="upload-zone" id="zonePayment">
+              <input type="file" id="filePayment" accept=".pdf,.jpg,.jpeg,.png,.heic">
+              <div class="upload-zone-icon">📎</div>
+              <div class="upload-zone-text"><strong>Click to upload</strong> or drag &amp; drop</div>
+              <div class="upload-zone-filename" id="namePayment"></div>
+            </div>
+          </div>
+          <div class="or-divider">or</div>
+          <div class="file-group">
+            <label for="fileOwnership">Proof of Claimant's Ownership</label>
+            <small>Must show the property address in question (e.g., copy of the tax bill for the property/fiscal year)</small>
+            <div class="upload-zone" id="zoneOwnership">
+              <input type="file" id="fileOwnership" accept=".pdf,.jpg,.jpeg,.png,.heic">
+              <div class="upload-zone-icon">📎</div>
+              <div class="upload-zone-text"><strong>Click to upload</strong> or drag &amp; drop</div>
+              <div class="upload-zone-filename" id="nameOwnership"></div>
+            </div>
+          </div>
         </div>
       </div>
 
-      <!-- Property Tax docs -->
-      <div id="ptDocs" class="hidden">
-        <div class="file-group">
-          <label for="filePayment">Proof of Payment for the Fiscal Year(s) of the Refund</label>
-          <small>Copies of canceled checks, bank statements, or escrow papers showing breakdown of payments</small>
-          <input type="file" id="filePayment" accept=".pdf,.jpg,.jpeg,.png,.heic">
-        </div>
-        <div class="or-divider">— OR —</div>
-        <div class="file-group">
-          <label for="fileOwnership">Proof of Claimant's Ownership</label>
-          <small>Must show the property address in question (e.g., copy of the tax bill for the property/fiscal year)</small>
-          <input type="file" id="fileOwnership" accept=".pdf,.jpg,.jpeg,.png,.heic">
-        </div>
-      </div>
-
-      <button type="submit" id="submitBtn">Upload Documents</button>
+      <button type="submit" id="submitBtn">Submit Claim Documents</button>
       <div id="status" class="status" role="alert"></div>
     </form>
   </div>
+
 </div>
 
 <script src="config.js"></script>
@@ -130,13 +518,9 @@
   var ap13Data = null;
   var ptData = null;
 
-  // Pre-fill name
   if (params.get("name")) document.getElementById("name").value = params.get("name");
 
-  // --- Show/hide doc sections based on type ---
   var types = (params.get("type") || "").split(",").filter(Boolean);
-  var hasPropertyTax = types.indexOf("PROPERTY_TAX") !== -1;
-  var hasStaleOrPayroll = types.some(function(t) { return t === "STALE_WARRANT" || t === "PAYROLL"; });
 
   function getSelectedTypes() {
     return Array.from(document.querySelectorAll('input[name="refundType"]:checked')).map(function(cb) { return cb.value; });
@@ -146,12 +530,10 @@
     var selected = getSelectedTypes();
     var hasSW = selected.some(function(t) { return t === "STALE_WARRANT" || t === "PAYROLL"; });
     var hasPT = selected.indexOf("PROPERTY_TAX") !== -1;
-
     document.getElementById("swDocs").classList.toggle("hidden", !hasSW);
     document.getElementById("ptDocs").classList.toggle("hidden", !hasPT);
     document.getElementById("ap13Status").classList.toggle("hidden", !hasSW);
     document.getElementById("ptStatus").classList.toggle("hidden", !hasPT);
-
     document.getElementById("fileAddress").required = hasSW;
   }
 
@@ -159,14 +541,12 @@
     cb.addEventListener("change", updateDocSections);
   });
 
-  // Pre-check boxes and show docs on load
   types.forEach(function(t) {
     var cb = document.querySelector('input[name="refundType"][value="' + t + '"]');
     if (cb) cb.checked = true;
   });
   updateDocSections();
 
-  // --- STEP 1: Build form tabs ---
   var amounts = (params.get("amount") || "").split(",").filter(Boolean);
   var name = params.get("name") || "";
   var address = params.get("address") || "";
@@ -216,28 +596,43 @@
     });
   }
 
-  // --- Listen for digital form submissions from iframes ---
   window.addEventListener("message", function (e) {
     if (e.data && e.data.type === "ap13_submitted") {
       ap13Data = e.data;
-      var statusEl = document.getElementById("ap13Status");
-      statusEl.className = "ap13-status done";
-      statusEl.textContent = "✅ AP13 Affidavit submitted and signed digitally.";
+      var el = document.getElementById("ap13Status");
+      el.className = "ap13-status done";
+      el.textContent = "✅ AP13 Affidavit submitted and signed digitally.";
       document.getElementById("uploadForm").scrollIntoView({ behavior: "smooth", block: "start" });
     }
     if (e.data && e.data.type === "property_tax_submitted") {
       ptData = e.data;
-      var statusEl = document.getElementById("ptStatus");
-      statusEl.className = "ap13-status done";
-      statusEl.textContent = "✅ Property Tax Claim submitted and signed digitally.";
+      var el = document.getElementById("ptStatus");
+      el.className = "ap13-status done";
+      el.textContent = "✅ Property Tax Claim submitted and signed digitally.";
       document.getElementById("uploadForm").scrollIntoView({ behavior: "smooth", block: "start" });
     }
   });
 
-  // --- Upload logic ---
+  // Upload zone filename feedback
+  [['fileId','zoneId','nameId'],['fileAddress','zoneAddress','nameAddress'],
+   ['filePayment','zonePayment','namePayment'],['fileOwnership','zoneOwnership','nameOwnership']
+  ].forEach(function(ids) {
+    var input = document.getElementById(ids[0]);
+    var zone  = document.getElementById(ids[1]);
+    var name  = document.getElementById(ids[2]);
+    if (!input) return;
+    input.addEventListener('change', function() {
+      if (input.files[0]) {
+        name.textContent = '✓ ' + input.files[0].name;
+        name.style.display = 'block';
+        zone.classList.add('has-file');
+      }
+    });
+  });
+
   var form = document.getElementById("uploadForm");
   var status = document.getElementById("status");
-  var btn = document.getElementById("submitBtn");
+  var submitBtn = document.getElementById("submitBtn");
 
   function setStatus(cls, msg) {
     status.className = "status " + cls;
@@ -250,40 +645,21 @@
     var hasSW = selected.some(function(t) { return t === "STALE_WARRANT" || t === "PAYROLL"; });
     var hasPT = selected.indexOf("PROPERTY_TAX") !== -1;
 
-    if (selected.length === 0) {
-      setStatus("err", "Please select at least one refund type.");
-      return;
-    }
+    if (selected.length === 0) { setStatus("err", "Please select at least one refund type."); return; }
+    if (hasSW && !ap13Data) { setStatus("err", "Please complete and submit the AP13 Affidavit in Step 1 before uploading."); return; }
+    if (hasPT && !ptData) { setStatus("err", "Please complete and submit the Property Tax Claim in Step 1 before uploading."); return; }
 
-    // Validate: forms must be submitted digitally
-    if (hasSW && !ap13Data) {
-      setStatus("err", "Please complete and submit the AP13 Affidavit in Step 1 before uploading.");
-      return;
-    }
-    if (hasPT && !ptData) {
-      setStatus("err", "Please complete and submit the Property Tax Claim in Step 1 before uploading.");
-      return;
-    }
-
-    // Validate: property tax needs at least one proof doc
     if (hasPT) {
       var hasPayment = document.getElementById("filePayment").files.length > 0;
       var hasOwnership = document.getElementById("fileOwnership").files.length > 0;
-      if (!hasPayment && !hasOwnership) {
-        setStatus("err", "Please upload either Proof of Payment or Proof of Ownership.");
-        return;
-      }
+      if (!hasPayment && !hasOwnership) { setStatus("err", "Please upload either Proof of Payment or Proof of Ownership."); return; }
     }
 
-    btn.disabled = true;
+    submitBtn.disabled = true;
     setStatus("loading", "Requesting upload URLs…");
 
-    // Build file list based on selected types
     var fileInputs = [{ el: document.getElementById("fileId"), label: "photo-id" }];
-
-    if (hasSW) {
-      fileInputs.push({ el: document.getElementById("fileAddress"), label: "proof-of-address" });
-    }
+    if (hasSW) fileInputs.push({ el: document.getElementById("fileAddress"), label: "proof-of-address" });
     if (hasPT) {
       if (document.getElementById("filePayment").files.length > 0)
         fileInputs.push({ el: document.getElementById("filePayment"), label: "proof-of-payment" });
@@ -294,12 +670,11 @@
     var files = [];
     for (var fi of fileInputs) {
       var file = fi.el.files[0];
-      if (!file) { setStatus("err", "Please select all required files."); btn.disabled = false; return; }
-      if (file.size > 10 * 1024 * 1024) { setStatus("err", file.name + " exceeds 10 MB limit."); btn.disabled = false; return; }
+      if (!file) { setStatus("err", "Please select all required files."); submitBtn.disabled = false; return; }
+      if (file.size > 10 * 1024 * 1024) { setStatus("err", file.name + " exceeds 10 MB limit."); submitBtn.disabled = false; return; }
       files.push({ file: file, filename: fi.label + "_" + file.name, contentType: file.type || "application/octet-stream" });
     }
 
-    // Add digitally signed form data as JSON
     if (ap13Data) {
       var ap13Blob = new Blob([JSON.stringify(ap13Data)], { type: "application/json" });
       files.push({ file: ap13Blob, filename: "ap13-affidavit.json", contentType: "application/json" });
@@ -337,7 +712,7 @@
     } catch (err) {
       setStatus("err", "Upload failed: " + err.message);
     } finally {
-      btn.disabled = false;
+      submitBtn.disabled = false;
     }
   });
 })();
