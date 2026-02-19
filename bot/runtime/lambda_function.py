@@ -49,6 +49,26 @@ def build_claim_url(record):
     return AP13_PDF_URL
 
 
+def build_portal_url(records):
+    """Build a single claims portal URL with all refund types and amounts."""
+    if not UPLOAD_PORTAL_URL or not records:
+        return ''
+    from urllib.parse import urlencode
+    types = ','.join(r['refund_type'] for r in records)
+    amounts = ','.join(str(r['amount']) for r in records)
+    params = {
+        'name': records[0]['name'],
+        'type': types,
+        'amount': amounts,
+        'address': records[0].get('address', ''),
+    }
+    # Add property tax fields if any record is PROPERTY_TAX
+    pt = next((r for r in records if r['refund_type'] == 'PROPERTY_TAX'), None)
+    if pt:
+        params.update({k: pt[k] for k in ('index', 'assessment', 'taxyear') if k in pt})
+    return f"{UPLOAD_PORTAL_URL}?{urlencode(params)}"
+
+
 def find_best_match(query):
     if not query:
         return None, []
@@ -93,11 +113,10 @@ def lookup(name):
             'amount': f"${r['amount']:,.2f}",
             'claim_deadline': r['claim_deadline'],
             'address': r.get('address', ''),
-            'claim_url': build_claim_url(r),
-            'upload_portal_url': UPLOAD_PORTAL_URL,
         })
 
-    return json.dumps(results)
+    portal_url = build_portal_url(records)
+    return json.dumps({'refunds': results, 'portal_url': portal_url})
 
 
 def send_sms(phone_number, message):

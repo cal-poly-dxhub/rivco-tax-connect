@@ -1,7 +1,7 @@
 [
   {
     "name": "tax_lookup",
-    "description": "Look up tax refunds for a customer by their name. Returns a JSON array of matching refund records with name, refund_type (PROPERTY_TAX, STALE_WARRANT, or PAYROLL), amount, claim_deadline, address, and claim_url. Returns a no-match message string if no refunds are found.",
+    "description": "Look up tax refunds for a customer by their name. Returns a JSON object with 'refunds' (array of records with name, refund_type, amount, claim_deadline, address) and 'portal_url' (a single Claims Portal link where the customer can fill out required forms and upload documents). Returns a no-match message string if no refunds are found.",
     "inputSchema": {
       "type": "object",
       "properties": {

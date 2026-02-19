@@ -3,16 +3,26 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Riverside County — Document Upload Portal</title>
+<title>Riverside County — Claims Portal</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f7fa; color: #1a1a1a; }
   .header { background: #1b3a5c; color: #fff; padding: 1.5rem 2rem; }
   .header h1 { font-size: 1.4rem; font-weight: 600; }
-  .container { max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
-  .card { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.1); padding: 2rem; }
+  .container { max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+  .card { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.1); padding: 2rem; margin-bottom: 1.5rem; }
   .card h2 { font-size: 1.2rem; margin-bottom: .5rem; }
-  .card p.subtitle { color: #555; font-size: .9rem; margin-bottom: 1.5rem; }
+  .card p.subtitle { color: #555; font-size: .9rem; margin-bottom: 1rem; }
+  .step-badge { display: inline-block; background: #1b3a5c; color: #fff; border-radius: 50%; width: 28px; height: 28px; text-align: center; line-height: 28px; font-weight: 600; font-size: .85rem; margin-right: .5rem; }
+  .step-title { font-size: 1.1rem; font-weight: 600; margin-bottom: .75rem; }
+  .tabs { display: flex; gap: 0; margin-bottom: 0; }
+  .tab { padding: .6rem 1.2rem; background: #e8edf2; border: 1px solid #ccc; border-bottom: none; cursor: pointer; font-size: .9rem; border-radius: 6px 6px 0 0; }
+  .tab.active { background: #fff; border-bottom: 1px solid #fff; font-weight: 600; margin-bottom: -1px; z-index: 1; }
+  .tab-content { border: 1px solid #ccc; border-radius: 0 6px 6px 6px; min-height: 200px; }
+  .tab-pane { display: none; }
+  .tab-pane.active { display: block; }
+  .tab-pane iframe { width: 100%; border: none; min-height: 700px; }
+  .no-forms { padding: 2rem; text-align: center; color: #666; }
   label { display: block; font-weight: 500; margin-bottom: .3rem; font-size: .9rem; }
   input, select { width: 100%; padding: .6rem .75rem; border: 1px solid #ccc; border-radius: 4px; font-size: .95rem; margin-bottom: 1rem; }
   input:focus, select:focus { outline: none; border-color: #1b3a5c; box-shadow: 0 0 0 2px rgba(27,58,92,.15); }
@@ -26,14 +36,25 @@
   .status.err { display: block; background: #fce4ec; color: #c62828; }
   .status.loading { display: block; background: #e3f2fd; color: #1565c0; }
   .required::after { content: " *"; color: #c62828; }
+  .hidden { display: none; }
 </style>
 </head>
 <body>
-<div class="header"><h1>Riverside County Auditor-Controller — Document Upload</h1></div>
+<div class="header"><h1>Riverside County Auditor-Controller — Claims Portal</h1></div>
 <div class="container">
+
+  <!-- STEP 1: Required Forms -->
+  <div id="formsSection" class="card hidden">
+    <div class="step-title"><span class="step-badge">1</span> Complete Your Claim Form(s)</div>
+    <p class="subtitle">Fill out the required form(s) below. Pre-filled fields are highlighted in blue.</p>
+    <div id="formTabs" class="tabs"></div>
+    <div id="formTabContent" class="tab-content"></div>
+  </div>
+
+  <!-- STEP 2: Upload Documents -->
   <div class="card">
-    <h2>Upload Supporting Documents</h2>
-    <p class="subtitle">Submit the documents required for your AP13 affidavit. Accepted formats: PDF, JPEG, PNG. Max 10 MB per file.</p>
+    <div class="step-title"><span id="uploadStep" class="step-badge">1</span> Upload Supporting Documents</div>
+    <p class="subtitle">Submit the documents required for your claim. Accepted formats: PDF, JPEG, PNG. Max 10 MB per file.</p>
     <form id="uploadForm" aria-label="Document upload form">
       <label for="name" class="required">Full Name</label>
       <input type="text" id="name" required placeholder="Jane Doe" autocomplete="name">
@@ -55,9 +76,9 @@
         <input type="file" id="fileId" accept=".pdf,.jpg,.jpeg,.png,.heic" required>
       </div>
 
-      <div class="file-group">
-        <label for="fileAffidavit" class="required">Completed &amp; Signed AP13 Affidavit</label>
-        <small>The filled-out AP13 PDF form</small>
+      <div id="affidavitUpload" class="file-group">
+        <label for="fileAffidavit" class="required">Completed &amp; Signed Claim Form</label>
+        <small>The filled-out form from Step 1 (print, sign, and scan/photo)</small>
         <input type="file" id="fileAffidavit" accept=".pdf,.jpg,.jpeg,.png,.heic" required>
       </div>
 
@@ -72,18 +93,101 @@
     </form>
   </div>
 </div>
+
 <script src="config.js"></script>
 <script>
 (function () {
   const API_URL = window.API_URL || "";
-  const form = document.getElementById("uploadForm");
-  const status = document.getElementById("status");
-  const btn = document.getElementById("submitBtn");
-
-  // Pre-fill name from query string if provided
   const params = new URLSearchParams(window.location.search);
+
+  // Pre-fill upload form fields
   if (params.get("name")) document.getElementById("name").value = params.get("name");
-  if (params.get("type")) document.getElementById("refundType").value = params.get("type");
+  if (params.get("type")) {
+    // Use first type for the upload form dropdown
+    const firstType = params.get("type").split(",")[0];
+    document.getElementById("refundType").value = firstType;
+  }
+
+  // --- STEP 1: Build form tabs from query params ---
+  const types = (params.get("type") || "").split(",").filter(Boolean);
+  const amounts = (params.get("amount") || "").split(",").filter(Boolean);
+  const name = params.get("name") || "";
+  const address = params.get("address") || "";
+
+  // Property tax params
+  const index = params.get("index") || "";
+  const assessment = params.get("assessment") || "";
+  const taxyear = params.get("taxyear") || "";
+
+  const formsSection = document.getElementById("formsSection");
+  const tabsContainer = document.getElementById("formTabs");
+  const contentContainer = document.getElementById("formTabContent");
+
+  if (types.length > 0) {
+    formsSection.classList.remove("hidden");
+    document.getElementById("uploadStep").textContent = "2";
+
+    const tabs = [];
+
+    types.forEach(function (type, i) {
+      const amount = amounts[i] || "";
+      const tabId = "form-" + i;
+
+      if (type === "PROPERTY_TAX") {
+        const ptParams = new URLSearchParams({ index: index, assessment: assessment, taxyear: taxyear, amount: amount });
+        tabs.push({
+          id: tabId,
+          label: "Property Tax Claim",
+          html: '<iframe src="https://apps.auditorcontroller.org/unclaimedrefund/refundform.aspx?' + ptParams.toString() + '" title="Property Tax Refund Form"></iframe>'
+        });
+      } else {
+        // AP13 for STALE_WARRANT and PAYROLL
+        const ap13Params = new URLSearchParams({ name: name, amount: amount, address: address });
+        const label = type === "PAYROLL" ? "Payroll — AP13 Affidavit" : "Stale Warrant — AP13 Affidavit";
+        tabs.push({
+          id: tabId,
+          label: label,
+          html: '<iframe src="ap13-form.html?' + ap13Params.toString() + '" title="' + label + '"></iframe>'
+        });
+      }
+    });
+
+    // Deduplicate AP13 tabs (multiple stale warrants share one form)
+    const seen = {};
+    const uniqueTabs = tabs.filter(function (t) {
+      const key = t.label;
+      if (seen[key]) return false;
+      seen[key] = true;
+      return true;
+    });
+
+    uniqueTabs.forEach(function (tab, i) {
+      // Tab button
+      const btn = document.createElement("div");
+      btn.className = "tab" + (i === 0 ? " active" : "");
+      btn.textContent = tab.label;
+      btn.dataset.target = tab.id;
+      btn.addEventListener("click", function () {
+        tabsContainer.querySelectorAll(".tab").forEach(function (t) { t.classList.remove("active"); });
+        contentContainer.querySelectorAll(".tab-pane").forEach(function (p) { p.classList.remove("active"); });
+        btn.classList.add("active");
+        document.getElementById(tab.id).classList.add("active");
+      });
+      tabsContainer.appendChild(btn);
+
+      // Tab pane
+      var pane = document.createElement("div");
+      pane.id = tab.id;
+      pane.className = "tab-pane" + (i === 0 ? " active" : "");
+      pane.innerHTML = tab.html;
+      contentContainer.appendChild(pane);
+    });
+  }
+
+  // --- STEP 2: Upload logic (unchanged) ---
+  var form = document.getElementById("uploadForm");
+  var status = document.getElementById("status");
+  var btn = document.getElementById("submitBtn");
 
   function setStatus(cls, msg) {
     status.className = "status " + cls;
@@ -95,40 +199,40 @@
     btn.disabled = true;
     setStatus("loading", "Requesting upload URLs…");
 
-    const fileInputs = [
+    var fileInputs = [
       { el: document.getElementById("fileId"), label: "photo-id" },
-      { el: document.getElementById("fileAffidavit"), label: "ap13-affidavit" },
+      { el: document.getElementById("fileAffidavit"), label: "claim-form" },
       { el: document.getElementById("fileAddress"), label: "proof-of-address" },
     ];
 
-    const files = [];
-    for (const fi of fileInputs) {
-      const file = fi.el.files[0];
+    var files = [];
+    for (var fi of fileInputs) {
+      var file = fi.el.files[0];
       if (!file) { setStatus("err", "Please select all required files."); btn.disabled = false; return; }
       if (file.size > 10 * 1024 * 1024) { setStatus("err", file.name + " exceeds 10 MB limit."); btn.disabled = false; return; }
-      files.push({ file, filename: fi.label + "_" + file.name, contentType: file.type || "application/octet-stream" });
+      files.push({ file: file, filename: fi.label + "_" + file.name, contentType: file.type || "application/octet-stream" });
     }
 
     try {
-      const res = await fetch(API_URL + "/upload", {
+      var res = await fetch(API_URL + "/upload", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: document.getElementById("name").value.trim(),
           refundType: document.getElementById("refundType").value,
           password: document.getElementById("password").value.trim(),
-          files: files.map(f => ({ filename: f.filename, contentType: f.contentType })),
+          files: files.map(function (f) { return { filename: f.filename, contentType: f.contentType }; }),
         }),
       });
-      const data = await res.json();
+      var data = await res.json();
       if (!res.ok) throw new Error(data.error || "Request failed");
 
       setStatus("loading", "Uploading files…");
-      for (let i = 0; i < data.uploads.length; i++) {
-        await fetch(data.uploads[i].uploadUrl, {
+      for (var j = 0; j < data.uploads.length; j++) {
+        await fetch(data.uploads[j].uploadUrl, {
           method: "PUT",
-          headers: { "Content-Type": files[i].contentType },
-          body: files[i].file,
+          headers: { "Content-Type": files[j].contentType },
+          body: files[j].file,
         });
       }
 
