@@ -4,6 +4,8 @@ Self-service AI agent for tax refund lookup using Amazon Connect with Nova Sonic
 
 ## Architecture
 
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full Mermaid diagram.
+
 ```
 Customer → Connect Chat/Voice → Lex Bot (QInConnectIntent)
                                     ↓
