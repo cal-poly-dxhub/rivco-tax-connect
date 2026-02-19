@@ -56,7 +56,7 @@ class NovaSonicConnectStack(Stack):
             resources=[f"arn:aws:wisdom:{self.region}:{self.account}:*"],
         ))
         role.add_to_policy(iam.PolicyStatement(
-            actions=["connect:DescribeContact"],
+            actions=["connect:DescribeContact", "connect:UpdateContactAttributes"],
             resources=[f"arn:aws:connect:{self.region}:{self.account}:instance/*/contact/*"],
         ))
 

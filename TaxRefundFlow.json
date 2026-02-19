@@ -284,7 +284,7 @@
       }
     },
     {
-      "Parameters": { "Text": "Handed off to a live representative." },
+      "Parameters": { "Text": "Transferring you to a human now..." },
       "Identifier": "action-handoff-message",
       "Type": "MessageParticipant",
       "Transitions": {

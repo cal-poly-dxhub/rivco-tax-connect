@@ -184,6 +184,15 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             return inject_channel(event)
 
         # MCP Gateway tool calls
+        if 'contact_id' in event and 'instance_id' in event:
+            connect_client.update_contact_attributes(
+                InstanceId=event['instance_id'],
+                InitialContactId=event['contact_id'],
+                Attributes={'transferToAgent': 'true'},
+            )
+            logger.info("Set transferToAgent=true for contact %s", event['contact_id'])
+            return {'result': 'Transfer flag set. The caller will be routed to a live agent.'}
+
         if 'customer_name' in event:
             return {'result': lookup(event['customer_name'])}
 

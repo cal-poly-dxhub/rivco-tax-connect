@@ -14,6 +14,24 @@
     }
   },
   {
+    "name": "transfer_to_agent",
+    "description": "Transfer the caller to a live human agent. Call this tool when the caller asks to speak with a person, representative, or agent, or when you cannot resolve their issue. This sets the transfer flag so the contact flow routes to the live agent queue.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "contact_id": {
+          "type": "string",
+          "description": "The contactId from the current session"
+        },
+        "instance_id": {
+          "type": "string",
+          "description": "The instanceId from the current session"
+        }
+      },
+      "required": ["contact_id", "instance_id"]
+    }
+  },
+  {
     "name": "send_sms",
     "description": "Send an SMS text message to a US phone number. Use this to send refund claim links to voice callers who cannot click links. Only send when the caller confirms they want to receive a text.",
     "inputSchema": {
