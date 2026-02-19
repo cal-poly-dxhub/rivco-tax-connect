@@ -27,3 +27,6 @@ bot/runtime/typing_extensions.py
 # Data (keep sample, ignore large files)
 *.xls
 *.xlsx
+
+# Secrets
+.env

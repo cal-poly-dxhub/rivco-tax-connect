@@ -5,6 +5,7 @@ import boto3
 
 s3 = boto3.client("s3")
 BUCKET = os.environ["UPLOAD_BUCKET"]
+UPLOAD_PASSWORD = os.environ.get("UPLOAD_PASSWORD", "")
 ALLOWED_TYPES = {
     "application/pdf",
     "image/jpeg",
@@ -32,10 +33,13 @@ def lambda_handler(event, context):
 
     name = (body.get("name") or "").strip()
     refund_type = (body.get("refundType") or "").strip()
+    password = (body.get("password") or "").strip()
     files = body.get("files") or []
 
     if not name or not refund_type:
         return _err(400, "name and refundType are required", cors_headers)
+    if UPLOAD_PASSWORD and password != UPLOAD_PASSWORD:
+        return _err(403, "Invalid password", cors_headers)
     if not files or len(files) > 5:
         return _err(400, "Provide 1-5 files", cors_headers)
 

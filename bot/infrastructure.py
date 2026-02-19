@@ -1,4 +1,5 @@
 import json
+import os
 import yaml
 from aws_cdk import (
     Stack, Duration, RemovalPolicy, CfnOutput, BundlingOptions, BundlingFileAccess,
@@ -463,6 +464,7 @@ class NovaSonicConnectStack(Stack):
             memory_size=128,
             environment={
                 "UPLOAD_BUCKET": uploads_bucket.bucket_name,
+                "UPLOAD_PASSWORD": os.environ.get("UPLOAD_PASSWORD", ""),
             },
         )
         uploads_bucket.grant_put(upload_fn)
@@ -475,6 +477,10 @@ class NovaSonicConnectStack(Stack):
                 allow_origins=apigw.Cors.ALL_ORIGINS,
                 allow_methods=["POST", "OPTIONS"],
                 allow_headers=["Content-Type"],
+            ),
+            deploy_options=apigw.StageOptions(
+                throttling_rate_limit=2,
+                throttling_burst_limit=5,
             ),
         )
         upload_api.root.add_resource("upload").add_method(

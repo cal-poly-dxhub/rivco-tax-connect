@@ -46,6 +46,9 @@
         <option value="PROPERTY_TAX">Property Tax</option>
       </select>
 
+      <label for="password" class="required">Upload Password</label>
+      <input type="password" id="password" required placeholder="Provided by the refund lookup assistant">
+
       <div class="file-group">
         <label for="fileId" class="required">Government-Issued Photo ID</label>
         <small>Driver's license, passport, or state ID</small>
@@ -113,6 +116,7 @@
         body: JSON.stringify({
           name: document.getElementById("name").value.trim(),
           refundType: document.getElementById("refundType").value,
+          password: document.getElementById("password").value.trim(),
           files: files.map(f => ({ filename: f.filename, contentType: f.contentType })),
         }),
       });
