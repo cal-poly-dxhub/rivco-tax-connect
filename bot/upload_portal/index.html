@@ -590,12 +590,12 @@
                     />
 
                     <div id="ap13Status" class="ap13-status pending hidden">
-                        ⏳ AP13 Affidavit not yet submitted — please complete
-                        and sign the form in Step 1 above.
+                        AP13 Affidavit not yet submitted — please complete and
+                        sign the form in Step 1 above.
                     </div>
                     <div id="ptStatus" class="ap13-status pending hidden">
-                        ⏳ Property Tax Claim not yet submitted — please
-                        complete and sign the form in Step 1 above.
+                        Property Tax Claim not yet submitted — please complete
+                        and sign the form in Step 1 above.
                     </div>
 
                     <div class="field-section">
@@ -871,12 +871,10 @@
                         el.className = "ap13-status done";
                         el.textContent =
                             "AP13 Affidavit submitted and signed digitally.";
-                        document
-                            .getElementById("uploadForm")
-                            .scrollIntoView({
-                                behavior: "smooth",
-                                block: "start",
-                            });
+                        document.getElementById("uploadForm").scrollIntoView({
+                            behavior: "smooth",
+                            block: "start",
+                        });
                     }
                     if (e.data && e.data.type === "property_tax_submitted") {
                         ptData = e.data;
@@ -884,12 +882,10 @@
                         el.className = "ap13-status done";
                         el.textContent =
                             "Property Tax Claim submitted and signed digitally.";
-                        document
-                            .getElementById("uploadForm")
-                            .scrollIntoView({
-                                behavior: "smooth",
-                                block: "start",
-                            });
+                        document.getElementById("uploadForm").scrollIntoView({
+                            behavior: "smooth",
+                            block: "start",
+                        });
                     }
                 });
 
