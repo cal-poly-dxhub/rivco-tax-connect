@@ -1,7 +1,9 @@
 import json
 import os
+import re
 import uuid
 import boto3
+from typing import Any
 
 s3 = boto3.client("s3")
 BUCKET = os.environ["UPLOAD_BUCKET"]
@@ -13,9 +15,16 @@ ALLOWED_TYPES = {
     "image/heic",
 }
 MAX_SIZE = 10 * 1024 * 1024  # 10 MB
+_SAFE_FILENAME = re.compile(r'[^\w.\-]')
 
 
-def lambda_handler(event, context):
+def _sanitize_filename(name: str) -> str:
+    name = os.path.basename(name)
+    name = _SAFE_FILENAME.sub('_', name)
+    return name[:100] or 'file'
+
+
+def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     origin = os.environ.get("ALLOWED_ORIGIN", "*")
     cors_headers = {
         "Access-Control-Allow-Origin": origin,
@@ -48,7 +57,7 @@ def lambda_handler(event, context):
 
     for f in files:
         content_type = f.get("contentType", "")
-        filename = f.get("filename", "file")
+        filename = _sanitize_filename(f.get("filename") or "file")
         if content_type not in ALLOWED_TYPES:
             return _err(400, f"Unsupported file type: {content_type}", cors_headers)
 
@@ -72,7 +81,7 @@ def lambda_handler(event, context):
     }
 
 
-def _err(code, msg, headers):
+def _err(code: int, msg: str, headers: dict[str, str]) -> dict[str, Any]:
     return {
         "statusCode": code,
         "headers": headers,

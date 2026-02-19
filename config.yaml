@@ -10,7 +10,8 @@ lambda:
   timeout_seconds: 30
   memory_mb: 512
   environment:
-    CLAIM_URL: https://apps.auditorcontroller.org/unclaimedrefund/refundform.aspx
+    PROPERTY_TAX_URL: https://apps.auditorcontroller.org/unclaimedrefund/refundform.aspx
+    AP13_PDF_URL: "https://auditorcontroller.org/sites/g/files/aldnop171/files/2024-10/AP13AffidavitfortheReplaceofStlDtdWarr%2010_30_24.pdf"
     FUZZY_THRESHOLD: "0.8"
 
 s3:

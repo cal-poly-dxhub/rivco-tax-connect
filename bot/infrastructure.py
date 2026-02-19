@@ -445,6 +445,8 @@ class NovaSonicConnectStack(Stack):
 
         # --- Task 10: Secure Document Upload Portal ---
 
+        portal_origin = f"http://{proj}-portal-{self.account}.s3-website-{self.region}.amazonaws.com"
+
         # S3 bucket for uploaded documents (encrypted, lifecycle, no public access)
         uploads_bucket = s3.Bucket(
             self, "UploadsBucket",
@@ -456,7 +458,7 @@ class NovaSonicConnectStack(Stack):
             lifecycle_rules=[s3.LifecycleRule(expiration=Duration.days(90))],
             cors=[s3.CorsRule(
                 allowed_methods=[s3.HttpMethods.PUT],
-                allowed_origins=["*"],
+                allowed_origins=[portal_origin],
                 allowed_headers=["*"],
                 max_age=3600,
             )],
@@ -474,6 +476,7 @@ class NovaSonicConnectStack(Stack):
             environment={
                 "UPLOAD_BUCKET": uploads_bucket.bucket_name,
                 "UPLOAD_PASSWORD": os.environ.get("UPLOAD_PASSWORD", ""),
+                "ALLOWED_ORIGIN": portal_origin,
             },
         )
         uploads_bucket.grant_put(upload_fn)
@@ -483,7 +486,7 @@ class NovaSonicConnectStack(Stack):
             self, "UploadApi",
             rest_api_name=f"{proj}-upload-api",
             default_cors_preflight_options=apigw.CorsOptions(
-                allow_origins=apigw.Cors.ALL_ORIGINS,
+                allow_origins=[portal_origin],
                 allow_methods=["POST", "OPTIONS"],
                 allow_headers=["Content-Type"],
             ),
