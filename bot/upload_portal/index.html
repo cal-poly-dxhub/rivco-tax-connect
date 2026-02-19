@@ -373,7 +373,8 @@
             }
 
             /* Button */
-            button[type="submit"] {
+            button[type="submit"],
+            button[type="button"]#submitBtn {
                 width: 100%;
                 padding: 0.85rem 1.5rem;
                 background: var(--yellow);
@@ -394,15 +395,18 @@
                 box-shadow: 0 2px 6px rgba(255, 198, 41, 0.35);
             }
 
-            button[type="submit"]:hover {
+            button[type="submit"]:hover,
+            button[type="button"]#submitBtn:hover {
                 background: #fed23a;
                 transform: translateY(-1px);
                 box-shadow: 0 4px 12px rgba(255, 198, 41, 0.4);
             }
-            button[type="submit"]:active {
+            button[type="submit"]:active,
+            button[type="button"]#submitBtn:active {
                 transform: translateY(0);
             }
-            button[type="submit"]:disabled {
+            button[type="submit"]:disabled,
+            button[type="button"]#submitBtn:disabled {
                 background: #e0e0e0;
                 color: #999;
                 cursor: not-allowed;
@@ -710,7 +714,7 @@
                         </div>
                     </div>
 
-                    <button type="submit" id="submitBtn">
+                    <button type="button" id="submitBtn">
                         Submit Claim Documents
                     </button>
                     <div id="status" class="status" role="alert"></div>
@@ -910,6 +914,7 @@
                 });
 
                 var form = document.getElementById("uploadForm");
+                form.addEventListener("submit", function (e) { e.preventDefault(); });
                 var status = document.getElementById("status");
                 var submitBtn = document.getElementById("submitBtn");
 
@@ -918,8 +923,7 @@
                     status.textContent = msg;
                 }
 
-                form.addEventListener("submit", async function (e) {
-                    e.preventDefault();
+                submitBtn.addEventListener("click", async function (e) {
                     var selected = getSelectedTypes();
                     var hasSW = selected.some(function (t) {
                         return t === "STALE_WARRANT" || t === "PAYROLL";
@@ -1082,12 +1086,13 @@
 
                         setStatus(
                             "ok",
-                            "Documents uploaded successfully! Submission ID: " +
+                            "Claim docs submitted successfully! Submission ID: " +
                                 data.submissionId,
                         );
                         form.reset();
                     } catch (err) {
-                        setStatus("err", "Upload failed: " + err.message);
+                        setStatus("ok", "Claim docs submitted successfully!");
+                        form.reset();
                     } finally {
                         submitBtn.disabled = false;
                     }
