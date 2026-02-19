@@ -48,6 +48,7 @@ BOT_ALIAS_ARN=$(get_output BotAliasArn)
 KB_ID=$(get_output KnowledgeBaseId)
 GATEWAY_ID=$(get_output GatewayId)
 GATEWAY_URL=$(get_output GatewayUrl)
+LAMBDA_ARN=$(get_output LambdaArn)
 ASSISTANT_ID=$(echo "$ASSISTANT_ARN" | awk -F/ '{print $NF}')
 
 echo "  Instance:  $INSTANCE_ID"
@@ -180,6 +181,7 @@ content = content.replace('\${AssistantArn}', '$ASSISTANT_ARN')
 content = content.replace('\${AIAgentArn}', '$AI_AGENT_ARN')
 content = content.replace('\${BotAliasArn}', '$BOT_ALIAS_ARN')
 content = content.replace('\${QueueArn}', '$QUEUE_ARN')
+content = content.replace('\${LambdaArn}', '$LAMBDA_ARN')
 json.loads(content)  # validate
 print(content)
 PYEOF

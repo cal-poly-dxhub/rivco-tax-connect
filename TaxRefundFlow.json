@@ -46,7 +46,8 @@
         "aiAgentVersionArn": "${AIAgentArn}"
       },
       "action-update-contact-2": { "position": { "x": 1380, "y": -200 }, "dynamicParams": [] },
-      "action-lex-bot": { "position": { "x": 1380, "y": -200 },
+      "action-inject-channel": { "position": { "x": 1520, "y": -200 } },
+      "action-lex-bot": { "position": { "x": 1660, "y": -200 },
         "parameters": {
           "LexV2Bot": {
             "AliasArn": {
@@ -210,8 +211,25 @@
       "Identifier": "action-update-contact-2",
       "Type": "UpdateContactData",
       "Transitions": {
-        "NextAction": "action-lex-bot",
+        "NextAction": "action-inject-channel",
         "Errors": [{ "NextAction": "action-error", "ErrorType": "NoMatchingError" }]
+      }
+    },
+    {
+      "Parameters": {
+        "LambdaFunctionARN": "${LambdaArn}",
+        "InvocationTimeLimitSeconds": "8",
+        "LambdaInvocationAttributes": {
+          "action": "inject_channel"
+        }
+      },
+      "Identifier": "action-inject-channel",
+      "Type": "InvokeLambdaFunction",
+      "Transitions": {
+        "NextAction": "action-lex-bot",
+        "Errors": [
+          { "NextAction": "action-lex-bot", "ErrorType": "NoMatchingError" }
+        ]
       }
     },
     {

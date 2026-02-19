@@ -50,6 +50,15 @@ class NovaSonicConnectStack(Stack):
             actions=["sns:Publish"],
             resources=["*"],
         ))
+        # Q in Connect session data injection (channel-aware prompts)
+        role.add_to_policy(iam.PolicyStatement(
+            actions=["qconnect:UpdateSessionData"],
+            resources=[f"arn:aws:wisdom:{self.region}:{self.account}:*"],
+        ))
+        role.add_to_policy(iam.PolicyStatement(
+            actions=["connect:DescribeContact"],
+            resources=[f"arn:aws:connect:{self.region}:{self.account}:instance/*/contact/*"],
+        ))
 
         # Lambda environment (UPLOAD_PORTAL_URL added after portal_bucket is created below)
         env = {
@@ -519,6 +528,7 @@ class NovaSonicConnectStack(Stack):
 
         # Wire upload portal URL into main Lambda so the bot can reference it
         fn.add_environment("UPLOAD_PORTAL_URL", portal_bucket.bucket_website_url)
+        fn.add_environment("ASSISTANT_ID", assistant.attr_assistant_id)
 
         CfnOutput(self, "UploadPortalUrl", value=portal_bucket.bucket_website_url)
         CfnOutput(self, "UploadApiUrl", value=upload_api.url)

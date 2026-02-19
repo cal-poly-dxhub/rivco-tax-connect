@@ -13,6 +13,8 @@ logger.setLevel(logging.INFO)
 
 s3 = boto3.client('s3')
 sns = boto3.client('sns')
+connect_client = boto3.client('connect')
+qconnect = boto3.client('qconnect')
 BUCKET = os.environ.get('S3_BUCKET')
 FILE_KEY = os.environ.get('DATA_FILE', 'refunds_demo_balanced.jsonl')
 FUZZY_THRESHOLD = float(os.environ.get('FUZZY_THRESHOLD', '0.8'))
@@ -139,8 +141,45 @@ def send_sms(phone_number, message):
     return f'SMS sent to {phone_number}.'
 
 
+def inject_channel(event):
+    """Push the Connect channel into the Q in Connect session as custom data."""
+    contact_data = event['Details']['ContactData']
+    channel = contact_data.get('Channel', 'VOICE')
+    contact_id = contact_data['ContactId']
+    instance_arn = contact_data['InstanceARN']
+    instance_id = instance_arn.split('/')[-1]
+    assistant_id = os.environ.get('ASSISTANT_ID', '')
+
+    if not assistant_id:
+        logger.error("ASSISTANT_ID not set")
+        return {'lambdaResult': 'Error'}
+
+    # Get the wisdom session ARN from the contact
+    contact = connect_client.describe_contact(
+        ContactId=contact_id, InstanceId=instance_id
+    )
+    session_arn = (contact.get('Contact', {}).get('WisdomInfo') or {}).get('SessionArn')
+    if not session_arn:
+        logger.warning("No wisdom session on contact %s", contact_id)
+        return {'lambdaResult': 'NoSession'}
+
+    session_id = session_arn.split('/')[-1]
+    qconnect.update_session_data(
+        assistantId=assistant_id,
+        sessionId=session_id,
+        data=[{'key': 'channel', 'value': {'stringValue': channel}}],
+    )
+    logger.info("Injected channel=%s into session %s", channel, session_id)
+    return {'lambdaResult': 'Success'}
+
+
 def lambda_handler(event, context):
     logger.info("Event: %s", json.dumps(event, default=str))
+
+    # Connect flow direct invocation: inject channel into session
+    params = (event.get('Details') or {}).get('Parameters') or {}
+    if params.get('action') == 'inject_channel':
+        return inject_channel(event)
 
     # MCP Gateway tool calls
     if 'customer_name' in event:
