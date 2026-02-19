@@ -514,6 +514,7 @@ class NovaSonicConnectStack(Stack):
             self, "PortalConfig",
             sources=[s3deploy.Source.data("config.js", config_js)],
             destination_bucket=portal_bucket,
+            prune=False,
         )
 
         # Wire upload portal URL into main Lambda so the bot can reference it

@@ -22,12 +22,14 @@
   .tab-pane { display: none; }
   .tab-pane.active { display: block; }
   .tab-pane iframe { width: 100%; border: none; min-height: 700px; }
-  .no-forms { padding: 2rem; text-align: center; color: #666; }
   label { display: block; font-weight: 500; margin-bottom: .3rem; font-size: .9rem; }
   input, select { width: 100%; padding: .6rem .75rem; border: 1px solid #ccc; border-radius: 4px; font-size: .95rem; margin-bottom: 1rem; }
   input:focus, select:focus { outline: none; border-color: #1b3a5c; box-shadow: 0 0 0 2px rgba(27,58,92,.15); }
   .file-group { margin-bottom: 1.2rem; }
   .file-group small { color: #666; font-size: .8rem; }
+  .checkbox-group { margin-bottom: 1rem; }
+  .checkbox-group label { display: block; margin: .4rem 0; cursor: pointer; }
+  .checkbox-group input { width: auto; margin-right: .5rem; }
   button { background: #1b3a5c; color: #fff; border: none; padding: .75rem 1.5rem; border-radius: 4px; font-size: 1rem; cursor: pointer; width: 100%; }
   button:hover { background: #15304d; }
   button:disabled { background: #999; cursor: not-allowed; }
@@ -37,6 +39,10 @@
   .status.loading { display: block; background: #e3f2fd; color: #1565c0; }
   .required::after { content: " *"; color: #c62828; }
   .hidden { display: none; }
+  .ap13-status { padding: .75rem; border-radius: 4px; margin-bottom: 1rem; font-size: .9rem; }
+  .ap13-status.pending { background: #fff3e0; color: #e65100; }
+  .ap13-status.done { background: #e8f5e9; color: #2e7d32; }
+  .or-divider { text-align: center; color: #888; font-weight: 600; font-size: .85rem; margin: .5rem 0 1rem; }
 </style>
 </head>
 <body>
@@ -46,7 +52,7 @@
   <!-- STEP 1: Required Forms -->
   <div id="formsSection" class="card hidden">
     <div class="step-title"><span class="step-badge">1</span> Complete Your Claim Form(s)</div>
-    <p class="subtitle">Fill out the required form(s) below. Pre-filled fields are highlighted in blue.</p>
+    <p class="subtitle">Fill out the required form(s) below. Pre-filled fields are highlighted in blue. For the AP13 affidavit, sign and click "Submit Digitally" when done.</p>
     <div id="formTabs" class="tabs"></div>
     <div id="formTabContent" class="tab-content"></div>
   </div>
@@ -54,38 +60,60 @@
   <!-- STEP 2: Upload Documents -->
   <div class="card">
     <div class="step-title"><span id="uploadStep" class="step-badge">1</span> Upload Supporting Documents</div>
-    <p class="subtitle">Submit the documents required for your claim. Accepted formats: PDF, JPEG, PNG. Max 10 MB per file.</p>
+    <p class="subtitle" id="uploadSubtitle">Submit the documents required for your claim. Accepted formats: PDF, JPEG, PNG. Max 10 MB per file.</p>
     <form id="uploadForm" aria-label="Document upload form">
       <label for="name" class="required">Full Name</label>
       <input type="text" id="name" required placeholder="Jane Doe" autocomplete="name">
 
-      <label for="refundType" class="required">Refund Type</label>
-      <select id="refundType" required>
-        <option value="">— Select —</option>
-        <option value="STALE_WARRANT">Stale Warrant</option>
-        <option value="PAYROLL">Payroll</option>
-        <option value="PROPERTY_TAX">Property Tax</option>
-      </select>
+      <label class="required">Refund Type(s)</label>
+      <div id="refundTypeCheckboxes" class="checkbox-group">
+        <label><input type="checkbox" name="refundType" value="STALE_WARRANT"> Stale Warrant</label>
+        <label><input type="checkbox" name="refundType" value="PAYROLL"> Payroll</label>
+        <label><input type="checkbox" name="refundType" value="PROPERTY_TAX"> Property Tax</label>
+      </div>
 
       <label for="password" class="required">Upload Password</label>
       <input type="password" id="password" required placeholder="Provided by the refund lookup assistant">
 
+      <!-- AP13 digital submission status (for stale warrant / payroll) -->
+      <div id="ap13Status" class="ap13-status pending hidden">
+        ⏳ AP13 Affidavit not yet submitted — please complete and sign the form in Step 1 above.
+      </div>
+
+      <!-- Property Tax digital submission status -->
+      <div id="ptStatus" class="ap13-status pending hidden">
+        ⏳ Property Tax Claim not yet submitted — please complete and sign the form in Step 1 above.
+      </div>
+
+      <!-- Common: Photo ID -->
       <div class="file-group">
         <label for="fileId" class="required">Government-Issued Photo ID</label>
-        <small>Driver's license, passport, or state ID</small>
+        <small>Driver's license, state ID, or passport</small>
         <input type="file" id="fileId" accept=".pdf,.jpg,.jpeg,.png,.heic" required>
       </div>
 
-      <div id="affidavitUpload" class="file-group">
-        <label for="fileAffidavit" class="required">Completed &amp; Signed Claim Form</label>
-        <small>The filled-out form from Step 1 (print, sign, and scan/photo)</small>
-        <input type="file" id="fileAffidavit" accept=".pdf,.jpg,.jpeg,.png,.heic" required>
+      <!-- Stale Warrant / Payroll docs -->
+      <div id="swDocs" class="hidden">
+        <div class="file-group">
+          <label for="fileAddress" class="required">Proof of Current Address</label>
+          <small>Utility bill, bank statement, or lease agreement</small>
+          <input type="file" id="fileAddress" accept=".pdf,.jpg,.jpeg,.png,.heic">
+        </div>
       </div>
 
-      <div class="file-group">
-        <label for="fileAddress" class="required">Proof of Current Address</label>
-        <small>Utility bill, bank statement, or lease agreement</small>
-        <input type="file" id="fileAddress" accept=".pdf,.jpg,.jpeg,.png,.heic" required>
+      <!-- Property Tax docs -->
+      <div id="ptDocs" class="hidden">
+        <div class="file-group">
+          <label for="filePayment">Proof of Payment for the Fiscal Year(s) of the Refund</label>
+          <small>Copies of canceled checks, bank statements, or escrow papers showing breakdown of payments</small>
+          <input type="file" id="filePayment" accept=".pdf,.jpg,.jpeg,.png,.heic">
+        </div>
+        <div class="or-divider">— OR —</div>
+        <div class="file-group">
+          <label for="fileOwnership">Proof of Claimant's Ownership</label>
+          <small>Must show the property address in question (e.g., copy of the tax bill for the property/fiscal year)</small>
+          <input type="file" id="fileOwnership" accept=".pdf,.jpg,.jpeg,.png,.heic">
+        </div>
       </div>
 
       <button type="submit" id="submitBtn">Upload Documents</button>
@@ -97,94 +125,116 @@
 <script src="config.js"></script>
 <script>
 (function () {
-  const API_URL = window.API_URL || "";
-  const params = new URLSearchParams(window.location.search);
+  var API_URL = window.API_URL || "";
+  var params = new URLSearchParams(window.location.search);
+  var ap13Data = null;
+  var ptData = null;
 
-  // Pre-fill upload form fields
+  // Pre-fill name
   if (params.get("name")) document.getElementById("name").value = params.get("name");
-  if (params.get("type")) {
-    // Use first type for the upload form dropdown
-    const firstType = params.get("type").split(",")[0];
-    document.getElementById("refundType").value = firstType;
+
+  // --- Show/hide doc sections based on type ---
+  var types = (params.get("type") || "").split(",").filter(Boolean);
+  var hasPropertyTax = types.indexOf("PROPERTY_TAX") !== -1;
+  var hasStaleOrPayroll = types.some(function(t) { return t === "STALE_WARRANT" || t === "PAYROLL"; });
+
+  function getSelectedTypes() {
+    return Array.from(document.querySelectorAll('input[name="refundType"]:checked')).map(function(cb) { return cb.value; });
   }
 
-  // --- STEP 1: Build form tabs from query params ---
-  const types = (params.get("type") || "").split(",").filter(Boolean);
-  const amounts = (params.get("amount") || "").split(",").filter(Boolean);
-  const name = params.get("name") || "";
-  const address = params.get("address") || "";
+  function updateDocSections() {
+    var selected = getSelectedTypes();
+    var hasSW = selected.some(function(t) { return t === "STALE_WARRANT" || t === "PAYROLL"; });
+    var hasPT = selected.indexOf("PROPERTY_TAX") !== -1;
 
-  // Property tax params
-  const index = params.get("index") || "";
-  const assessment = params.get("assessment") || "";
-  const taxyear = params.get("taxyear") || "";
+    document.getElementById("swDocs").classList.toggle("hidden", !hasSW);
+    document.getElementById("ptDocs").classList.toggle("hidden", !hasPT);
+    document.getElementById("ap13Status").classList.toggle("hidden", !hasSW);
+    document.getElementById("ptStatus").classList.toggle("hidden", !hasPT);
 
-  const formsSection = document.getElementById("formsSection");
-  const tabsContainer = document.getElementById("formTabs");
-  const contentContainer = document.getElementById("formTabContent");
+    document.getElementById("fileAddress").required = hasSW;
+  }
+
+  document.querySelectorAll('input[name="refundType"]').forEach(function(cb) {
+    cb.addEventListener("change", updateDocSections);
+  });
+
+  // Pre-check boxes and show docs on load
+  types.forEach(function(t) {
+    var cb = document.querySelector('input[name="refundType"][value="' + t + '"]');
+    if (cb) cb.checked = true;
+  });
+  updateDocSections();
+
+  // --- STEP 1: Build form tabs ---
+  var amounts = (params.get("amount") || "").split(",").filter(Boolean);
+  var name = params.get("name") || "";
+  var address = params.get("address") || "";
+  var ids = (params.get("id") || "").split(",");
+  var assessment = params.get("assessment") || "";
+  var taxyear = params.get("taxyear") || "";
+
+  var formsSection = document.getElementById("formsSection");
+  var tabsContainer = document.getElementById("formTabs");
+  var contentContainer = document.getElementById("formTabContent");
 
   if (types.length > 0) {
     formsSection.classList.remove("hidden");
     document.getElementById("uploadStep").textContent = "2";
 
-    const tabs = [];
-
     types.forEach(function (type, i) {
-      const amount = amounts[i] || "";
-      const tabId = "form-" + i;
+      var amount = amounts[i] || "";
+      var id = ids[i] || "";
+      var tabId = "form-" + i;
 
-      if (type === "PROPERTY_TAX") {
-        const ptParams = new URLSearchParams({ index: index, assessment: assessment, taxyear: taxyear, amount: amount });
-        tabs.push({
-          id: tabId,
-          label: "Property Tax Claim",
-          html: '<iframe src="https://apps.auditorcontroller.org/unclaimedrefund/refundform.aspx?' + ptParams.toString() + '" title="Property Tax Refund Form"></iframe>'
-        });
-      } else {
-        // AP13 for STALE_WARRANT and PAYROLL
-        const ap13Params = new URLSearchParams({ name: name, amount: amount, address: address });
-        const label = type === "PAYROLL" ? "Payroll — AP13 Affidavit" : "Stale Warrant — AP13 Affidavit";
-        tabs.push({
-          id: tabId,
-          label: label,
-          html: '<iframe src="ap13-form.html?' + ap13Params.toString() + '" title="' + label + '"></iframe>'
-        });
-      }
-    });
-
-    // Deduplicate AP13 tabs (multiple stale warrants share one form)
-    const seen = {};
-    const uniqueTabs = tabs.filter(function (t) {
-      const key = t.label;
-      if (seen[key]) return false;
-      seen[key] = true;
-      return true;
-    });
-
-    uniqueTabs.forEach(function (tab, i) {
-      // Tab button
-      const btn = document.createElement("div");
+      var btn = document.createElement("div");
       btn.className = "tab" + (i === 0 ? " active" : "");
-      btn.textContent = tab.label;
-      btn.dataset.target = tab.id;
       btn.addEventListener("click", function () {
         tabsContainer.querySelectorAll(".tab").forEach(function (t) { t.classList.remove("active"); });
         contentContainer.querySelectorAll(".tab-pane").forEach(function (p) { p.classList.remove("active"); });
         btn.classList.add("active");
-        document.getElementById(tab.id).classList.add("active");
+        document.getElementById(tabId).classList.add("active");
       });
-      tabsContainer.appendChild(btn);
 
-      // Tab pane
       var pane = document.createElement("div");
-      pane.id = tab.id;
+      pane.id = tabId;
       pane.className = "tab-pane" + (i === 0 ? " active" : "");
-      pane.innerHTML = tab.html;
+
+      if (type === "PROPERTY_TAX") {
+        btn.textContent = "Property Tax — $" + amount;
+        var ptParams = new URLSearchParams({ index: id, assessment: assessment, taxyear: taxyear, amount: amount, name: name, address: address });
+        pane.innerHTML = '<iframe src="property-tax-form.html?' + ptParams.toString() + '" title="Property Tax Refund Form"></iframe>';
+      } else {
+        var label = type === "PAYROLL" ? "Payroll" : "Stale Warrant";
+        btn.textContent = label + " — $" + amount;
+        var ap13Params = new URLSearchParams({ name: name, amount: amount, address: address, warrant: id });
+        pane.innerHTML = '<iframe src="ap13-form.html?' + ap13Params.toString() + '" title="' + label + ' AP13"></iframe>';
+      }
+
+      tabsContainer.appendChild(btn);
       contentContainer.appendChild(pane);
     });
   }
 
-  // --- STEP 2: Upload logic (unchanged) ---
+  // --- Listen for digital form submissions from iframes ---
+  window.addEventListener("message", function (e) {
+    if (e.data && e.data.type === "ap13_submitted") {
+      ap13Data = e.data;
+      var statusEl = document.getElementById("ap13Status");
+      statusEl.className = "ap13-status done";
+      statusEl.textContent = "✅ AP13 Affidavit submitted and signed digitally.";
+      document.getElementById("uploadForm").scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+    if (e.data && e.data.type === "property_tax_submitted") {
+      ptData = e.data;
+      var statusEl = document.getElementById("ptStatus");
+      statusEl.className = "ap13-status done";
+      statusEl.textContent = "✅ Property Tax Claim submitted and signed digitally.";
+      document.getElementById("uploadForm").scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  });
+
+  // --- Upload logic ---
   var form = document.getElementById("uploadForm");
   var status = document.getElementById("status");
   var btn = document.getElementById("submitBtn");
@@ -196,14 +246,50 @@
 
   form.addEventListener("submit", async function (e) {
     e.preventDefault();
+    var selected = getSelectedTypes();
+    var hasSW = selected.some(function(t) { return t === "STALE_WARRANT" || t === "PAYROLL"; });
+    var hasPT = selected.indexOf("PROPERTY_TAX") !== -1;
+
+    if (selected.length === 0) {
+      setStatus("err", "Please select at least one refund type.");
+      return;
+    }
+
+    // Validate: forms must be submitted digitally
+    if (hasSW && !ap13Data) {
+      setStatus("err", "Please complete and submit the AP13 Affidavit in Step 1 before uploading.");
+      return;
+    }
+    if (hasPT && !ptData) {
+      setStatus("err", "Please complete and submit the Property Tax Claim in Step 1 before uploading.");
+      return;
+    }
+
+    // Validate: property tax needs at least one proof doc
+    if (hasPT) {
+      var hasPayment = document.getElementById("filePayment").files.length > 0;
+      var hasOwnership = document.getElementById("fileOwnership").files.length > 0;
+      if (!hasPayment && !hasOwnership) {
+        setStatus("err", "Please upload either Proof of Payment or Proof of Ownership.");
+        return;
+      }
+    }
+
     btn.disabled = true;
     setStatus("loading", "Requesting upload URLs…");
 
-    var fileInputs = [
-      { el: document.getElementById("fileId"), label: "photo-id" },
-      { el: document.getElementById("fileAffidavit"), label: "claim-form" },
-      { el: document.getElementById("fileAddress"), label: "proof-of-address" },
-    ];
+    // Build file list based on selected types
+    var fileInputs = [{ el: document.getElementById("fileId"), label: "photo-id" }];
+
+    if (hasSW) {
+      fileInputs.push({ el: document.getElementById("fileAddress"), label: "proof-of-address" });
+    }
+    if (hasPT) {
+      if (document.getElementById("filePayment").files.length > 0)
+        fileInputs.push({ el: document.getElementById("filePayment"), label: "proof-of-payment" });
+      if (document.getElementById("fileOwnership").files.length > 0)
+        fileInputs.push({ el: document.getElementById("fileOwnership"), label: "proof-of-ownership" });
+    }
 
     var files = [];
     for (var fi of fileInputs) {
@@ -213,13 +299,23 @@
       files.push({ file: file, filename: fi.label + "_" + file.name, contentType: file.type || "application/octet-stream" });
     }
 
+    // Add digitally signed form data as JSON
+    if (ap13Data) {
+      var ap13Blob = new Blob([JSON.stringify(ap13Data)], { type: "application/json" });
+      files.push({ file: ap13Blob, filename: "ap13-affidavit.json", contentType: "application/json" });
+    }
+    if (ptData) {
+      var ptBlob = new Blob([JSON.stringify(ptData)], { type: "application/json" });
+      files.push({ file: ptBlob, filename: "property-tax-claim.json", contentType: "application/json" });
+    }
+
     try {
       var res = await fetch(API_URL + "/upload", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: document.getElementById("name").value.trim(),
-          refundType: document.getElementById("refundType").value,
+          refundType: selected.join(","),
           password: document.getElementById("password").value.trim(),
           files: files.map(function (f) { return { filename: f.filename, contentType: f.contentType }; }),
         }),

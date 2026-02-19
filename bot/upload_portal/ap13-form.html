@@ -1,157 +1,546 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AP13 — Affidavit for Replacement of Stale Dated Warrant</title>
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: #e8e8e8; font-family: Arial, sans-serif; }
-  .toolbar { position: sticky; top: 0; z-index: 10; background: #1b3a5c; color: #fff; padding: .6rem 1.5rem; display: flex; align-items: center; gap: 1rem; }
-  .toolbar h1 { font-size: 1rem; font-weight: 600; flex: 1; }
-  .toolbar button { background: #fff; color: #1b3a5c; border: none; padding: .4rem 1rem; border-radius: 4px; font-size: .85rem; cursor: pointer; font-weight: 600; }
-  .toolbar button:hover { background: #e3f2fd; }
-  .page-wrap { width: 612px; margin: 1.5rem auto; position: relative; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
-  .page-wrap img { display: block; width: 612px; height: 792px; }
-  /* Form fields overlaid on the PDF image */
-  .page-wrap input[type="text"], .page-wrap input[type="date"] {
-    position: absolute; border: none; background: rgba(219,234,254,.6);
-    font-family: Arial, sans-serif; font-size: 9px; padding: 1px 3px;
-    outline: none;
-  }
-  .page-wrap input:focus { background: rgba(219,234,254,.9); box-shadow: 0 0 0 1px #1b3a5c; }
-  .page-wrap input[readonly] { background: rgba(187,222,251,.5); color: #1a1a1a; }
-  .page-wrap .cb { position: absolute; width: 14px; height: 14px; accent-color: #1b3a5c; }
-  .prefilled { background: rgba(144,202,249,.6) !important; }
-  .page-label { text-align: center; color: #666; font-size: .8rem; margin: .5rem 0; }
-  @media print {
-    .toolbar { display: none; }
-    body { background: #fff; }
-    .page-wrap { box-shadow: none; margin: 0 auto; page-break-after: always; }
-  }
-</style>
-</head>
-<body>
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>AP13 — Affidavit for Replacement of Stale Dated Warrant</title>
+        <style>
+            * {
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+            }
+            body {
+                background: #e8e8e8;
+                font-family: Arial, sans-serif;
+            }
+            .toolbar {
+                position: sticky;
+                top: 0;
+                z-index: 10;
+                background: #1b3a5c;
+                color: #fff;
+                padding: 0.6rem 1.5rem;
+                display: flex;
+                align-items: center;
+                gap: 1rem;
+            }
+            .toolbar h1 {
+                font-size: 1rem;
+                font-weight: 600;
+                flex: 1;
+            }
+            .toolbar button {
+                background: #fff;
+                color: #1b3a5c;
+                border: none;
+                padding: 0.4rem 1rem;
+                border-radius: 4px;
+                font-size: 0.85rem;
+                cursor: pointer;
+                font-weight: 600;
+            }
+            .toolbar button:hover {
+                background: #e3f2fd;
+            }
+            .toolbar .submit-btn {
+                background: #2e7d32;
+                color: #fff;
+            }
+            .toolbar .submit-btn:hover {
+                background: #1b5e20;
+            }
+            .toolbar .submit-btn.done {
+                background: #999;
+                cursor: default;
+            }
+            .page-wrap {
+                width: 612px;
+                margin: 1.5rem auto;
+                position: relative;
+                background: #fff;
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+            }
+            .page-wrap img {
+                display: block;
+                width: 612px;
+                height: 792px;
+            }
+            .page-wrap input[type="text"],
+            .page-wrap input[type="date"] {
+                position: absolute;
+                border: none;
+                background: rgba(219, 234, 254, 0.6);
+                font-family: Arial, sans-serif;
+                font-size: 9px;
+                padding: 1px 3px;
+                outline: none;
+            }
+            .page-wrap input:focus {
+                background: rgba(219, 234, 254, 0.9);
+                box-shadow: 0 0 0 1px #1b3a5c;
+            }
+            .page-wrap input[readonly] {
+                background: rgba(187, 222, 251, 0.5);
+                color: #1a1a1a;
+            }
+            .page-wrap .cb {
+                position: absolute;
+                width: 14px;
+                height: 14px;
+                accent-color: #1b3a5c;
+            }
+            .prefilled {
+                background: rgba(144, 202, 249, 0.6) !important;
+            }
+            .page-label {
+                text-align: center;
+                color: #666;
+                font-size: 0.8rem;
+                margin: 0.5rem 0;
+            }
+            /* Signature pad */
+            .sig-section {
+                width: 612px;
+                margin: 0 auto 1.5rem;
+                background: #fff;
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+                padding: 1.5rem;
+            }
+            .sig-section h3 {
+                font-size: 0.95rem;
+                margin-bottom: 0.5rem;
+            }
+            .sig-section p {
+                font-size: 0.8rem;
+                color: #555;
+                margin-bottom: 0.75rem;
+            }
+            .sig-canvas-wrap {
+                border: 2px dashed #999;
+                border-radius: 4px;
+                position: relative;
+                margin-bottom: 0.5rem;
+            }
+            .sig-canvas-wrap canvas {
+                display: block;
+                cursor: crosshair;
+            }
+            .sig-actions {
+                display: flex;
+                gap: 0.5rem;
+            }
+            .sig-actions button {
+                flex: 1;
+                padding: 0.5rem;
+                font-size: 0.85rem;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                cursor: pointer;
+                background: #f5f5f5;
+            }
+            .sig-actions button:hover {
+                background: #e0e0e0;
+            }
+            @media print {
+                .toolbar,
+                .sig-section {
+                    display: none !important;
+                }
+                body {
+                    background: #fff;
+                    margin: 0;
+                    padding: 0;
+                }
+                .page-wrap {
+                    box-shadow: none;
+                    margin: 0;
+                    width: 100%;
+                    page-break-after: always;
+                }
+                .page-wrap img {
+                    width: 100%;
+                    height: auto;
+                }
+                .page-label {
+                    display: none;
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <div class="toolbar">
+            <h1>AP13 — Affidavit for Replacement of Stale Dated Warrant</h1>
+            <button onclick="window.print()">🖨️ Print</button>
+            <button class="submit-btn" id="submitBtn" onclick="submitForm()">
+                ✅ Submit Digitally
+            </button>
+        </div>
 
-<div class="toolbar">
-  <h1>AP13 — Affidavit for Replacement of Stale Dated Warrant</h1>
-  <button onclick="window.print()">🖨️ Print</button>
-</div>
+        <!-- PAGE 1 -->
+        <div class="page-wrap" id="page1">
+            <img src="ap13-page1.png" alt="AP13 Form Page 1" />
+            <input
+                type="date"
+                id="p1_date"
+                style="left: 85px; top: 247px; width: 80px; height: 17px"
+            />
+            <input
+                type="text"
+                id="p1_number"
+                style="left: 178px; top: 248px; width: 98px; height: 16px"
+                placeholder="Number"
+            />
+            <input
+                type="text"
+                id="p1_busunit"
+                style="left: 291px; top: 248px; width: 118px; height: 16px"
+                placeholder="Business Unit"
+            />
+            <input
+                type="text"
+                id="p1_amount"
+                style="left: 426px; top: 247px; width: 98px; height: 17px"
+                readonly
+            />
+            <input
+                type="checkbox"
+                class="cb"
+                id="p1_ownerYes"
+                style="left: 431px; top: 285px"
+            />
+            <input
+                type="checkbox"
+                class="cb"
+                id="p1_ownerNo"
+                style="left: 484px; top: 285px"
+            />
+            <input
+                type="checkbox"
+                class="cb"
+                id="p1_inclYes"
+                style="left: 431px; top: 329px"
+            />
+            <input
+                type="checkbox"
+                class="cb"
+                id="p1_inclNo"
+                style="left: 484px; top: 329px"
+            />
+            <input
+                type="text"
+                id="p1_phone"
+                style="left: 359px; top: 546px; width: 216px; height: 24px"
+                placeholder="Phone"
+            />
+            <input
+                type="text"
+                id="p1_name"
+                style="left: 60px; top: 590px; width: 280px; height: 28px"
+                readonly
+            />
+            <input
+                type="text"
+                id="p1_biztitle"
+                style="left: 359px; top: 590px; width: 216px; height: 28px"
+                placeholder="Business Claimant Name & Title"
+            />
+            <input
+                type="text"
+                id="p1_address"
+                style="left: 168px; top: 644px; width: 407px; height: 24px"
+                readonly
+            />
+            <input
+                type="text"
+                id="p1_email"
+                style="left: 153px; top: 682px; width: 422px; height: 22px"
+                placeholder="Email Address"
+            />
+        </div>
+        <div class="page-label">Page 1 of 4</div>
 
-<!-- PAGE 1 -->
-<div class="page-wrap" id="page1">
-  <img src="ap13-page1.png" alt="AP13 Form Page 1">
-  <!-- Warrant Info -->
-  <input type="date"  id="p1_date"     style="left:85px;top:247px;width:80px;height:17px">
-  <input type="text"  id="p1_number"   style="left:178px;top:248px;width:98px;height:16px" placeholder="Number">
-  <input type="text"  id="p1_busunit"  style="left:291px;top:248px;width:118px;height:16px" placeholder="Business Unit">
-  <input type="text"  id="p1_amount"   style="left:426px;top:247px;width:98px;height:17px" readonly>
-  <!-- Legal owner? -->
-  <input type="checkbox" class="cb" id="p1_ownerYes" style="left:431px;top:285px">
-  <input type="checkbox" class="cb" id="p1_ownerNo"  style="left:484px;top:285px">
-  <!-- Warrant included? -->
-  <input type="checkbox" class="cb" id="p1_inclYes"  style="left:431px;top:329px">
-  <input type="checkbox" class="cb" id="p1_inclNo"   style="left:484px;top:329px">
-  <!-- Contact Number -->
-  <input type="text"  id="p1_phone"    style="left:359px;top:546px;width:216px;height:24px" placeholder="Phone">
-  <!-- Printed Name / Business -->
-  <input type="text"  id="p1_name"     style="left:60px;top:590px;width:280px;height:28px" readonly>
-  <input type="text"  id="p1_biztitle" style="left:359px;top:590px;width:216px;height:28px" placeholder="Business Claimant Name & Title">
-  <!-- Mailing Address -->
-  <input type="text"  id="p1_address"  style="left:168px;top:644px;width:407px;height:24px" readonly>
-  <!-- Email -->
-  <input type="text"  id="p1_email"    style="left:153px;top:682px;width:422px;height:22px" placeholder="Email Address">
-</div>
-<div class="page-label">Page 1 of 4</div>
+        <!-- SIGNATURE PAD (between page 1 and 2) -->
+        <div class="sig-section" id="sigSection">
+            <h3>Electronic Signature</h3>
+            <p>
+                Sign below using your mouse or finger. This serves as your
+                legally binding signature on the affidavit above.
+            </p>
+            <div class="sig-canvas-wrap">
+                <canvas id="sigCanvas" width="568" height="120"></canvas>
+            </div>
+            <div class="sig-actions">
+                <button type="button" onclick="clearSig()">Clear</button>
+            </div>
+        </div>
 
-<!-- PAGE 2 -->
-<div class="page-wrap" id="page2">
-  <img src="ap13-page2.png" alt="AP13 Form Page 2">
-  <!-- Declaration: I, [name], residing at [address] -->
-  <input type="text"  id="p2_name"     style="left:88px;top:199px;width:199px;height:20px" readonly>
-  <input type="text"  id="p2_street"   style="left:363px;top:199px;width:190px;height:20px" readonly>
-  <input type="text"  id="p2_city"     style="left:88px;top:230px;width:237px;height:20px" readonly>
-  <input type="text"  id="p2_statezip" style="left:339px;top:230px;width:131px;height:20px" readonly>
-  <!-- Executed at -->
-  <input type="text"  id="p2_excity"   style="left:139px;top:383px;width:156px;height:20px">
-  <input type="text"  id="p2_exstate"  style="left:310px;top:383px;width:150px;height:20px">
-  <input type="date"  id="p2_exdate"   style="left:482px;top:383px;width:71px;height:20px">
-  <!-- Name / Warrant # / Amount -->
-  <input type="text"  id="p2_pname"    style="left:72px;top:412px;width:254px;height:20px" readonly>
-  <input type="text"  id="p2_wnum"     style="left:337px;top:414px;width:121px;height:19px">
-  <input type="text"  id="p2_wamt"     style="left:463px;top:414px;width:88px;height:19px" readonly>
-  <!-- Mailing Address -->
-  <input type="text"  id="p2_mail"     style="left:76px;top:443px;width:478px;height:21px" readonly>
-</div>
-<div class="page-label">Page 2 of 4 — Required for warrants $1,000 or over (notarization needed)</div>
+        <!-- PAGE 2 -->
+        <div class="page-wrap" id="page2">
+            <img src="ap13-page2.png" alt="AP13 Form Page 2" />
+            <input
+                type="text"
+                id="p2_name"
+                style="left: 88px; top: 199px; width: 199px; height: 20px"
+                readonly
+            />
+            <input
+                type="text"
+                id="p2_street"
+                style="left: 363px; top: 199px; width: 190px; height: 20px"
+                readonly
+            />
+            <input
+                type="text"
+                id="p2_city"
+                style="left: 88px; top: 230px; width: 237px; height: 20px"
+                readonly
+            />
+            <input
+                type="text"
+                id="p2_statezip"
+                style="left: 339px; top: 230px; width: 131px; height: 20px"
+                readonly
+            />
+            <input
+                type="text"
+                id="p2_excity"
+                style="left: 139px; top: 383px; width: 156px; height: 20px"
+            />
+            <input
+                type="text"
+                id="p2_exstate"
+                style="left: 310px; top: 383px; width: 150px; height: 20px"
+            />
+            <input
+                type="date"
+                id="p2_exdate"
+                style="left: 482px; top: 383px; width: 71px; height: 20px"
+            />
+            <input
+                type="text"
+                id="p2_pname"
+                style="left: 72px; top: 412px; width: 254px; height: 20px"
+                readonly
+            />
+            <input
+                type="text"
+                id="p2_wnum"
+                style="left: 337px; top: 414px; width: 121px; height: 19px"
+            />
+            <input
+                type="text"
+                id="p2_wamt"
+                style="left: 463px; top: 414px; width: 88px; height: 19px"
+                readonly
+            />
+            <input
+                type="text"
+                id="p2_mail"
+                style="left: 76px; top: 443px; width: 478px; height: 21px"
+                readonly
+            />
+        </div>
+        <div class="page-label">
+            Page 2 of 4 — Required for warrants $1,000 or over
+        </div>
 
-<!-- PAGE 3 -->
-<div class="page-wrap">
-  <img src="ap13-page3.png" alt="AP13 Form Page 3 — Guidelines">
-</div>
-<div class="page-label">Page 3 of 4 — Guidelines for Authorized Signers</div>
+        <!-- PAGE 3 -->
+        <div class="page-wrap">
+            <img src="ap13-page3.png" alt="AP13 Form Page 3 — Guidelines" />
+        </div>
+        <div class="page-label">
+            Page 3 of 4 — Guidelines for Authorized Signers
+        </div>
 
-<!-- PAGE 4 -->
-<div class="page-wrap">
-  <img src="ap13-page4.png" alt="AP13 Form Page 4 — Guidelines continued">
-</div>
-<div class="page-label">Page 4 of 4 — Guidelines continued</div>
+        <!-- PAGE 4 -->
+        <div class="page-wrap">
+            <img
+                src="ap13-page4.png"
+                alt="AP13 Form Page 4 — Guidelines continued"
+            />
+        </div>
+        <div class="page-label">Page 4 of 4 — Guidelines continued</div>
 
-<script>
-(function () {
-  var p = new URLSearchParams(window.location.search);
-  var name = p.get('name') || '';
-  var amount = p.get('amount') || '';
-  var address = p.get('address') || '';
+        <script>
+            (function () {
+                var p = new URLSearchParams(window.location.search);
+                var name = p.get("name") || "";
+                var amount = p.get("amount") || "";
+                var address = p.get("address") || "";
+                var warrant = p.get("warrant") || "";
 
-  function fill(id, val) {
-    var el = document.getElementById(id);
-    if (el && val) { el.value = val; el.classList.add('prefilled'); }
-  }
+                function fill(id, val) {
+                    var el = document.getElementById(id);
+                    if (el && val) {
+                        el.value = val;
+                        el.classList.add("prefilled");
+                    }
+                }
 
-  // Parse address: "654 PINE RD, RIVERSIDE, CA 90005"
-  var street = '', city = '', stateZip = '';
-  if (address) {
-    var parts = address.split(',').map(function(s){ return s.trim(); });
-    street = parts[0] || '';
-    city = parts[1] || '';
-    stateZip = parts[2] || '';
-  }
+                var street = "",
+                    city = "",
+                    stateZip = "";
+                if (address) {
+                    var parts = address.split(",").map(function (s) {
+                        return s.trim();
+                    });
+                    street = parts[0] || "";
+                    city = parts[1] || "";
+                    stateZip = parts[2] || "";
+                }
 
-  // Page 1
-  fill('p1_amount', amount);
-  fill('p1_name', name);
-  fill('p1_address', (street + (city ? ', ' + city : '') + (stateZip ? ', ' + stateZip : '')));
+                fill("p1_amount", amount);
+                fill("p1_name", name);
+                fill(
+                    "p1_address",
+                    street +
+                        (city ? ", " + city : "") +
+                        (stateZip ? ", " + stateZip : ""),
+                );
+                fill("p2_name", name);
+                fill("p2_street", street);
+                fill("p2_city", city);
+                fill("p2_statezip", stateZip);
+                fill("p2_pname", name);
+                fill("p2_wnum", warrant);
+                fill("p2_wamt", amount);
+                fill("p2_mail", address);
 
-  // Page 2
-  fill('p2_name', name);
-  fill('p2_street', street);
-  fill('p2_city', city);
-  fill('p2_statezip', stateZip);
-  fill('p2_pname', name);
-  fill('p2_wamt', amount);
-  fill('p2_mail', address);
+                var ownerYes = document.getElementById("p1_ownerYes");
+                if (ownerYes) ownerYes.checked = true;
 
-  // Pre-check "owner = yes"
-  var ownerYes = document.getElementById('p1_ownerYes');
-  if (ownerYes) ownerYes.checked = true;
+                var today = new Date().toISOString().slice(0, 10);
+                fill("p2_exdate", today);
 
-  // Set today's date
-  var today = new Date().toISOString().slice(0, 10);
-  var dateEl = document.getElementById('p2_exdate');
-  if (dateEl) dateEl.value = today;
+                function exclusivePair(a, b) {
+                    var elA = document.getElementById(a),
+                        elB = document.getElementById(b);
+                    if (elA && elB) {
+                        elA.addEventListener("change", function () {
+                            if (elA.checked) elB.checked = false;
+                        });
+                        elB.addEventListener("change", function () {
+                            if (elB.checked) elA.checked = false;
+                        });
+                    }
+                }
+                exclusivePair("p1_ownerYes", "p1_ownerNo");
+                exclusivePair("p1_inclYes", "p1_inclNo");
 
-  // Mutual exclusion for checkbox pairs
-  function exclusivePair(a, b) {
-    var elA = document.getElementById(a), elB = document.getElementById(b);
-    if (elA && elB) {
-      elA.addEventListener('change', function(){ if (elA.checked) elB.checked = false; });
-      elB.addEventListener('change', function(){ if (elB.checked) elA.checked = false; });
-    }
-  }
-  exclusivePair('p1_ownerYes', 'p1_ownerNo');
-  exclusivePair('p1_inclYes', 'p1_inclNo');
-})();
-</script>
-</body>
+                // --- Signature Pad ---
+                var canvas = document.getElementById("sigCanvas");
+                var ctx = canvas.getContext("2d");
+                var drawing = false;
+                var hasSigned = false;
+
+                ctx.strokeStyle = "#1a1a1a";
+                ctx.lineWidth = 2;
+                ctx.lineCap = "round";
+                ctx.lineJoin = "round";
+
+                function getPos(e) {
+                    var rect = canvas.getBoundingClientRect();
+                    var t = e.touches ? e.touches[0] : e;
+                    return {
+                        x: t.clientX - rect.left,
+                        y: t.clientY - rect.top,
+                    };
+                }
+
+                canvas.addEventListener("mousedown", function (e) {
+                    drawing = true;
+                    ctx.beginPath();
+                    var pos = getPos(e);
+                    ctx.moveTo(pos.x, pos.y);
+                });
+                canvas.addEventListener("mousemove", function (e) {
+                    if (!drawing) return;
+                    var pos = getPos(e);
+                    ctx.lineTo(pos.x, pos.y);
+                    ctx.stroke();
+                    hasSigned = true;
+                });
+                canvas.addEventListener("mouseup", function () {
+                    drawing = false;
+                });
+                canvas.addEventListener("mouseleave", function () {
+                    drawing = false;
+                });
+
+                canvas.addEventListener(
+                    "touchstart",
+                    function (e) {
+                        e.preventDefault();
+                        drawing = true;
+                        ctx.beginPath();
+                        var pos = getPos(e);
+                        ctx.moveTo(pos.x, pos.y);
+                    },
+                    { passive: false },
+                );
+                canvas.addEventListener(
+                    "touchmove",
+                    function (e) {
+                        e.preventDefault();
+                        if (!drawing) return;
+                        var pos = getPos(e);
+                        ctx.lineTo(pos.x, pos.y);
+                        ctx.stroke();
+                        hasSigned = true;
+                    },
+                    { passive: false },
+                );
+                canvas.addEventListener("touchend", function () {
+                    drawing = false;
+                });
+
+                window.clearSig = function () {
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    hasSigned = false;
+                };
+
+                // --- Submit ---
+                window.submitForm = function () {
+                    if (!hasSigned) {
+                        alert("Please sign the form before submitting.");
+                        return;
+                    }
+
+                    var fields = {};
+                    document
+                        .querySelectorAll(
+                            '.page-wrap input[type="text"], .page-wrap input[type="date"]',
+                        )
+                        .forEach(function (el) {
+                            if (el.id) fields[el.id] = el.value;
+                        });
+                    document
+                        .querySelectorAll('.page-wrap input[type="checkbox"]')
+                        .forEach(function (el) {
+                            if (el.id) fields[el.id] = el.checked;
+                        });
+
+                    var data = {
+                        type: "ap13_submitted",
+                        fields: fields,
+                        signature: canvas.toDataURL("image/png"),
+                        name: name,
+                        amount: amount,
+                        address: address,
+                    };
+
+                    // Send to parent portal
+                    if (window.parent !== window) {
+                        window.parent.postMessage(data, "*");
+                    }
+
+                    var btn = document.getElementById("submitBtn");
+                    btn.textContent = "✅ Submitted";
+                    btn.classList.add("done");
+                    btn.onclick = null;
+                };
+            })();
+        </script>
+    </body>
 </html>

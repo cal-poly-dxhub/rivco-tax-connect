@@ -56,16 +56,19 @@ def build_portal_url(records):
     from urllib.parse import urlencode
     types = ','.join(r['refund_type'] for r in records)
     amounts = ','.join(str(r['amount']) for r in records)
+    # Collect per-record identifiers (warrant_number for AP13, index for property tax)
+    identifiers = ','.join(r.get('warrant_number') or r.get('index') or '' for r in records)
     params = {
         'name': records[0]['name'],
         'type': types,
         'amount': amounts,
         'address': records[0].get('address', ''),
+        'id': identifiers,
     }
     # Add property tax fields if any record is PROPERTY_TAX
     pt = next((r for r in records if r['refund_type'] == 'PROPERTY_TAX'), None)
     if pt:
-        params.update({k: pt[k] for k in ('index', 'assessment', 'taxyear') if k in pt})
+        params.update({k: pt[k] for k in ('assessment', 'taxyear') if k in pt})
     return f"{UPLOAD_PORTAL_URL}?{urlencode(params)}"
 
 
