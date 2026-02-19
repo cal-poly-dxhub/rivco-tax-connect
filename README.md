@@ -110,6 +110,19 @@ This script:
 4. Set **Voice provider** to **Amazon Nova Sonic**
 5. **Confirm**, then **Build language**
 
+### Step 5: Enable SMS Channel (Optional)
+
+To let users text the bot via SMS:
+
+1. Go to **AWS End User Messaging SMS** console → **Phone numbers** → **Request phone number**
+2. Select **Toll-free**, country **US**, message type **Transactional**
+3. After the number is provisioned, go to **Registrations** → **Create registration** → **US toll-free number registration**
+4. Fill in the required company/use-case details and submit
+5. Wait for registration approval (can take days to weeks)
+6. Once approved, re-run `bash post-deploy.sh` — Step 6 will automatically import the number into Connect and associate it with the contact flow
+
+> **Note:** Toll-free SMS registration is a carrier-level regulatory requirement. SMS will not work until the registration is approved. You can check status in the End User Messaging console or by running `aws pinpoint-sms-voice-v2 describe-registrations --region us-west-2`.
+
 ## Testing
 
 ### Chat Test (Programmatic)
