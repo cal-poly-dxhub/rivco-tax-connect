@@ -81,10 +81,6 @@
                 background: rgba(219, 234, 254, 0.9);
                 box-shadow: 0 0 0 1px #1b3a5c;
             }
-            .page-wrap input[readonly] {
-                background: rgba(187, 222, 251, 0.5);
-                color: #1a1a1a;
-            }
             .page-wrap .cb {
                 position: absolute;
                 width: 2.3%;
@@ -189,21 +185,19 @@
             />
             <input
                 type="text"
-                id="p1_number"
+                id="p1_amount"
                 style="left: 29.1%; top: 31.3%; width: 16%; height: 2%"
-                placeholder="Number"
+            />
+            <input
+                type="text"
+                id="p1_number"
+                style="left: 47.5%; top: 31.3%; width: 19.3%; height: 2%"
             />
             <input
                 type="text"
                 id="p1_busunit"
-                style="left: 47.5%; top: 31.3%; width: 19.3%; height: 2%"
-                placeholder="Business Unit"
-            />
-            <input
-                type="text"
-                id="p1_amount"
                 style="left: 69.6%; top: 31.2%; width: 16%; height: 2.1%"
-                readonly
+                placeholder="Business Unit"
             />
             <input
                 type="checkbox"
@@ -239,7 +233,7 @@
                 type="text"
                 id="p1_name"
                 style="left: 9.8%; top: 74.5%; width: 45.8%; height: 3.5%"
-                readonly
+
             />
             <input
                 type="text"
@@ -251,7 +245,7 @@
                 type="text"
                 id="p1_address"
                 style="left: 27.5%; top: 81.3%; width: 66.5%; height: 3%"
-                readonly
+
             />
             <input
                 type="text"
@@ -284,25 +278,25 @@
                 type="text"
                 id="p2_name"
                 style="left: 14.4%; top: 25.1%; width: 32.5%; height: 2.5%"
-                readonly
+
             />
             <input
                 type="text"
                 id="p2_street"
                 style="left: 59.3%; top: 25.1%; width: 31%; height: 2.5%"
-                readonly
+
             />
             <input
                 type="text"
                 id="p2_city"
                 style="left: 14.4%; top: 29%; width: 38.7%; height: 2.5%"
-                readonly
+
             />
             <input
                 type="text"
                 id="p2_statezip"
                 style="left: 55.4%; top: 29%; width: 21.4%; height: 2.5%"
-                readonly
+
             />
             <input
                 type="text"
@@ -323,7 +317,7 @@
                 type="text"
                 id="p2_pname"
                 style="left: 11.8%; top: 52%; width: 41.5%; height: 2.5%"
-                readonly
+
             />
             <input
                 type="text"
@@ -334,13 +328,13 @@
                 type="text"
                 id="p2_wamt"
                 style="left: 75.7%; top: 52.3%; width: 14.4%; height: 2.4%"
-                readonly
+
             />
             <input
                 type="text"
                 id="p2_mail"
                 style="left: 12.4%; top: 55.9%; width: 78.1%; height: 2.7%"
-                readonly
+
             />
         </div>
         <div class="page-label">
@@ -393,6 +387,7 @@
                 }
 
                 fill("p1_amount", amount);
+                fill("p1_number", warrant);
                 fill("p1_name", name);
                 fill(
                     "p1_address",
