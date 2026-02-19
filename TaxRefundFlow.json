@@ -64,7 +64,8 @@
         "conditionMetadata": []
       },
       "action-check-transfer": { "position": { "x": 1660, "y": -200 } },
-      "action-transfer-to-queue": { "position": { "x": 1940, "y": -300 } },
+      "action-handoff-message": { "position": { "x": 1940, "y": -400 } },
+      "action-transfer-to-queue": { "position": { "x": 2160, "y": -300 } },
       "action-goodbye": { "position": { "x": 1940, "y": -100 } },
       "action-disconnect": { "position": { "x": 2200, "y": -100 } },
       "action-error": { "position": { "x": 1660, "y": 200 } }
@@ -276,10 +277,19 @@
       "Identifier": "action-set-working-queue",
       "Type": "UpdateContactTargetQueue",
       "Transitions": {
-        "NextAction": "action-transfer-to-queue",
+        "NextAction": "action-handoff-message",
         "Errors": [
           { "NextAction": "action-error", "ErrorType": "NoMatchingError" }
         ]
+      }
+    },
+    {
+      "Parameters": { "Text": "Handed off to a live representative." },
+      "Identifier": "action-handoff-message",
+      "Type": "MessageParticipant",
+      "Transitions": {
+        "NextAction": "action-transfer-to-queue",
+        "Errors": [{ "NextAction": "action-transfer-to-queue", "ErrorType": "NoMatchingError" }]
       }
     },
     {
