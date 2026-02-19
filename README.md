@@ -36,7 +36,7 @@ This creates: Connect instance, Lex bot, Lambda, S3 bucket, Q in Connect assista
 
 ### Step 2: Console Setup (One-Time)
 
-These steps **must** be completed before running `post-deploy.sh`. They cannot be automated via CLI.
+These steps **must** be completed before running `post_deploy.py`. They cannot be automated via CLI.
 
 #### 2a. Register MCP Gateway as Third-Party App
 
@@ -57,7 +57,7 @@ These steps **must** be completed before running `post-deploy.sh`. They cannot b
 4. In the **Tools** section, click **Add tool** → **MCP tool**
 5. Select `Tax Lookup Gateway` and add the `tax_lookup` tool
 6. Click **Add tool** → **MCP tool** again, and add the `send_sms` tool
-7. In the **Prompt** section, select `tax-refund-orchestration-prompt` (created by `post-deploy.sh`)
+7. In the **Prompt** section, select `tax-refund-orchestration-prompt` (created by `post_deploy.py`)
 8. **Save** and **Publish** the agent
 
 > **Adding new tools later:** The CLI cannot add tools to ORCHESTRATION agents. Any time a new MCP tool is added to the gateway (via CDK), you must also add it to the agent in the console, then Save and Publish.
@@ -71,7 +71,7 @@ The MCP gateway app must be enabled in the security profile assigned to your age
 3. Under **Agent Applications** → **Third-party applications**, enable `Tax Lookup Gateway`
 4. **Save**
 
-> **Note:** Run `post-deploy.sh` once before this step so the prompt exists. Then after creating the agent, run `post-deploy.sh` again to version the agent and wire it into the flow.
+> **Note:** Run `post_deploy.py` once before this step so the prompt exists. Then after creating the agent, run `post_deploy.py` again to update the agent prompt, version it, and wire it into the flow.
 
 #### 2d. Enable Lex Bot Management
 
@@ -85,22 +85,24 @@ The MCP gateway app must be enabled in the security profile assigned to your age
 ### Step 3: Run Post-Deploy Script
 
 ```bash
-bash post-deploy.sh
+source .venv/bin/activate
+python3 post_deploy.py
 ```
 
 This script:
 - Uploads refund data to S3
-- Creates/updates the AI orchestration prompt from `config.yaml` (prompt text for the agent)
-- Finds the `tax-refund-agent` ORCHESTRATION agent and creates a new version
+- Creates/updates the AI orchestration prompt from `config.yaml`
+- Updates the AI agent to use the latest prompt version, then versions it
 - Creates/updates the contact flow with resolved ARNs
 - Claims a phone number and associates it with the flow
+- Sets up SMS channel (if a registered toll-free number exists)
 
 **First-time deployment order:**
-1. Run `post-deploy.sh` → creates the prompt (agent step will fail — that's OK)
+1. Run `python3 post_deploy.py` → creates the prompt (agent step will skip — that's OK)
 2. Complete Step 2b in the console (create agent, select prompt and tool)
-3. Run `post-deploy.sh` again → versions the agent and wires it into the flow
+3. Run `python3 post_deploy.py` again → updates agent prompt, versions it, and wires it into the flow
 
-**Subsequent runs:** Just run `post-deploy.sh` — it updates the prompt, versions the agent, and updates the flow.
+**Subsequent runs:** Just run `python3 post_deploy.py` — it updates the prompt, points the agent at the new prompt version, versions the agent, and updates the flow. No manual console steps needed for prompt changes.
 
 ### Step 4: Configure Nova Sonic (Optional, for Voice)
 
@@ -119,7 +121,7 @@ To let users text the bot via SMS:
 3. After the number is provisioned, go to **Registrations** → **Create registration** → **US toll-free number registration**
 4. Fill in the required company/use-case details and submit
 5. Wait for registration approval (can take days to weeks)
-6. Once approved, re-run `bash post-deploy.sh` — Step 6 will automatically import the number into Connect and associate it with the contact flow
+6. Once approved, re-run `python3 post_deploy.py` — Step 6 will automatically import the number into Connect and associate it with the contact flow
 
 > **Note:** Toll-free SMS registration is a carrier-level regulatory requirement. SMS will not work until the registration is approved. You can check status in the End User Messaging console or by running `aws pinpoint-sms-voice-v2 describe-registrations --region us-west-2`.
 
@@ -160,5 +162,5 @@ See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for detailed learnings and a trou
 Common issues:
 - **`CreateWisdomSession` errors**: Agent ARN in flow must be an ORCHESTRATION agent, not SELF_SERVICE
 - **Bot says "I don't have an answer"**: MCP tool not configured on agent, or gateway not registered
-- **Bot hallucinates lookup results**: Agent version doesn't have tool — create new version after configuring tool in console, re-run `post-deploy.sh`
-- **`post-deploy.sh` exits with "No ORCHESTRATION agent found"**: Complete Step 2b first
+- **Bot hallucinates lookup results**: Agent version doesn't have tool — create new version after configuring tool in console, re-run `python3 post_deploy.py`
+- **`post_deploy.py` exits with "No ORCHESTRATION agent found"**: Complete Step 2b first
