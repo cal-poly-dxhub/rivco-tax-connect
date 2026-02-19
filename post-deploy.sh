@@ -327,7 +327,7 @@ else
       { echo "  ⚠️  Import failed (registration may still be pending): $IMPORT_RESULT"; SMS_CONNECT_ID=""; }
   fi
 
-  # Associate SMS number with the contact flow
+  # Always associate SMS number with the contact flow (idempotent)
   if [ -n "${SMS_CONNECT_ID:-}" ] && [ -n "$CONTACT_FLOW_ID" ]; then
     sleep 3
     aws connect associate-phone-number-contact-flow \
@@ -335,7 +335,7 @@ else
       --instance-id "$INSTANCE_ID" \
       --contact-flow-id "$CONTACT_FLOW_ID" \
       --region "$REGION" 2>&1 && \
-      echo "  ✅ SMS number associated with TaxRefundFlow" || \
+      echo "  ✅ SMS number ($SMS_PHONE_NUMBER) associated with TaxRefundFlow" || \
       echo "  ⚠️  Flow association failed — retry after registration is approved"
   fi
 fi
