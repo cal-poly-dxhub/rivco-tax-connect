@@ -1,0 +1,992 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+    <head>
+        <style type="text/css">
+            p {
+                font: 14px arial;
+            }
+            body {
+                font: 14px arial;
+            }
+            td {
+                font: 14px arial;
+            }
+            .pagebreak {
+                page-break-before: always;
+            }
+            @media screen {
+                .display {
+                    font-family: Verdana;
+                    font-size: 8pt;
+                }
+                .print {
+                    display: none;
+                }
+            }
+            @media print {
+                .display {
+                    display: none;
+                }
+                .print {
+                    font-family: "Times New Roman";
+                    font-size: 10pt;
+                }
+                .toolbar,
+                .sig-section {
+                    display: none !important;
+                }
+                body {
+                    background: #fff;
+                    margin: 0;
+                    padding: 0;
+                }
+                div[style*="7in"] {
+                    width: 100% !important;
+                    max-width: none !important;
+                    margin: 0 !important;
+                }
+            }
+            /* Toolbar */
+            .toolbar {
+                position: sticky;
+                top: 0;
+                z-index: 10;
+                background: #1b3a5c;
+                color: #fff;
+                padding: 0.6rem 1.5rem;
+                display: flex;
+                align-items: center;
+                gap: 1rem;
+                font-family:
+                    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                    sans-serif;
+            }
+            .toolbar h1 {
+                font-size: 1rem;
+                font-weight: 600;
+                flex: 1;
+                margin: 0;
+            }
+            .toolbar button {
+                background: #fff;
+                color: #1b3a5c;
+                border: none;
+                padding: 0.4rem 1rem;
+                border-radius: 4px;
+                font-size: 0.85rem;
+                cursor: pointer;
+                font-weight: 600;
+            }
+            .toolbar button:hover {
+                background: #e3f2fd;
+            }
+            .toolbar .submit-btn {
+                background: #2e7d32;
+                color: #fff;
+            }
+            .toolbar .submit-btn:hover {
+                background: #1b5e20;
+            }
+            .toolbar .submit-btn.done {
+                background: #999;
+                cursor: default;
+            }
+            /* Signature section */
+            .sig-section {
+                max-width: 7in;
+                margin: 1rem auto;
+                padding: 1rem;
+                background: #fff;
+                border: 1px solid #ccc;
+                font-family:
+                    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                    sans-serif;
+            }
+            .sig-section h3 {
+                font-size: 0.95rem;
+                margin: 0 0 0.5rem;
+            }
+            .sig-section p {
+                font-size: 0.8rem;
+                color: #555;
+                margin-bottom: 0.75rem;
+            }
+            .sig-canvas-wrap {
+                border: 2px dashed #999;
+                border-radius: 4px;
+                margin-bottom: 0.5rem;
+            }
+            .sig-canvas-wrap canvas {
+                display: block;
+                cursor: crosshair;
+            }
+            .sig-actions button {
+                padding: 0.4rem 1rem;
+                font-size: 0.85rem;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                cursor: pointer;
+                background: #f5f5f5;
+            }
+            .sig-actions button:hover {
+                background: #e0e0e0;
+            }
+            /* Pre-filled highlight */
+            input.prefilled {
+                background: #e3f2fd !important;
+            }
+        </style>
+        <title>PROPERTY TAX REFUND UNCLAIMED MONEY</title>
+    </head>
+    <body>
+        <div class="toolbar">
+            <h1>Property Tax Refund Claim — Riverside County</h1>
+            <button onclick="window.print()">🖨️ Print</button>
+            <button class="submit-btn" id="submitBtn" onclick="submitForm()">
+                ✅ Submit Digitally
+            </button>
+        </div>
+
+        <form id="claimForm">
+            <table style="width: 100%; height: 100%; border-width: 0px">
+                <tr>
+                    <td valign="top" align="center">
+                        <div style="width: 7in">
+                            <div>
+                                <center>
+                                    <table style="width: 100%; height: 100%">
+                                        <tr>
+                                            <td style="text-align: left">
+                                                <img
+                                                    alt="Left Logo"
+                                                    src="images/ACO_Logo_Small.png"
+                                                />
+                                            </td>
+                                            <td
+                                                style="
+                                                    text-align: center;
+                                                    font-weight: bold;
+                                                    font-size: 12pt;
+                                                "
+                                            >
+                                                Ben J. Benoit,
+                                                Auditor-Controller <br />
+                                                Tanya S. Harris, DPA, CPA,
+                                                Assistant Auditor-Controller
+                                                <br /><br />
+                                                PROPERTY TAX REFUND CLAIM FORM
+                                            </td>
+                                            <td style="text-align: right">
+                                                <img
+                                                    alt="Right Logo"
+                                                    src="images/RivCo_seal_small.png"
+                                                />
+                                            </td>
+                                        </tr>
+                                    </table>
+                                </center>
+                            </div>
+                            <table>
+                                <tr>
+                                    <td
+                                        style="
+                                            text-align: justify;
+                                            font-size: 8pt;
+                                            font-family: Arial;
+                                        "
+                                    >
+                                        A claim for this refund has previously
+                                        been sent. Please see attached for
+                                        information on documentation that our
+                                        office needs to release this refund.
+                                        Please note, refund claim forms received
+                                        without requested documentation will
+                                        result in a delay of processing.
+                                    </td>
+                                </tr>
+                            </table>
+                            <br />
+                            <table
+                                style="
+                                    width: 100%;
+                                    border-color: #eeeeee;
+                                    border-width: 1px;
+                                    border-style: Ridge;
+                                    border-collapse: collapse;
+                                    text-align: left;
+                                "
+                            >
+                                <tr
+                                    style="
+                                        color: Black;
+                                        background-color: #eeeeee;
+                                        border-color: Black;
+                                        border-width: 1px;
+                                        border-style: Solid;
+                                        font-weight: normal;
+                                    "
+                                >
+                                    <td>
+                                        <span
+                                            style="
+                                                display: inline-block;
+                                                width: 150px;
+                                                text-align: left;
+                                            "
+                                            ><b>INDEX # :</b></span
+                                        >
+                                        <span
+                                            style="
+                                                display: inline-block;
+                                                width: 205px;
+                                                text-align: left;
+                                            "
+                                            ><span id="lblIndex"></span
+                                        ></span>
+                                        <span
+                                            style="
+                                                display: inline-block;
+                                                width: 90px;
+                                                text-align: left;
+                                            "
+                                            ><b>AMOUNT :</b></span
+                                        >
+                                        <span
+                                            style="
+                                                display: inline-block;
+                                                width: 205px;
+                                                text-align: left;
+                                            "
+                                            ><span id="lblAmount"></span
+                                        ></span>
+                                    </td>
+                                </tr>
+                                <tr
+                                    style="
+                                        color: Black;
+                                        background-color: #eeeeee;
+                                        border-color: Black;
+                                        border-width: 1px;
+                                        border-style: Solid;
+                                        font-weight: normal;
+                                    "
+                                >
+                                    <td>
+                                        <span
+                                            style="
+                                                display: inline-block;
+                                                width: 150px;
+                                                text-align: left;
+                                            "
+                                            ><b>ASSESSMENT # :</b></span
+                                        >
+                                        <span
+                                            style="
+                                                display: inline-block;
+                                                width: 205px;
+                                                text-align: left;
+                                            "
+                                            ><span id="lblAssessment"></span
+                                        ></span>
+                                        <span
+                                            style="
+                                                display: inline-block;
+                                                width: 90px;
+                                                text-align: left;
+                                            "
+                                            ><b>TAX YEAR :</b></span
+                                        >
+                                        <span
+                                            style="
+                                                display: inline-block;
+                                                width: 200px;
+                                                text-align: left;
+                                            "
+                                            ><span id="lblTaxYear"></span
+                                        ></span>
+                                    </td>
+                                </tr>
+                                <tr
+                                    style="
+                                        color: Black;
+                                        background-color: #eeeeee;
+                                        border-color: Black;
+                                        border-width: 1px;
+                                        border-style: Solid;
+                                        font-weight: normal;
+                                    "
+                                >
+                                    <td>&nbsp;</td>
+                                </tr>
+                                <tr>
+                                    <td>
+                                        <span
+                                            style="
+                                                display: inline-block;
+                                                width: 150px;
+                                                text-align: left;
+                                            "
+                                            ><b>NAME(S) :</b></span
+                                        >
+                                        <span
+                                            style="
+                                                display: inline-block;
+                                                width: 205px;
+                                                text-align: left;
+                                            "
+                                            ><input
+                                                name="txtName"
+                                                type="text"
+                                                id="txtName"
+                                                style="width: 475px"
+                                        /></span>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td>
+                                        <span
+                                            style="
+                                                display: inline-block;
+                                                width: 250px;
+                                                text-align: left;
+                                            "
+                                            ><b
+                                                >CURRENT MAILING ADDRESS :</b
+                                            ></span
+                                        >
+                                        <span
+                                            style="
+                                                display: inline-block;
+                                                width: 205px;
+                                                text-align: left;
+                                            "
+                                            ><input
+                                                name="txtAddress"
+                                                type="text"
+                                                id="txtAddress"
+                                                style="width: 375px"
+                                        /></span>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td>
+                                        <span
+                                            style="
+                                                display: inline-block;
+                                                width: 150px;
+                                                text-align: left;
+                                            "
+                                            ><b>CITY, STATE :</b></span
+                                        >
+                                        <span
+                                            style="
+                                                display: inline-block;
+                                                width: 205px;
+                                                text-align: left;
+                                            "
+                                            ><input
+                                                name="txtCityState"
+                                                type="text"
+                                                id="txtCityState"
+                                        /></span>
+                                        <span
+                                            style="
+                                                display: inline-block;
+                                                width: 90px;
+                                                text-align: left;
+                                            "
+                                            ><b>ZIP :</b></span
+                                        >
+                                        <span
+                                            style="
+                                                display: inline-block;
+                                                width: 205px;
+                                                text-align: left;
+                                            "
+                                            ><input
+                                                name="txtZip"
+                                                type="text"
+                                                id="txtZip"
+                                        /></span>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td>
+                                        <span
+                                            style="
+                                                display: inline-block;
+                                                width: 150px;
+                                                text-align: left;
+                                            "
+                                            ><b>PHONE NUMBER :</b></span
+                                        >
+                                        <span
+                                            style="
+                                                display: inline-block;
+                                                width: 205px;
+                                                text-align: left;
+                                            "
+                                            ><input
+                                                name="txtPhone"
+                                                type="text"
+                                                id="txtPhone"
+                                        /></span>
+                                        <span
+                                            style="
+                                                display: inline-block;
+                                                width: 90px;
+                                                text-align: left;
+                                            "
+                                            ><b>EMAIL :</b></span
+                                        >
+                                        <span
+                                            style="
+                                                display: inline-block;
+                                                width: 205px;
+                                                text-align: left;
+                                            "
+                                            ><input
+                                                name="txtEmail"
+                                                type="text"
+                                                id="txtEmail"
+                                        /></span>
+                                    </td>
+                                </tr>
+                            </table>
+                            <table
+                                style="
+                                    width: 100%;
+                                    border-color: #eeeeee;
+                                    border-width: 1px;
+                                    border-style: Ridge;
+                                    border-collapse: collapse;
+                                "
+                            >
+                                <tr
+                                    style="
+                                        color: Black;
+                                        background-color: #eeeeee;
+                                        border-color: Black;
+                                        border-width: 1px;
+                                        border-style: Solid;
+                                        font-weight: normal;
+                                    "
+                                >
+                                    <td
+                                        style="
+                                            text-align: justify;
+                                            font-size: 8pt;
+                                            font-family: Arial;
+                                        "
+                                    >
+                                        <b
+                                            >GROUNDS UPON WHICH THE CLAIM IS
+                                            BASED:</b
+                                        ><br />
+                                        Please state the grounds upon which you
+                                        are claiming the refund and attach all
+                                        required identification and supporting
+                                        documentation to your claim. Please
+                                        refer to the instructions for further
+                                        details. Failure to provide the required
+                                        documents may result in the claim being
+                                        denied and returned to the sender. As a
+                                        result, claimants are requested to
+                                        provide as much information as possible
+                                        in order to expedite our review process
+                                        and to substantiate the claimant's right
+                                        to the unclaimed refund.
+                                    </td>
+                                </tr>
+                            </table>
+                            <table style="width: 100%; text-align: left">
+                                <tr>
+                                    <td
+                                        style="border-bottom: 1px solid #000000"
+                                    >
+                                        How did you find out about this claim?
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td
+                                        style="border-bottom: 1px solid #000000"
+                                    >
+                                        <input
+                                            id="chkNewspaper"
+                                            type="checkbox"
+                                            name="chkNewspaper"
+                                        />Newspaper
+                                        <input
+                                            id="chkWebSite"
+                                            type="checkbox"
+                                            name="chkWebSite"
+                                        />Web Site
+                                        <input
+                                            name="TextBox1"
+                                            type="text"
+                                            id="TextBox1"
+                                            style="width: 452px"
+                                        />
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td
+                                        style="border-bottom: 1px solid #000000"
+                                    >
+                                        <input
+                                            id="chkContact"
+                                            type="checkbox"
+                                            name="chkContact"
+                                        />Contact from City/County
+                                        <input
+                                            id="chkOther"
+                                            type="checkbox"
+                                            name="chkOther"
+                                        />Other (please specify):
+                                        <input
+                                            name="txtOther"
+                                            type="text"
+                                            id="txtOther"
+                                            style="width: 275px"
+                                        />
+                                    </td>
+                                </tr>
+                            </table>
+                            <table>
+                                <tr>
+                                    <td
+                                        style="
+                                            text-align: justify;
+                                            font-size: 8pt;
+                                            font-family: Arial;
+                                        "
+                                    >
+                                        I state that I am the rightful claimant
+                                        to the overpayment of taxes made on the
+                                        above-referenced index number/Assessment
+                                        number. I certify (or declare) under
+                                        penalty of perjury that the foregoing is
+                                        true and correct. Furthermore, I agree
+                                        to indemnify and hold harmless the
+                                        County of Riverside, its officers, and
+                                        its employees from any loss resulting
+                                        from the payment of this claim.
+                                        <br /><br />
+                                        <center>
+                                            <b
+                                                >NOTE: YOUR SIGNATURE(S) MUST BE
+                                                NOTARIZED IF THE CLAIM IS OVER
+                                                $1000.</b
+                                            >
+                                        </center>
+                                    </td>
+                                </tr>
+                            </table>
+                            <table style="width: 100%">
+                                <tr>
+                                    <td style="text-align: left">
+                                        <b>Date: </b
+                                        ><input
+                                            name="txtDate"
+                                            type="text"
+                                            id="txtDate"
+                                            style="width: 90px"
+                                        />
+                                        <b>Printed Name: </b
+                                        ><input
+                                            name="txtPrintedName"
+                                            type="text"
+                                            id="txtPrintedName"
+                                        />
+                                    </td>
+                                </tr>
+                            </table>
+                            <table width="100%">
+                                <tr>
+                                    <td
+                                        style="
+                                            text-align: left;
+                                            vertical-align: bottom;
+                                            font-size: 10pt;
+                                        "
+                                    >
+                                        <b>Title (if applicable): </b
+                                        ><input
+                                            name="txtTitle"
+                                            type="text"
+                                            id="txtTitle"
+                                            style="width: 166px"
+                                        />
+                                        <b>Company (if applicable): </b
+                                        ><input
+                                            name="txtCompany"
+                                            type="text"
+                                            id="txtCompany"
+                                            style="width: 166px"
+                                        />
+                                    </td>
+                                </tr>
+                            </table>
+                        </div>
+                    </td>
+                </tr>
+            </table>
+        </form>
+
+        <!-- Signature Section -->
+        <div class="sig-section">
+            <h3>Electronic Signature</h3>
+            <p>
+                Sign below using your mouse or finger. This serves as your
+                legally binding signature on the claim form above.
+            </p>
+            <div class="sig-canvas-wrap">
+                <canvas id="sigCanvas" width="600" height="120"></canvas>
+            </div>
+            <div class="sig-actions">
+                <button type="button" onclick="clearSig()">
+                    Clear Signature
+                </button>
+            </div>
+        </div>
+
+        <!-- Instructions Page (kept for reference) -->
+        <div
+            style="
+                width: 7in;
+                margin: 2rem auto;
+                font-size: 8pt;
+                font-family: Arial;
+            "
+        >
+            <div class="pagebreak"></div>
+            <center>
+                <b style="font-size: 14pt"
+                    ><u>Property Tax Unclaimed Refund Claim Requirements</u></b
+                >
+            </center>
+            <br /><br />
+            <p>
+                In order to process your claim, please use this instruction
+                sheet to determine and provide the appropriate documentation
+                which you are required to submit along with your completed
+                Property Tax Refund Claim Form. Claim forms that are submitted
+                to our office without documentation will result in a delay in
+                the processing of your claim.
+            </p>
+            <br />
+            <center>
+                <i
+                    >NOTE:<br />YOUR SIGNATURE(S) MUST BE NOTARIZED IF THE CLAIM
+                    IS OVER $1000.</i
+                >
+            </center>
+            <br />
+            <p>
+                All claimants must refer to <b>SECTION A</b> for the required
+                documentation. If you are a claimant for a business, refer to
+                <b>SECTIONS A and B</b> for the additional specified
+                documentation required for your claim. If you are an
+                <b>HEIR</b> or <b>BENEFICIARY</b> of the deceased owner, refer
+                to <b>SECTIONS A and C</b> for the additional specified
+                documentation required for your claim.
+            </p>
+            <br />
+            <b>SECTION A: CLAIMANT IDENTIFICATION</b><br /><br />
+            <i
+                >All documentation listed in this section is required for each
+                claimant:</i
+            ><br /><br />
+            <ul>
+                <li>
+                    Copy of a current government issued photo identification
+                    (i.e., driver license, state identification card, passport,
+                    etc.)
+                </li>
+                <li>
+                    Documentation proving proof of payment for the fiscal
+                    year(s) of the refund in question. Examples of proof may
+                    include: copies of canceled checks, bank statements, escrow
+                    papers showing breakdown of payments, etc.
+                </li>
+            </ul>
+            <br />
+            <center>OR</center>
+            <br />
+            <ul>
+                <li>
+                    Documentation proving proof of claimant's ownership. This
+                    information must indicate the property address in question.
+                    An example of proof is a copy of the tax bill for the
+                    property / fiscal year in question.
+                </li>
+            </ul>
+            <br />
+            <i
+                >Third Parties are required to also submit one of the
+                following:</i
+            ><br /><br />
+            <ul>
+                <li>
+                    Notarized Authorization for Agent to Collect Property Tax
+                    Refund on behalf of claimant
+                </li>
+                <li>
+                    Notarized Assignment of Right to Collect Property Tax Refund
+                    on behalf of claimant
+                </li>
+                <li>
+                    Notarized Statement Giving Rights to Collect / Claim on
+                    behalf of claimant
+                </li>
+            </ul>
+            <br />
+            <b>SECTION B: BUSINESS IDENTIFICATION</b><br /><br />
+            <i
+                >ALL documentation listed under SECTION A is required in
+                addition to the items indicated below:</i
+            ><br /><br />
+            <ul>
+                <li>Personal Business Card for each claimant</li>
+                <li>
+                    A notarized affidavit completed by an officer and / or
+                    business owner allowing you to claim such funds as an
+                    employee of the named account
+                </li>
+                <li>
+                    Owner of the Named Account is also required to submit any
+                    business related documentation naming proprietor as the
+                    owner
+                </li>
+            </ul>
+            <br />
+            <b>SECTION C: DECEASED OWNER</b><br /><br />
+            <i
+                >ALL documentation listed under SECTION A is required from
+                Heir(s) and / or Beneficiary(s) in addition to the items
+                indicated below:</i
+            ><br /><br />
+            <ul>
+                <li>Certified Death Certificate(s) for deceased owner(s)</li>
+                <li>
+                    Complete copy of the Court Ordered Distribution of the
+                    Decedent's Estate
+                </li>
+                <li>
+                    If the distribution of the estate was not ordered by a
+                    court, you will need to submit a complete copy of the
+                    Decedent's Will and / or Trust Agreement
+                </li>
+            </ul>
+            <br /><br />
+            <b>SEND COMPLETED CLAIM TO:</b><br />
+            Ben J. Benoit, Auditor-Controller<br />
+            P.O. Box 1326<br />
+            Riverside, CA 92502<br /><br />
+            All inquires pertaining to Property Tax Unclaimed Refunds may be
+            directed to our office via email at ptrefund@rivco.org. Please
+            include your contact information as well as the index number
+            regarding your inquiry.
+        </div>
+
+        <script>
+            (function () {
+                var p = new URLSearchParams(window.location.search);
+
+                function fill(id, val, isLabel) {
+                    var el = document.getElementById(id);
+                    if (!el || !val) return;
+                    if (isLabel) {
+                        el.textContent = val;
+                    } else {
+                        el.value = val;
+                        el.classList.add("prefilled");
+                    }
+                }
+
+                // Pre-fill from query params
+                fill("lblIndex", p.get("index"), true);
+                fill("lblAssessment", p.get("assessment"), true);
+                fill("lblTaxYear", p.get("taxyear"), true);
+                var amt = p.get("amount");
+                if (amt)
+                    fill(
+                        "lblAmount",
+                        "$" +
+                            parseFloat(amt).toLocaleString("en-US", {
+                                minimumFractionDigits: 2,
+                            }),
+                        true,
+                    );
+
+                fill("txtName", p.get("name"));
+                fill("txtPrintedName", p.get("name"));
+
+                // Parse address: "654 PINE RD, RIVERSIDE, CA 90005"
+                var address = p.get("address") || "";
+                if (address) {
+                    var parts = address.split(",").map(function (s) {
+                        return s.trim();
+                    });
+                    fill("txtAddress", parts[0]);
+                    if (parts[1] && parts[2]) {
+                        fill(
+                            "txtCityState",
+                            parts[1] + ", " + parts[2].split(" ")[0],
+                        );
+                        var zipMatch = parts[2].match(/\d{5}/);
+                        if (zipMatch) fill("txtZip", zipMatch[0]);
+                    }
+                }
+
+                // Set today's date
+                var today = new Date();
+                fill(
+                    "txtDate",
+                    today.getMonth() +
+                        1 +
+                        "/" +
+                        today.getDate() +
+                        "/" +
+                        today.getFullYear(),
+                );
+
+                // Pre-check "Contact from City/County" since they came from the bot
+                var chk = document.getElementById("chkContact");
+                if (chk) chk.checked = true;
+
+                // --- Signature Pad ---
+                var canvas = document.getElementById("sigCanvas");
+                var ctx = canvas.getContext("2d");
+                var drawing = false;
+                var hasSigned = false;
+
+                ctx.strokeStyle = "#1a1a1a";
+                ctx.lineWidth = 2;
+                ctx.lineCap = "round";
+                ctx.lineJoin = "round";
+
+                function getPos(e) {
+                    var rect = canvas.getBoundingClientRect();
+                    var t = e.touches ? e.touches[0] : e;
+                    return {
+                        x: t.clientX - rect.left,
+                        y: t.clientY - rect.top,
+                    };
+                }
+
+                canvas.addEventListener("mousedown", function (e) {
+                    drawing = true;
+                    ctx.beginPath();
+                    var pos = getPos(e);
+                    ctx.moveTo(pos.x, pos.y);
+                });
+                canvas.addEventListener("mousemove", function (e) {
+                    if (!drawing) return;
+                    var pos = getPos(e);
+                    ctx.lineTo(pos.x, pos.y);
+                    ctx.stroke();
+                    hasSigned = true;
+                });
+                canvas.addEventListener("mouseup", function () {
+                    drawing = false;
+                });
+                canvas.addEventListener("mouseleave", function () {
+                    drawing = false;
+                });
+
+                canvas.addEventListener(
+                    "touchstart",
+                    function (e) {
+                        e.preventDefault();
+                        drawing = true;
+                        ctx.beginPath();
+                        var pos = getPos(e);
+                        ctx.moveTo(pos.x, pos.y);
+                    },
+                    { passive: false },
+                );
+                canvas.addEventListener(
+                    "touchmove",
+                    function (e) {
+                        e.preventDefault();
+                        if (!drawing) return;
+                        var pos = getPos(e);
+                        ctx.lineTo(pos.x, pos.y);
+                        ctx.stroke();
+                        hasSigned = true;
+                    },
+                    { passive: false },
+                );
+                canvas.addEventListener("touchend", function () {
+                    drawing = false;
+                });
+
+                window.clearSig = function () {
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    hasSigned = false;
+                };
+
+                // --- Submit ---
+                window.submitForm = function () {
+                    if (!hasSigned) {
+                        alert("Please sign the form before submitting.");
+                        return;
+                    }
+
+                    var data = {
+                        type: "property_tax_submitted",
+                        fields: {
+                            index: p.get("index"),
+                            assessment: p.get("assessment"),
+                            taxyear: p.get("taxyear"),
+                            amount: p.get("amount"),
+                            name: document.getElementById("txtName").value,
+                            address:
+                                document.getElementById("txtAddress").value,
+                            cityState:
+                                document.getElementById("txtCityState").value,
+                            zip: document.getElementById("txtZip").value,
+                            phone: document.getElementById("txtPhone").value,
+                            email: document.getElementById("txtEmail").value,
+                            printedName:
+                                document.getElementById("txtPrintedName").value,
+                            title: document.getElementById("txtTitle").value,
+                            company:
+                                document.getElementById("txtCompany").value,
+                            date: document.getElementById("txtDate").value,
+                            howFound: {
+                                newspaper:
+                                    document.getElementById("chkNewspaper")
+                                        .checked,
+                                website:
+                                    document.getElementById("chkWebSite")
+                                        .checked,
+                                websiteUrl:
+                                    document.getElementById("TextBox1").value,
+                                contact:
+                                    document.getElementById("chkContact")
+                                        .checked,
+                                other: document.getElementById("chkOther")
+                                    .checked,
+                                otherText:
+                                    document.getElementById("txtOther").value,
+                            },
+                        },
+                        signature: canvas.toDataURL("image/png"),
+                        submittedAt: new Date().toISOString(),
+                    };
+
+                    if (window.parent !== window) {
+                        window.parent.postMessage(data, "*");
+                    }
+
+                    var btn = document.getElementById("submitBtn");
+                    btn.textContent = "✅ Submitted";
+                    btn.classList.add("done");
+                    btn.onclick = null;
+                };
+            })();
+        </script>
+    </body>
+</html>
