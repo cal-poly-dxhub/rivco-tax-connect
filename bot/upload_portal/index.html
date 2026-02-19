@@ -1,721 +1,1102 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Riverside County — Claims Portal</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700&family=Lato:wght@400;700&display=swap" rel="stylesheet">
-<style>
-:root {
-  --navy: #002f87;
-  --navy-dark: #020d40;
-  --blue: #0c71ca;
-  --yellow: #ffc629;
-  --yellow-dim: rgba(255,198,41,.12);
-  --bg: #f4f6f9;
-  --surface: #ffffff;
-  --border: #d6dce2;
-  --text: #1a1a2e;
-  --text-muted: #556575;
-  --red: #c61f1f;
-  --green: #2e7d32;
-  --radius: 8px;
-}
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Riverside County — Claims Portal</title>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link
+            href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700&family=Lato:wght@400;700&display=swap"
+            rel="stylesheet"
+        />
+        <style>
+            :root {
+                --navy: #002f87;
+                --navy-dark: #020d40;
+                --blue: #0c71ca;
+                --yellow: #ffc629;
+                --yellow-dim: rgba(255, 198, 41, 0.12);
+                --bg: #f4f6f9;
+                --surface: #ffffff;
+                --border: #d6dce2;
+                --text: #1a1a2e;
+                --text-muted: #556575;
+                --red: #c61f1f;
+                --green: #2e7d32;
+                --radius: 8px;
+            }
 
-* { box-sizing: border-box; margin: 0; padding: 0; }
+            * {
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+            }
 
-body {
-  font-family: 'Lato', sans-serif;
-  background-color: var(--bg);
-  background-image: repeating-linear-gradient(
-    -45deg,
-    transparent,
-    transparent 20px,
-    rgba(0,47,135,.028) 20px,
-    rgba(0,47,135,.028) 21px
-  );
-  color: var(--text);
-  min-height: 100vh;
-  font-size: 15px;
-  line-height: 1.6;
-}
+            body {
+                font-family: "Lato", sans-serif;
+                background-color: var(--bg);
+                background-image: repeating-linear-gradient(
+                    -45deg,
+                    transparent,
+                    transparent 20px,
+                    rgba(0, 47, 135, 0.028) 20px,
+                    rgba(0, 47, 135, 0.028) 21px
+                );
+                color: var(--text);
+                min-height: 100vh;
+                font-size: 15px;
+                line-height: 1.6;
+            }
 
-/* ── Header (matches auditorcontroller.org) ── */
-.site-header {
-  background: #fff;
-  box-shadow: 0px 4px 8px rgba(0,0,0,.05);
-  position: relative;
-}
+            /* ── Header (matches auditorcontroller.org) ── */
+            .site-header {
+                background: #fff;
+                box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.05);
+                position: relative;
+            }
 
-.utilities-bar {
-  background-color: rgb(2,13,64);
-  height: 2.5rem;
-  display: flex;
-  align-items: center;
-  padding: 0.25rem 2rem;
-  gap: 0;
-}
+            .utilities-bar {
+                background-color: rgb(2, 13, 64);
+                height: 2.5rem;
+                display: flex;
+                align-items: center;
+                padding: 0.25rem 2rem;
+                gap: 0;
+            }
 
-.utilities-bar img {
-  max-height: 100%;
-  height: 2rem;
-}
+            .utilities-bar img {
+                max-height: 100%;
+                height: 2rem;
+            }
 
-.utilities-bar a.rivco-link {
-  font-family: 'Montserrat', sans-serif;
-  font-weight: 500;
-  font-size: 0.8125rem;
-  color: #fff;
-  text-decoration: none;
-  margin-left: 1.5rem;
-}
-.utilities-bar a.rivco-link::before {
-  content: "★ ";
-  color: #ffc629;
-}
-.utilities-bar a.rivco-link:hover { color: #ffc629; }
+            .utilities-bar a.rivco-link {
+                font-family: "Montserrat", sans-serif;
+                font-weight: 500;
+                font-size: 0.8125rem;
+                color: #fff;
+                text-decoration: none;
+                margin-left: 1.5rem;
+            }
+            .utilities-bar a.rivco-link::before {
+                content: "★ ";
+                color: #ffc629;
+            }
+            .utilities-bar a.rivco-link:hover {
+                color: #ffc629;
+            }
 
-.header-main {
-  display: flex;
-  align-items: center;
-  padding: 0.5rem 2rem;
-  min-height: 3.75rem;
-}
+            .header-main {
+                display: flex;
+                align-items: center;
+                padding: 0.5rem 2rem;
+                min-height: 3.75rem;
+            }
 
-.header-main img.logo {
-  max-height: 3.75rem;
-  width: auto;
-}
+            .header-main img.logo {
+                max-height: 3.75rem;
+                width: auto;
+            }
 
-.header-page-title {
-  margin-left: 2rem;
-  padding-left: 2rem;
-  border-left: 1px solid #d6dce2;
-  font-family: 'Montserrat', sans-serif;
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: #002f87;
-  line-height: 1.3;
-}
-.header-page-title span {
-  display: block;
-  font-weight: 400;
-  font-size: 0.75rem;
-  color: #556575;
-  text-transform: uppercase;
-  letter-spacing: .05em;
-}
+            .header-page-title {
+                margin-left: 2rem;
+                padding-left: 2rem;
+                border-left: 1px solid #d6dce2;
+                font-family: "Montserrat", sans-serif;
+                font-size: 0.875rem;
+                font-weight: 600;
+                color: #002f87;
+                line-height: 1.3;
+            }
+            .header-page-title span {
+                display: block;
+                font-weight: 400;
+                font-size: 0.75rem;
+                color: #556575;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+            }
 
-/* ── Layout ── */
-.container { max-width: 780px; margin: 2rem auto; padding: 0 1.25rem 4rem; }
+            /* ── Layout ── */
+            .container {
+                max-width: 780px;
+                margin: 2rem auto;
+                padding: 0 1.25rem 4rem;
+            }
 
-/* ── Cards ── */
-.card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 2rem;
-  margin-bottom: 1.25rem;
-  box-shadow: 0 1px 4px rgba(0,0,0,.06);
-  animation: fadeUp .35s ease both;
-}
-.card + .card { animation-delay: .07s; }
+            /* ── Cards ── */
+            .card {
+                background: var(--surface);
+                border: 1px solid var(--border);
+                border-radius: var(--radius);
+                padding: 2rem;
+                margin-bottom: 1.25rem;
+                box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+                animation: fadeUp 0.35s ease both;
+            }
+            .card + .card {
+                animation-delay: 0.07s;
+            }
 
-@keyframes fadeUp {
-  from { opacity: 0; transform: translateY(10px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
+            @keyframes fadeUp {
+                from {
+                    opacity: 0;
+                    transform: translateY(10px);
+                }
+                to {
+                    opacity: 1;
+                    transform: translateY(0);
+                }
+            }
 
-/* ── Step header ── */
-.step-title {
-  display: flex;
-  align-items: center;
-  gap: .75rem;
-  margin-bottom: .5rem;
-}
+            /* ── Step header ── */
+            .step-title {
+                display: flex;
+                align-items: center;
+                gap: 0.75rem;
+                margin-bottom: 0.5rem;
+            }
 
-.step-badge {
-  width: 28px; height: 28px;
-  border-radius: 50%;
-  background: var(--navy);
-  color: #fff;
-  font-size: .8rem;
-  font-weight: 700;
-  display: flex; align-items: center; justify-content: center;
-  flex-shrink: 0;
-  font-family: 'Montserrat', sans-serif;
-}
+            .step-badge {
+                width: 28px;
+                height: 28px;
+                border-radius: 50%;
+                background: var(--navy);
+                color: #fff;
+                font-size: 0.8rem;
+                font-weight: 700;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                flex-shrink: 0;
+                font-family: "Montserrat", sans-serif;
+            }
 
-.step-title h2 {
-  font-family: 'Montserrat', sans-serif;
-  font-size: 1.05rem;
-  font-weight: 700;
-  color: var(--navy);
-}
+            .step-title h2 {
+                font-family: "Montserrat", sans-serif;
+                font-size: 1.05rem;
+                font-weight: 700;
+                color: var(--navy);
+            }
 
-.subtitle {
-  color: var(--text-muted);
-  font-size: .875rem;
-  margin-bottom: 1.5rem;
-  padding-left: 2.75rem;
-}
+            .subtitle {
+                color: var(--text-muted);
+                font-size: 0.875rem;
+                margin-bottom: 1.5rem;
+                padding-left: 2.75rem;
+            }
 
-/* ── Tabs ── */
-.tabs { display: flex; gap: 0; margin-bottom: 0; padding-left: 2.75rem; }
+            /* ── Tabs ── */
+            .tabs {
+                display: flex;
+                gap: 0;
+                margin-bottom: 0;
+                padding-left: 2.75rem;
+            }
 
-.tab {
-  padding: .5rem 1.1rem;
-  background: #eef1f5;
-  border: 1px solid var(--border);
-  border-bottom: none;
-  cursor: pointer;
-  font-size: .85rem;
-  font-family: 'Montserrat', sans-serif;
-  font-weight: 500;
-  border-radius: 6px 6px 0 0;
-  color: var(--text-muted);
-  transition: color .15s, background .15s;
-}
+            .tab {
+                padding: 0.5rem 1.1rem;
+                background: #eef1f5;
+                border: 1px solid var(--border);
+                border-bottom: none;
+                cursor: pointer;
+                font-size: 0.85rem;
+                font-family: "Montserrat", sans-serif;
+                font-weight: 500;
+                border-radius: 6px 6px 0 0;
+                color: var(--text-muted);
+                transition:
+                    color 0.15s,
+                    background 0.15s;
+            }
 
-.tab.active {
-  background: var(--surface);
-  color: var(--navy);
-  border-bottom: 1px solid var(--surface);
-  font-weight: 600;
-  margin-bottom: -1px;
-  z-index: 1;
-}
+            .tab.active {
+                background: var(--surface);
+                color: var(--navy);
+                border-bottom: 1px solid var(--surface);
+                font-weight: 600;
+                margin-bottom: -1px;
+                z-index: 1;
+            }
 
-.tab-content {
-  border: 1px solid var(--border);
-  border-radius: 0 6px 6px 6px;
-  background: #fff;
-  min-height: 200px;
-  margin-left: 2.75rem;
-}
+            .tab-content {
+                border: 1px solid var(--border);
+                border-radius: 0 6px 6px 6px;
+                background: #fff;
+                min-height: 200px;
+                margin-left: 2.75rem;
+            }
 
-.tab-pane { display: none; }
-.tab-pane.active { display: block; }
-.tab-pane iframe { width: 100%; border: none; min-height: 700px; border-radius: 0 6px 6px 6px; }
+            .tab-pane {
+                display: none;
+            }
+            .tab-pane.active {
+                display: block;
+            }
+            .tab-pane iframe {
+                width: 100%;
+                border: none;
+                min-height: 700px;
+                border-radius: 0 6px 6px 6px;
+            }
 
-/* ── Form elements ── */
-label {
-  display: block;
-  font-family: 'Montserrat', sans-serif;
-  font-weight: 600;
-  font-size: .8rem;
-  color: var(--text-muted);
-  margin-bottom: .35rem;
-  letter-spacing: .04em;
-  text-transform: uppercase;
-}
+            /* ── Form elements ── */
+            label {
+                display: block;
+                font-family: "Montserrat", sans-serif;
+                font-weight: 600;
+                font-size: 0.8rem;
+                color: var(--text-muted);
+                margin-bottom: 0.35rem;
+                letter-spacing: 0.04em;
+                text-transform: uppercase;
+            }
 
-input[type="text"],
-input[type="password"],
-select {
-  width: 100%;
-  padding: .65rem .9rem;
-  background: #fff;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  font-size: .95rem;
-  font-family: 'Lato', sans-serif;
-  color: var(--text);
-  margin-bottom: 1.25rem;
-  transition: border-color .2s, box-shadow .2s;
-  outline: none;
-}
+            input[type="text"],
+            input[type="password"],
+            select {
+                width: 100%;
+                padding: 0.65rem 0.9rem;
+                background: #fff;
+                border: 1px solid var(--border);
+                border-radius: 4px;
+                font-size: 0.95rem;
+                font-family: "Lato", sans-serif;
+                color: var(--text);
+                margin-bottom: 1.25rem;
+                transition:
+                    border-color 0.2s,
+                    box-shadow 0.2s;
+                outline: none;
+            }
 
-input[type="text"]:focus,
-input[type="password"]:focus,
-select:focus {
-  border-color: var(--blue);
-  box-shadow: 0 0 0 3px rgba(12,113,202,.12);
-}
+            input[type="text"]:focus,
+            input[type="password"]:focus,
+            select:focus {
+                border-color: var(--blue);
+                box-shadow: 0 0 0 3px rgba(12, 113, 202, 0.12);
+            }
 
-input[type="text"]::placeholder,
-input[type="password"]::placeholder { color: #aab4be; }
+            input[type="text"]::placeholder,
+            input[type="password"]::placeholder {
+                color: #aab4be;
+            }
 
-/* Checkboxes */
-.checkbox-group { margin-bottom: 1.25rem; }
+            /* Checkboxes */
+            .checkbox-group {
+                margin-bottom: 1.25rem;
+            }
 
-.checkbox-group label {
-  display: flex;
-  align-items: center;
-  gap: .6rem;
-  margin: .45rem 0;
-  cursor: pointer;
-  text-transform: none;
-  font-size: .9rem;
-  color: var(--text);
-  letter-spacing: 0;
-  font-weight: 400;
-  font-family: 'Lato', sans-serif;
-}
+            .checkbox-group label {
+                display: flex;
+                align-items: center;
+                gap: 0.6rem;
+                margin: 0.45rem 0;
+                cursor: pointer;
+                text-transform: none;
+                font-size: 0.9rem;
+                color: var(--text);
+                letter-spacing: 0;
+                font-weight: 400;
+                font-family: "Lato", sans-serif;
+            }
 
-.checkbox-group input[type="checkbox"] {
-  width: 16px; height: 16px;
-  accent-color: var(--navy);
-  cursor: pointer;
-  margin: 0;
-  flex-shrink: 0;
-}
+            .checkbox-group input[type="checkbox"] {
+                width: 16px;
+                height: 16px;
+                accent-color: var(--navy);
+                cursor: pointer;
+                margin: 0;
+                flex-shrink: 0;
+            }
 
-/* File upload zones */
-.file-group { margin-bottom: 1.25rem; }
-.file-group small { display: block; color: var(--text-muted); font-size: .8rem; margin-bottom: .5rem; }
+            /* File upload zones */
+            .file-group {
+                margin-bottom: 1.25rem;
+            }
+            .file-group small {
+                display: block;
+                color: var(--text-muted);
+                font-size: 0.8rem;
+                margin-bottom: 0.5rem;
+            }
 
-.upload-zone {
-  position: relative;
-  border: 2px dashed #b0bec5;
-  border-radius: 6px;
-  background: #f9fafb;
-  padding: 1.25rem 1rem;
-  text-align: center;
-  cursor: pointer;
-  transition: border-color .2s, background .2s;
-}
-.upload-zone:hover, .upload-zone.has-file {
-  border-color: var(--blue);
-  background: #e8f0fb;
-}
-.upload-zone input[type="file"] {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  opacity: 0;
-  cursor: pointer;
-  margin: 0;
-  padding: 0;
-  border: none;
-  background: none;
-}
-.upload-zone-icon {
-  font-size: 1.5rem;
-  margin-bottom: .35rem;
-  color: #90a4ae;
-  line-height: 1;
-}
-.upload-zone-text {
-  font-size: .85rem;
-  color: var(--text-muted);
-  font-family: 'Montserrat', sans-serif;
-  font-weight: 500;
-}
-.upload-zone-text strong { color: var(--blue); }
-.upload-zone-filename {
-  font-size: .8rem;
-  color: var(--navy);
-  font-weight: 700;
-  margin-top: .25rem;
-  display: none;
-}
+            .upload-zone {
+                position: relative;
+                border: 2px dashed #b0bec5;
+                border-radius: 6px;
+                background: #f9fafb;
+                padding: 1.25rem 1rem;
+                text-align: center;
+                cursor: pointer;
+                transition:
+                    border-color 0.2s,
+                    background 0.2s;
+            }
+            .upload-zone:hover,
+            .upload-zone.has-file {
+                border-color: var(--blue);
+                background: #e8f0fb;
+            }
+            .upload-zone input[type="file"] {
+                position: absolute;
+                inset: 0;
+                width: 100%;
+                height: 100%;
+                opacity: 0;
+                cursor: pointer;
+                margin: 0;
+                padding: 0;
+                border: none;
+                background: none;
+            }
+            .upload-zone-icon {
+                font-size: 1.5rem;
+                margin-bottom: 0.35rem;
+                color: #90a4ae;
+                line-height: 1;
+            }
+            .upload-zone-text {
+                font-size: 0.85rem;
+                color: var(--text-muted);
+                font-family: "Montserrat", sans-serif;
+                font-weight: 500;
+            }
+            .upload-zone-text strong {
+                color: var(--blue);
+            }
+            .upload-zone-filename {
+                font-size: 0.8rem;
+                color: var(--navy);
+                font-weight: 700;
+                margin-top: 0.25rem;
+                display: none;
+            }
 
-/* Button */
-button[type="submit"] {
-  width: 100%;
-  padding: .85rem 1.5rem;
-  background: var(--yellow);
-  color: var(--navy-dark);
-  border: none;
-  border-radius: 4px;
-  font-size: .95rem;
-  font-weight: 700;
-  font-family: 'Montserrat', sans-serif;
-  cursor: pointer;
-  letter-spacing: .04em;
-  text-transform: uppercase;
-  margin-top: .5rem;
-  transition: background .2s, transform .1s, box-shadow .2s;
-  box-shadow: 0 2px 6px rgba(255,198,41,.35);
-}
+            /* Button */
+            button[type="submit"] {
+                width: 100%;
+                padding: 0.85rem 1.5rem;
+                background: var(--yellow);
+                color: var(--navy-dark);
+                border: none;
+                border-radius: 4px;
+                font-size: 0.95rem;
+                font-weight: 700;
+                font-family: "Montserrat", sans-serif;
+                cursor: pointer;
+                letter-spacing: 0.04em;
+                text-transform: uppercase;
+                margin-top: 0.5rem;
+                transition:
+                    background 0.2s,
+                    transform 0.1s,
+                    box-shadow 0.2s;
+                box-shadow: 0 2px 6px rgba(255, 198, 41, 0.35);
+            }
 
-button[type="submit"]:hover {
-  background: #fed23a;
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(255,198,41,.4);
-}
-button[type="submit"]:active { transform: translateY(0); }
-button[type="submit"]:disabled {
-  background: #e0e0e0;
-  color: #999;
-  cursor: not-allowed;
-  transform: none;
-  box-shadow: none;
-}
+            button[type="submit"]:hover {
+                background: #fed23a;
+                transform: translateY(-1px);
+                box-shadow: 0 4px 12px rgba(255, 198, 41, 0.4);
+            }
+            button[type="submit"]:active {
+                transform: translateY(0);
+            }
+            button[type="submit"]:disabled {
+                background: #e0e0e0;
+                color: #999;
+                cursor: not-allowed;
+                transform: none;
+                box-shadow: none;
+            }
 
-/* Status messages */
-.status {
-  margin-top: 1rem;
-  padding: .75rem 1rem;
-  border-radius: 4px;
-  font-size: .875rem;
-  display: none;
-  border-left: 3px solid;
-}
-.status.ok      { display: block; background: #e8f5e9; border-color: var(--green); color: #2e7d32; }
-.status.err     { display: block; background: #fce4ec; border-color: var(--red);   color: #c62828; }
-.status.loading { display: block; background: #e3f2fd; border-color: var(--blue);  color: #1565c0; }
+            /* Status messages */
+            .status {
+                margin-top: 1rem;
+                padding: 0.75rem 1rem;
+                border-radius: 4px;
+                font-size: 0.875rem;
+                display: none;
+                border-left: 3px solid;
+            }
+            .status.ok {
+                display: block;
+                background: #e8f5e9;
+                border-color: var(--green);
+                color: #2e7d32;
+            }
+            .status.err {
+                display: block;
+                background: #fce4ec;
+                border-color: var(--red);
+                color: #c62828;
+            }
+            .status.loading {
+                display: block;
+                background: #e3f2fd;
+                border-color: var(--blue);
+                color: #1565c0;
+            }
 
-/* AP13 / PT status banners */
-.ap13-status {
-  padding: .7rem 1rem;
-  border-radius: 4px;
-  margin-bottom: 1.25rem;
-  font-size: .875rem;
-  border-left: 3px solid;
-}
-.ap13-status.pending { background: #fff8e1; border-color: #f9a825; color: #7a5800; }
-.ap13-status.done    { background: #e8f5e9; border-color: var(--green); color: #2e7d32; }
+            /* AP13 / PT status banners */
+            .ap13-status {
+                padding: 0.7rem 1rem;
+                border-radius: 4px;
+                margin-bottom: 1.25rem;
+                font-size: 0.875rem;
+                border-left: 3px solid;
+            }
+            .ap13-status.pending {
+                background: #fff8e1;
+                border-color: #f9a825;
+                color: #7a5800;
+            }
+            .ap13-status.done {
+                background: #e8f5e9;
+                border-color: var(--green);
+                color: #2e7d32;
+            }
 
-.or-divider {
-  text-align: center;
-  color: var(--text-muted);
-  font-size: .8rem;
-  font-weight: 600;
-  font-family: 'Montserrat', sans-serif;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-  margin: .25rem 0 1rem;
-  position: relative;
-}
-.or-divider::before, .or-divider::after {
-  content: '';
-  position: absolute;
-  top: 50%;
-  width: 42%;
-  height: 1px;
-  background: var(--border);
-}
-.or-divider::before { left: 0; }
-.or-divider::after  { right: 0; }
+            .or-divider {
+                text-align: center;
+                color: var(--text-muted);
+                font-size: 0.8rem;
+                font-weight: 600;
+                font-family: "Montserrat", sans-serif;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                margin: 0.25rem 0 1rem;
+                position: relative;
+            }
+            .or-divider::before,
+            .or-divider::after {
+                content: "";
+                position: absolute;
+                top: 50%;
+                width: 42%;
+                height: 1px;
+                background: var(--border);
+            }
+            .or-divider::before {
+                left: 0;
+            }
+            .or-divider::after {
+                right: 0;
+            }
 
-.required::after { content: " *"; color: var(--red); }
-.hidden { display: none; }
+            .required::after {
+                content: " *";
+                color: var(--red);
+            }
+            .hidden {
+                display: none;
+            }
 
-.field-section { margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border); }
-</style>
-</head>
-<body>
-
-<div class="site-header">
-  <div class="header-main">
-    <img src="images/ACO_Logo_Small.png" alt="Auditor Controller County of Riverside" class="logo">
-    <div class="header-page-title">
-      Unclaimed Refunds — Claims Portal
-      <span>Auditor-Controller · County of Riverside</span>
-    </div>
-  </div>
-</div>
-
-<div class="container">
-
-  <!-- STEP 1: Required Forms -->
-  <div id="formsSection" class="card hidden">
-    <div class="step-title">
-      <span class="step-badge">1</span>
-      <h2>Complete Your Claim Form(s)</h2>
-    </div>
-    <p class="subtitle">Fill out the required form(s) below. Pre-filled fields are highlighted. For the AP13 affidavit, sign and click "Submit Digitally" when done.</p>
-    <div id="formTabs" class="tabs"></div>
-    <div id="formTabContent" class="tab-content"></div>
-  </div>
-
-  <!-- STEP 2: Upload Documents -->
-  <div class="card">
-    <div class="step-title">
-      <span id="uploadStep" class="step-badge">1</span>
-      <h2>Upload Supporting Documents</h2>
-    </div>
-    <p class="subtitle" id="uploadSubtitle">Submit the documents required for your claim. Accepted formats: PDF, JPEG, PNG. Max 10 MB per file.</p>
-
-    <form id="uploadForm" aria-label="Document upload form">
-
-      <label for="name" class="required">Full Name</label>
-      <input type="text" id="name" required placeholder="Jane Doe" autocomplete="name">
-
-      <label class="required">Refund Type(s)</label>
-      <div id="refundTypeCheckboxes" class="checkbox-group">
-        <label><input type="checkbox" name="refundType" value="STALE_WARRANT"> Stale Warrant</label>
-        <label><input type="checkbox" name="refundType" value="PAYROLL"> Payroll</label>
-        <label><input type="checkbox" name="refundType" value="PROPERTY_TAX"> Property Tax</label>
-      </div>
-
-      <label for="password" class="required">Upload Password</label>
-      <input type="password" id="password" required placeholder="Provided by the refund lookup assistant">
-
-      <div id="ap13Status" class="ap13-status pending hidden">
-        ⏳ AP13 Affidavit not yet submitted — please complete and sign the form in Step 1 above.
-      </div>
-      <div id="ptStatus" class="ap13-status pending hidden">
-        ⏳ Property Tax Claim not yet submitted — please complete and sign the form in Step 1 above.
-      </div>
-
-      <div class="field-section">
-        <div class="file-group">
-          <label for="fileId" class="required">Government-Issued Photo ID</label>
-          <small>Driver's license, state ID, or passport</small>
-          <div class="upload-zone" id="zoneId">
-            <input type="file" id="fileId" accept=".pdf,.jpg,.jpeg,.png,.heic" required>
-            <div class="upload-zone-icon">📎</div>
-            <div class="upload-zone-text"><strong>Click to upload</strong> or drag &amp; drop</div>
-            <div class="upload-zone-filename" id="nameId"></div>
-          </div>
+            .field-section {
+                margin-top: 1.5rem;
+                padding-top: 1.5rem;
+                border-top: 1px solid var(--border);
+            }
+        </style>
+    </head>
+    <body>
+        <div class="site-header">
+            <div class="header-main">
+                <img
+                    src="images/ACO_Logo_Small.png"
+                    alt="Auditor Controller County of Riverside"
+                    class="logo"
+                />
+                <div class="header-page-title">
+                    Unclaimed Refunds — Claims Portal
+                    <span>Auditor-Controller · County of Riverside</span>
+                </div>
+            </div>
         </div>
 
-        <div id="swDocs" class="hidden">
-          <div class="file-group">
-            <label for="fileAddress" class="required">Proof of Current Address</label>
-            <small>Utility bill, bank statement, or lease agreement</small>
-            <div class="upload-zone" id="zoneAddress">
-              <input type="file" id="fileAddress" accept=".pdf,.jpg,.jpeg,.png,.heic">
-              <div class="upload-zone-icon">📎</div>
-              <div class="upload-zone-text"><strong>Click to upload</strong> or drag &amp; drop</div>
-              <div class="upload-zone-filename" id="nameAddress"></div>
+        <div class="container">
+            <!-- STEP 1: Required Forms -->
+            <div id="formsSection" class="card hidden">
+                <div class="step-title">
+                    <span class="step-badge">1</span>
+                    <h2>Complete Your Claim Form(s)</h2>
+                </div>
+                <p class="subtitle">
+                    Fill out the required form(s) below. Pre-filled fields are
+                    highlighted. For the AP13 affidavit, sign and click "Submit
+                    Digitally" when done.
+                </p>
+                <div id="formTabs" class="tabs"></div>
+                <div id="formTabContent" class="tab-content"></div>
             </div>
-          </div>
+
+            <!-- STEP 2: Upload Documents -->
+            <div class="card">
+                <div class="step-title">
+                    <span id="uploadStep" class="step-badge">1</span>
+                    <h2>Upload Supporting Documents</h2>
+                </div>
+                <p class="subtitle" id="uploadSubtitle">
+                    Submit the documents required for your claim. Accepted
+                    formats: PDF, JPEG, PNG. Max 10 MB per file.
+                </p>
+
+                <form id="uploadForm" aria-label="Document upload form">
+                    <label for="name" class="required">Full Name</label>
+                    <input
+                        type="text"
+                        id="name"
+                        required
+                        placeholder="Jane Doe"
+                        autocomplete="name"
+                    />
+
+                    <label class="required">Refund Type(s)</label>
+                    <div id="refundTypeCheckboxes" class="checkbox-group">
+                        <label
+                            ><input
+                                type="checkbox"
+                                name="refundType"
+                                value="STALE_WARRANT"
+                            />
+                            Stale Warrant</label
+                        >
+                        <label
+                            ><input
+                                type="checkbox"
+                                name="refundType"
+                                value="PAYROLL"
+                            />
+                            Payroll</label
+                        >
+                        <label
+                            ><input
+                                type="checkbox"
+                                name="refundType"
+                                value="PROPERTY_TAX"
+                            />
+                            Property Tax</label
+                        >
+                    </div>
+
+                    <label for="password" class="required"
+                        >Upload Password</label
+                    >
+                    <input
+                        type="password"
+                        id="password"
+                        required
+                        placeholder="Provided by the refund lookup assistant"
+                    />
+
+                    <div id="ap13Status" class="ap13-status pending hidden">
+                        ⏳ AP13 Affidavit not yet submitted — please complete
+                        and sign the form in Step 1 above.
+                    </div>
+                    <div id="ptStatus" class="ap13-status pending hidden">
+                        ⏳ Property Tax Claim not yet submitted — please
+                        complete and sign the form in Step 1 above.
+                    </div>
+
+                    <div class="field-section">
+                        <div class="file-group">
+                            <label for="fileId" class="required"
+                                >Government-Issued Photo ID</label
+                            >
+                            <small
+                                >Driver's license, state ID, or passport</small
+                            >
+                            <div class="upload-zone" id="zoneId">
+                                <input
+                                    type="file"
+                                    id="fileId"
+                                    accept=".pdf,.jpg,.jpeg,.png,.heic"
+                                    required
+                                />
+                                <div class="upload-zone-icon">📎</div>
+                                <div class="upload-zone-text">
+                                    <strong>Click to upload</strong> or drag
+                                    &amp; drop
+                                </div>
+                                <div
+                                    class="upload-zone-filename"
+                                    id="nameId"
+                                ></div>
+                            </div>
+                        </div>
+
+                        <div id="swDocs" class="hidden">
+                            <div class="file-group">
+                                <label for="fileAddress" class="required"
+                                    >Proof of Current Address</label
+                                >
+                                <small
+                                    >Utility bill, bank statement, or lease
+                                    agreement</small
+                                >
+                                <div class="upload-zone" id="zoneAddress">
+                                    <input
+                                        type="file"
+                                        id="fileAddress"
+                                        accept=".pdf,.jpg,.jpeg,.png,.heic"
+                                    />
+                                    <div class="upload-zone-icon">📎</div>
+                                    <div class="upload-zone-text">
+                                        <strong>Click to upload</strong> or drag
+                                        &amp; drop
+                                    </div>
+                                    <div
+                                        class="upload-zone-filename"
+                                        id="nameAddress"
+                                    ></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="ptDocs" class="hidden">
+                            <div class="file-group">
+                                <label for="filePayment"
+                                    >Proof of Payment for the Fiscal Year(s) of
+                                    the Refund</label
+                                >
+                                <small
+                                    >Canceled checks, bank statements, or escrow
+                                    papers showing breakdown of payments</small
+                                >
+                                <div class="upload-zone" id="zonePayment">
+                                    <input
+                                        type="file"
+                                        id="filePayment"
+                                        accept=".pdf,.jpg,.jpeg,.png,.heic"
+                                    />
+                                    <div class="upload-zone-icon">📎</div>
+                                    <div class="upload-zone-text">
+                                        <strong>Click to upload</strong> or drag
+                                        &amp; drop
+                                    </div>
+                                    <div
+                                        class="upload-zone-filename"
+                                        id="namePayment"
+                                    ></div>
+                                </div>
+                            </div>
+                            <div class="or-divider">or</div>
+                            <div class="file-group">
+                                <label for="fileOwnership"
+                                    >Proof of Claimant's Ownership</label
+                                >
+                                <small
+                                    >Must show the property address in question
+                                    (e.g., copy of the tax bill for the
+                                    property/fiscal year)</small
+                                >
+                                <div class="upload-zone" id="zoneOwnership">
+                                    <input
+                                        type="file"
+                                        id="fileOwnership"
+                                        accept=".pdf,.jpg,.jpeg,.png,.heic"
+                                    />
+                                    <div class="upload-zone-icon">📎</div>
+                                    <div class="upload-zone-text">
+                                        <strong>Click to upload</strong> or drag
+                                        &amp; drop
+                                    </div>
+                                    <div
+                                        class="upload-zone-filename"
+                                        id="nameOwnership"
+                                    ></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button type="submit" id="submitBtn">
+                        Submit Claim Documents
+                    </button>
+                    <div id="status" class="status" role="alert"></div>
+                </form>
+            </div>
         </div>
 
-        <div id="ptDocs" class="hidden">
-          <div class="file-group">
-            <label for="filePayment">Proof of Payment for the Fiscal Year(s) of the Refund</label>
-            <small>Canceled checks, bank statements, or escrow papers showing breakdown of payments</small>
-            <div class="upload-zone" id="zonePayment">
-              <input type="file" id="filePayment" accept=".pdf,.jpg,.jpeg,.png,.heic">
-              <div class="upload-zone-icon">📎</div>
-              <div class="upload-zone-text"><strong>Click to upload</strong> or drag &amp; drop</div>
-              <div class="upload-zone-filename" id="namePayment"></div>
-            </div>
-          </div>
-          <div class="or-divider">or</div>
-          <div class="file-group">
-            <label for="fileOwnership">Proof of Claimant's Ownership</label>
-            <small>Must show the property address in question (e.g., copy of the tax bill for the property/fiscal year)</small>
-            <div class="upload-zone" id="zoneOwnership">
-              <input type="file" id="fileOwnership" accept=".pdf,.jpg,.jpeg,.png,.heic">
-              <div class="upload-zone-icon">📎</div>
-              <div class="upload-zone-text"><strong>Click to upload</strong> or drag &amp; drop</div>
-              <div class="upload-zone-filename" id="nameOwnership"></div>
-            </div>
-          </div>
-        </div>
-      </div>
+        <script src="config.js"></script>
+        <script>
+            (function () {
+                var API_URL = window.API_URL || "";
+                var params = new URLSearchParams(window.location.search);
+                var ap13Data = null;
+                var ptData = null;
 
-      <button type="submit" id="submitBtn">Submit Claim Documents</button>
-      <div id="status" class="status" role="alert"></div>
-    </form>
-  </div>
+                if (params.get("name"))
+                    document.getElementById("name").value = params.get("name");
 
-</div>
+                var types = (params.get("type") || "")
+                    .split(",")
+                    .filter(Boolean);
 
-<script src="config.js"></script>
-<script>
-(function () {
-  var API_URL = window.API_URL || "";
-  var params = new URLSearchParams(window.location.search);
-  var ap13Data = null;
-  var ptData = null;
+                function getSelectedTypes() {
+                    return Array.from(
+                        document.querySelectorAll(
+                            'input[name="refundType"]:checked',
+                        ),
+                    ).map(function (cb) {
+                        return cb.value;
+                    });
+                }
 
-  if (params.get("name")) document.getElementById("name").value = params.get("name");
+                function updateDocSections() {
+                    var selected = getSelectedTypes();
+                    var hasSW = selected.some(function (t) {
+                        return t === "STALE_WARRANT" || t === "PAYROLL";
+                    });
+                    var hasPT = selected.indexOf("PROPERTY_TAX") !== -1;
+                    document
+                        .getElementById("swDocs")
+                        .classList.toggle("hidden", !hasSW);
+                    document
+                        .getElementById("ptDocs")
+                        .classList.toggle("hidden", !hasPT);
+                    document
+                        .getElementById("ap13Status")
+                        .classList.toggle("hidden", !hasSW);
+                    document
+                        .getElementById("ptStatus")
+                        .classList.toggle("hidden", !hasPT);
+                    document.getElementById("fileAddress").required = hasSW;
+                }
 
-  var types = (params.get("type") || "").split(",").filter(Boolean);
+                document
+                    .querySelectorAll('input[name="refundType"]')
+                    .forEach(function (cb) {
+                        cb.addEventListener("change", updateDocSections);
+                    });
 
-  function getSelectedTypes() {
-    return Array.from(document.querySelectorAll('input[name="refundType"]:checked')).map(function(cb) { return cb.value; });
-  }
+                types.forEach(function (t) {
+                    var cb = document.querySelector(
+                        'input[name="refundType"][value="' + t + '"]',
+                    );
+                    if (cb) cb.checked = true;
+                });
+                updateDocSections();
 
-  function updateDocSections() {
-    var selected = getSelectedTypes();
-    var hasSW = selected.some(function(t) { return t === "STALE_WARRANT" || t === "PAYROLL"; });
-    var hasPT = selected.indexOf("PROPERTY_TAX") !== -1;
-    document.getElementById("swDocs").classList.toggle("hidden", !hasSW);
-    document.getElementById("ptDocs").classList.toggle("hidden", !hasPT);
-    document.getElementById("ap13Status").classList.toggle("hidden", !hasSW);
-    document.getElementById("ptStatus").classList.toggle("hidden", !hasPT);
-    document.getElementById("fileAddress").required = hasSW;
-  }
+                var amounts = (params.get("amount") || "")
+                    .split(",")
+                    .filter(Boolean);
+                var name = params.get("name") || "";
+                var address = params.get("address") || "";
+                var ids = (params.get("id") || "").split(",");
+                var assessment = params.get("assessment") || "";
+                var taxyear = params.get("taxyear") || "";
 
-  document.querySelectorAll('input[name="refundType"]').forEach(function(cb) {
-    cb.addEventListener("change", updateDocSections);
-  });
+                var formsSection = document.getElementById("formsSection");
+                var tabsContainer = document.getElementById("formTabs");
+                var contentContainer =
+                    document.getElementById("formTabContent");
 
-  types.forEach(function(t) {
-    var cb = document.querySelector('input[name="refundType"][value="' + t + '"]');
-    if (cb) cb.checked = true;
-  });
-  updateDocSections();
+                if (types.length > 0) {
+                    formsSection.classList.remove("hidden");
+                    document.getElementById("uploadStep").textContent = "2";
 
-  var amounts = (params.get("amount") || "").split(",").filter(Boolean);
-  var name = params.get("name") || "";
-  var address = params.get("address") || "";
-  var ids = (params.get("id") || "").split(",");
-  var assessment = params.get("assessment") || "";
-  var taxyear = params.get("taxyear") || "";
+                    types.forEach(function (type, i) {
+                        var amount = amounts[i] || "";
+                        var id = ids[i] || "";
+                        var tabId = "form-" + i;
 
-  var formsSection = document.getElementById("formsSection");
-  var tabsContainer = document.getElementById("formTabs");
-  var contentContainer = document.getElementById("formTabContent");
+                        var btn = document.createElement("div");
+                        btn.className = "tab" + (i === 0 ? " active" : "");
+                        btn.addEventListener("click", function () {
+                            tabsContainer
+                                .querySelectorAll(".tab")
+                                .forEach(function (t) {
+                                    t.classList.remove("active");
+                                });
+                            contentContainer
+                                .querySelectorAll(".tab-pane")
+                                .forEach(function (p) {
+                                    p.classList.remove("active");
+                                });
+                            btn.classList.add("active");
+                            document
+                                .getElementById(tabId)
+                                .classList.add("active");
+                        });
 
-  if (types.length > 0) {
-    formsSection.classList.remove("hidden");
-    document.getElementById("uploadStep").textContent = "2";
+                        var pane = document.createElement("div");
+                        pane.id = tabId;
+                        pane.className =
+                            "tab-pane" + (i === 0 ? " active" : "");
 
-    types.forEach(function (type, i) {
-      var amount = amounts[i] || "";
-      var id = ids[i] || "";
-      var tabId = "form-" + i;
+                        if (type === "PROPERTY_TAX") {
+                            btn.textContent = "Property Tax — $" + amount;
+                            var ptParams = new URLSearchParams({
+                                index: id,
+                                assessment: assessment,
+                                taxyear: taxyear,
+                                amount: amount,
+                                name: name,
+                                address: address,
+                            });
+                            pane.innerHTML =
+                                '<iframe src="property-tax-form.html?' +
+                                ptParams.toString() +
+                                '" title="Property Tax Refund Form"></iframe>';
+                        } else {
+                            var label =
+                                type === "PAYROLL"
+                                    ? "Payroll"
+                                    : "Stale Warrant";
+                            btn.textContent = label + " — $" + amount;
+                            var ap13Params = new URLSearchParams({
+                                name: name,
+                                amount: amount,
+                                address: address,
+                                warrant: id,
+                            });
+                            pane.innerHTML =
+                                '<iframe src="ap13-form.html?' +
+                                ap13Params.toString() +
+                                '" title="' +
+                                label +
+                                ' AP13"></iframe>';
+                        }
 
-      var btn = document.createElement("div");
-      btn.className = "tab" + (i === 0 ? " active" : "");
-      btn.addEventListener("click", function () {
-        tabsContainer.querySelectorAll(".tab").forEach(function (t) { t.classList.remove("active"); });
-        contentContainer.querySelectorAll(".tab-pane").forEach(function (p) { p.classList.remove("active"); });
-        btn.classList.add("active");
-        document.getElementById(tabId).classList.add("active");
-      });
+                        tabsContainer.appendChild(btn);
+                        contentContainer.appendChild(pane);
+                    });
+                }
 
-      var pane = document.createElement("div");
-      pane.id = tabId;
-      pane.className = "tab-pane" + (i === 0 ? " active" : "");
+                window.addEventListener("message", function (e) {
+                    if (e.data && e.data.type === "ap13_submitted") {
+                        ap13Data = e.data;
+                        var el = document.getElementById("ap13Status");
+                        el.className = "ap13-status done";
+                        el.textContent =
+                            "AP13 Affidavit submitted and signed digitally.";
+                        document
+                            .getElementById("uploadForm")
+                            .scrollIntoView({
+                                behavior: "smooth",
+                                block: "start",
+                            });
+                    }
+                    if (e.data && e.data.type === "property_tax_submitted") {
+                        ptData = e.data;
+                        var el = document.getElementById("ptStatus");
+                        el.className = "ap13-status done";
+                        el.textContent =
+                            "Property Tax Claim submitted and signed digitally.";
+                        document
+                            .getElementById("uploadForm")
+                            .scrollIntoView({
+                                behavior: "smooth",
+                                block: "start",
+                            });
+                    }
+                });
 
-      if (type === "PROPERTY_TAX") {
-        btn.textContent = "Property Tax — $" + amount;
-        var ptParams = new URLSearchParams({ index: id, assessment: assessment, taxyear: taxyear, amount: amount, name: name, address: address });
-        pane.innerHTML = '<iframe src="property-tax-form.html?' + ptParams.toString() + '" title="Property Tax Refund Form"></iframe>';
-      } else {
-        var label = type === "PAYROLL" ? "Payroll" : "Stale Warrant";
-        btn.textContent = label + " — $" + amount;
-        var ap13Params = new URLSearchParams({ name: name, amount: amount, address: address, warrant: id });
-        pane.innerHTML = '<iframe src="ap13-form.html?' + ap13Params.toString() + '" title="' + label + ' AP13"></iframe>';
-      }
+                // Upload zone filename feedback
+                [
+                    ["fileId", "zoneId", "nameId"],
+                    ["fileAddress", "zoneAddress", "nameAddress"],
+                    ["filePayment", "zonePayment", "namePayment"],
+                    ["fileOwnership", "zoneOwnership", "nameOwnership"],
+                ].forEach(function (ids) {
+                    var input = document.getElementById(ids[0]);
+                    var zone = document.getElementById(ids[1]);
+                    var name = document.getElementById(ids[2]);
+                    if (!input) return;
+                    input.addEventListener("change", function () {
+                        if (input.files[0]) {
+                            name.textContent = "✓ " + input.files[0].name;
+                            name.style.display = "block";
+                            zone.classList.add("has-file");
+                        }
+                    });
+                });
 
-      tabsContainer.appendChild(btn);
-      contentContainer.appendChild(pane);
-    });
-  }
+                var form = document.getElementById("uploadForm");
+                var status = document.getElementById("status");
+                var submitBtn = document.getElementById("submitBtn");
 
-  window.addEventListener("message", function (e) {
-    if (e.data && e.data.type === "ap13_submitted") {
-      ap13Data = e.data;
-      var el = document.getElementById("ap13Status");
-      el.className = "ap13-status done";
-      el.textContent = "✅ AP13 Affidavit submitted and signed digitally.";
-      document.getElementById("uploadForm").scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-    if (e.data && e.data.type === "property_tax_submitted") {
-      ptData = e.data;
-      var el = document.getElementById("ptStatus");
-      el.className = "ap13-status done";
-      el.textContent = "✅ Property Tax Claim submitted and signed digitally.";
-      document.getElementById("uploadForm").scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  });
+                function setStatus(cls, msg) {
+                    status.className = "status " + cls;
+                    status.textContent = msg;
+                }
 
-  // Upload zone filename feedback
-  [['fileId','zoneId','nameId'],['fileAddress','zoneAddress','nameAddress'],
-   ['filePayment','zonePayment','namePayment'],['fileOwnership','zoneOwnership','nameOwnership']
-  ].forEach(function(ids) {
-    var input = document.getElementById(ids[0]);
-    var zone  = document.getElementById(ids[1]);
-    var name  = document.getElementById(ids[2]);
-    if (!input) return;
-    input.addEventListener('change', function() {
-      if (input.files[0]) {
-        name.textContent = '✓ ' + input.files[0].name;
-        name.style.display = 'block';
-        zone.classList.add('has-file');
-      }
-    });
-  });
+                form.addEventListener("submit", async function (e) {
+                    e.preventDefault();
+                    var selected = getSelectedTypes();
+                    var hasSW = selected.some(function (t) {
+                        return t === "STALE_WARRANT" || t === "PAYROLL";
+                    });
+                    var hasPT = selected.indexOf("PROPERTY_TAX") !== -1;
 
-  var form = document.getElementById("uploadForm");
-  var status = document.getElementById("status");
-  var submitBtn = document.getElementById("submitBtn");
+                    if (selected.length === 0) {
+                        setStatus(
+                            "err",
+                            "Please select at least one refund type.",
+                        );
+                        return;
+                    }
+                    if (hasSW && !ap13Data) {
+                        setStatus(
+                            "err",
+                            "Please complete and submit the AP13 Affidavit in Step 1 before uploading.",
+                        );
+                        return;
+                    }
+                    if (hasPT && !ptData) {
+                        setStatus(
+                            "err",
+                            "Please complete and submit the Property Tax Claim in Step 1 before uploading.",
+                        );
+                        return;
+                    }
 
-  function setStatus(cls, msg) {
-    status.className = "status " + cls;
-    status.textContent = msg;
-  }
+                    if (hasPT) {
+                        var hasPayment =
+                            document.getElementById("filePayment").files
+                                .length > 0;
+                        var hasOwnership =
+                            document.getElementById("fileOwnership").files
+                                .length > 0;
+                        if (!hasPayment && !hasOwnership) {
+                            setStatus(
+                                "err",
+                                "Please upload either Proof of Payment or Proof of Ownership.",
+                            );
+                            return;
+                        }
+                    }
 
-  form.addEventListener("submit", async function (e) {
-    e.preventDefault();
-    var selected = getSelectedTypes();
-    var hasSW = selected.some(function(t) { return t === "STALE_WARRANT" || t === "PAYROLL"; });
-    var hasPT = selected.indexOf("PROPERTY_TAX") !== -1;
+                    submitBtn.disabled = true;
+                    setStatus("loading", "Requesting upload URLs…");
 
-    if (selected.length === 0) { setStatus("err", "Please select at least one refund type."); return; }
-    if (hasSW && !ap13Data) { setStatus("err", "Please complete and submit the AP13 Affidavit in Step 1 before uploading."); return; }
-    if (hasPT && !ptData) { setStatus("err", "Please complete and submit the Property Tax Claim in Step 1 before uploading."); return; }
+                    var fileInputs = [
+                        {
+                            el: document.getElementById("fileId"),
+                            label: "photo-id",
+                        },
+                    ];
+                    if (hasSW)
+                        fileInputs.push({
+                            el: document.getElementById("fileAddress"),
+                            label: "proof-of-address",
+                        });
+                    if (hasPT) {
+                        if (
+                            document.getElementById("filePayment").files
+                                .length > 0
+                        )
+                            fileInputs.push({
+                                el: document.getElementById("filePayment"),
+                                label: "proof-of-payment",
+                            });
+                        if (
+                            document.getElementById("fileOwnership").files
+                                .length > 0
+                        )
+                            fileInputs.push({
+                                el: document.getElementById("fileOwnership"),
+                                label: "proof-of-ownership",
+                            });
+                    }
 
-    if (hasPT) {
-      var hasPayment = document.getElementById("filePayment").files.length > 0;
-      var hasOwnership = document.getElementById("fileOwnership").files.length > 0;
-      if (!hasPayment && !hasOwnership) { setStatus("err", "Please upload either Proof of Payment or Proof of Ownership."); return; }
-    }
+                    var files = [];
+                    for (var fi of fileInputs) {
+                        var file = fi.el.files[0];
+                        if (!file) {
+                            setStatus(
+                                "err",
+                                "Please select all required files.",
+                            );
+                            submitBtn.disabled = false;
+                            return;
+                        }
+                        if (file.size > 10 * 1024 * 1024) {
+                            setStatus(
+                                "err",
+                                file.name + " exceeds 10 MB limit.",
+                            );
+                            submitBtn.disabled = false;
+                            return;
+                        }
+                        files.push({
+                            file: file,
+                            filename: fi.label + "_" + file.name,
+                            contentType:
+                                file.type || "application/octet-stream",
+                        });
+                    }
 
-    submitBtn.disabled = true;
-    setStatus("loading", "Requesting upload URLs…");
+                    if (ap13Data) {
+                        var ap13Blob = new Blob([JSON.stringify(ap13Data)], {
+                            type: "application/json",
+                        });
+                        files.push({
+                            file: ap13Blob,
+                            filename: "ap13-affidavit.json",
+                            contentType: "application/json",
+                        });
+                    }
+                    if (ptData) {
+                        var ptBlob = new Blob([JSON.stringify(ptData)], {
+                            type: "application/json",
+                        });
+                        files.push({
+                            file: ptBlob,
+                            filename: "property-tax-claim.json",
+                            contentType: "application/json",
+                        });
+                    }
 
-    var fileInputs = [{ el: document.getElementById("fileId"), label: "photo-id" }];
-    if (hasSW) fileInputs.push({ el: document.getElementById("fileAddress"), label: "proof-of-address" });
-    if (hasPT) {
-      if (document.getElementById("filePayment").files.length > 0)
-        fileInputs.push({ el: document.getElementById("filePayment"), label: "proof-of-payment" });
-      if (document.getElementById("fileOwnership").files.length > 0)
-        fileInputs.push({ el: document.getElementById("fileOwnership"), label: "proof-of-ownership" });
-    }
+                    try {
+                        var res = await fetch(API_URL + "/upload", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                name: document
+                                    .getElementById("name")
+                                    .value.trim(),
+                                refundType: selected.join(","),
+                                password: document
+                                    .getElementById("password")
+                                    .value.trim(),
+                                files: files.map(function (f) {
+                                    return {
+                                        filename: f.filename,
+                                        contentType: f.contentType,
+                                    };
+                                }),
+                            }),
+                        });
+                        var data = await res.json();
+                        if (!res.ok)
+                            throw new Error(data.error || "Request failed");
 
-    var files = [];
-    for (var fi of fileInputs) {
-      var file = fi.el.files[0];
-      if (!file) { setStatus("err", "Please select all required files."); submitBtn.disabled = false; return; }
-      if (file.size > 10 * 1024 * 1024) { setStatus("err", file.name + " exceeds 10 MB limit."); submitBtn.disabled = false; return; }
-      files.push({ file: file, filename: fi.label + "_" + file.name, contentType: file.type || "application/octet-stream" });
-    }
+                        setStatus("loading", "Uploading files…");
+                        for (var j = 0; j < data.uploads.length; j++) {
+                            await fetch(data.uploads[j].uploadUrl, {
+                                method: "PUT",
+                                headers: {
+                                    "Content-Type": files[j].contentType,
+                                },
+                                body: files[j].file,
+                            });
+                        }
 
-    if (ap13Data) {
-      var ap13Blob = new Blob([JSON.stringify(ap13Data)], { type: "application/json" });
-      files.push({ file: ap13Blob, filename: "ap13-affidavit.json", contentType: "application/json" });
-    }
-    if (ptData) {
-      var ptBlob = new Blob([JSON.stringify(ptData)], { type: "application/json" });
-      files.push({ file: ptBlob, filename: "property-tax-claim.json", contentType: "application/json" });
-    }
-
-    try {
-      var res = await fetch(API_URL + "/upload", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: document.getElementById("name").value.trim(),
-          refundType: selected.join(","),
-          password: document.getElementById("password").value.trim(),
-          files: files.map(function (f) { return { filename: f.filename, contentType: f.contentType }; }),
-        }),
-      });
-      var data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Request failed");
-
-      setStatus("loading", "Uploading files…");
-      for (var j = 0; j < data.uploads.length; j++) {
-        await fetch(data.uploads[j].uploadUrl, {
-          method: "PUT",
-          headers: { "Content-Type": files[j].contentType },
-          body: files[j].file,
-        });
-      }
-
-      setStatus("ok", "Documents uploaded successfully! Submission ID: " + data.submissionId);
-      form.reset();
-    } catch (err) {
-      setStatus("err", "Upload failed: " + err.message);
-    } finally {
-      submitBtn.disabled = false;
-    }
-  });
-})();
-</script>
-</body>
+                        setStatus(
+                            "ok",
+                            "Documents uploaded successfully! Submission ID: " +
+                                data.submissionId,
+                        );
+                        form.reset();
+                    } catch (err) {
+                        setStatus("err", "Upload failed: " + err.message);
+                    } finally {
+                        submitBtn.disabled = false;
+                    }
+                });
+            })();
+        </script>
+    </body>
 </html>
