@@ -78,16 +78,13 @@ def sync_ai_prompt(assistant_id):
     if existing:
         prompt_id = existing["aiPromptId"]
         log("📝", f"Updating existing prompt: {prompt_id}")
-        try:
-            qc.update_ai_prompt(
-                assistantId=assistant_id,
-                aiPromptId=prompt_id,
-                visibilityStatus="PUBLISHED",
-                templateConfiguration=template_cfg,
-            )
-            log("✅", "Updated")
-        except Exception as e:
-            log("⚠️", f"Update failed (prompt may be unchanged): {e}")
+        qc.update_ai_prompt(
+            assistantId=assistant_id,
+            aiPromptId=prompt_id,
+            visibilityStatus="PUBLISHED",
+            templateConfiguration=template_cfg,
+        )
+        log("✅", "Updated")
     else:
         log("📝", "Creating new prompt...")
         resp = qc.create_ai_prompt(

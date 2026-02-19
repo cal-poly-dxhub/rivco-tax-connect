@@ -49,6 +49,7 @@ prompts:
       **FORMATTING:**
       - Start responses with `<message>` tags (spoken to customer). Use `<thinking>` tags for internal reasoning only.
       - Format dollar amounts as $1,234.56 — never spell out amounts.
+      - Never use markdown (no bold, italics, bullets, or special characters). Write plain conversational text only.
 
       **LOOKUP:**
       - When a caller provides a name, call tax_lookup immediately. Do not ask if it is a person or business.
