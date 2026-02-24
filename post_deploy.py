@@ -17,9 +17,11 @@ This script handles:
 
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urljoin
 
 import boto3
 import yaml
@@ -139,37 +141,52 @@ def sync_ai_agent(assistant_id, prompt_id, prompt_version_number):
     agent_id = agent["aiAgentId"]
     log("✓", f"Found: {agent_id}")
 
-    # Get current config and update the prompt reference
+    # Get current KB association ID
+    associations = qc.list_assistant_associations(assistantId=assistant_id)["assistantAssociationSummaries"]
+    kb_assoc = next((a for a in associations if a["associationType"] == "KNOWLEDGE_BASE"), None)
+    kb_assoc_id = kb_assoc["assistantAssociationId"] if kb_assoc else None
+
     if prompt_id and prompt_version_number:
         full_agent = qc.get_ai_agent(assistantId=assistant_id, aiAgentId=agent_id)
-        config = full_agent["aiAgent"]["configuration"]
-
-        orch_cfg = config.get("orchestrationAIAgentConfiguration", {})
+        # get_ai_agent returns SDK_UNKNOWN_MEMBER for orchestration config; rebuild from scratch
         new_prompt_ref = f"{prompt_id}:{prompt_version_number}"
-        old_prompt_ref = orch_cfg.get("orchestrationAIPromptId", "")
 
-        if old_prompt_ref != new_prompt_ref:
-            log("📝", f"Updating agent prompt: {old_prompt_ref} → {new_prompt_ref}")
-            orch_cfg["orchestrationAIPromptId"] = new_prompt_ref
-            try:
-                qc.update_ai_agent(
-                    assistantId=assistant_id,
-                    aiAgentId=agent_id,
-                    visibilityStatus="PUBLISHED",
-                    configuration={"orchestrationAIAgentConfiguration": orch_cfg},
-                )
-                log("✅", "Agent prompt updated")
-            except Exception as e:
-                log("⚠️", f"Agent update failed: {e}")
-        else:
-            log("✓", "Agent already using latest prompt version")
+        orch_cfg = {
+            "orchestrationAIPromptId": new_prompt_ref,
+        }
+        if kb_assoc_id:
+            orch_cfg["associationConfigurations"] = [
+                {
+                    "associationType": "KNOWLEDGE_BASE",
+                    "associationId": kb_assoc_id,
+                    "associationConfigurationData": {
+                        "knowledgeBaseAssociationConfigurationData": {
+                            "overrideKnowledgeBaseSearchType": "HYBRID",
+                            "maxResults": 5,
+                        }
+                    },
+                }
+            ]
+            log("✓", f"KB association: {kb_assoc_id}")
+
+        try:
+            qc.update_ai_agent(
+                assistantId=assistant_id,
+                aiAgentId=agent_id,
+                visibilityStatus="PUBLISHED",
+                configuration={"orchestrationAIAgentConfiguration": orch_cfg},
+            )
+            log("✅", "Agent updated")
+        except Exception as e:
+            log("⚠️", f"Agent update failed: {e}")
 
     # Version the agent
     try:
         ver = qc.create_ai_agent_version(assistantId=assistant_id, aiAgentId=agent_id)
         versioned_arn = ver["aiAgent"]["aiAgentArn"]
+        version_number = ver["aiAgent"].get("versionNumber") or versioned_arn.rsplit(":", 1)[-1]
         log("✅", f"Published version: {versioned_arn}")
-        # Use $LATEST qualifier
+        log("ℹ️", f"Set as ORCHESTRATION default in console: AI agent designer → AI agents → {AGENT_NAME} → Set as default")
         latest_arn = versioned_arn.rsplit(":", 1)[0] + ":$LATEST"
         return agent_id, latest_arn
     except Exception as e:
@@ -351,6 +368,141 @@ def setup_sms_channel(instance_id, instance_arn, contact_flow_id, voice_phone_id
     return sms_status
 
 
+# ── Step 7: Scrape & upload KB content ─────────────────────
+
+MAX_BYTES = 900_000  # Q Connect 1MB limit with headroom
+
+
+def _upload_pdf(qc, kb_id, existing, name, data, source_url, upload_fn):
+    """Upload PDF directly, or chunk as text if over size limit."""
+    if len(data) <= MAX_BYTES:
+        upload_fn(name, data, "application/pdf", source_url)
+        return
+    # Extract text and upload in chunks
+    import io
+    import pypdf
+    reader = pypdf.PdfReader(io.BytesIO(data))
+    text = "\n\n".join(page.extract_text() or "" for page in reader.pages)
+    encoded = text.encode()
+    base = name.rsplit(".", 1)[0]
+    for i, start in enumerate(range(0, len(encoded), MAX_BYTES)):
+        chunk = encoded[start:start + MAX_BYTES]
+        upload_fn(f"{base}_part{i+1}.txt", chunk, "text/plain", source_url)
+
+
+def sync_knowledge_base(kb_id):
+    """Fetch seed URLs + linked PDFs via Playwright (stealth) and upload to CUSTOM KB."""
+    import requests
+    from bs4 import BeautifulSoup
+    from playwright.sync_api import sync_playwright
+    from playwright_stealth import Stealth
+
+    log_step("Syncing knowledge base content...")
+    qc = boto3.client("qconnect", region_name=REGION)
+
+    with open(SCRIPT_DIR / "config.yaml") as f:
+        config = yaml.safe_load(f)
+    seed_urls = config["wisdom"]["kb_seed_urls"]
+
+    existing = {
+        c["name"]: c["contentId"]
+        for c in qc.list_contents(knowledgeBaseId=kb_id)["contentSummaries"]
+    }
+
+    def safe_name(s):
+        return re.sub(r"[^a-zA-Z0-9._-]", "_", s)[:255] or "content"
+
+    def upload(name, data, content_type, source_url):
+        name = safe_name(name)
+        up = qc.start_content_upload(knowledgeBaseId=kb_id, contentType=content_type)
+        hdrs = up["headersToInclude"]
+        requests.put(up["url"], data=data, headers=hdrs, timeout=30)
+        meta = {"sourceUrl": source_url}
+        if name in existing:
+            qc.update_content(knowledgeBaseId=kb_id, contentId=existing[name], uploadId=up["uploadId"], metadata=meta)
+            log("✅", f"Updated: {name}")
+        else:
+            qc.create_content(knowledgeBaseId=kb_id, name=name, uploadId=up["uploadId"], metadata=meta)
+            log("✅", f"Created: {name}")
+
+    pdf_seen = set()
+    with Stealth().use_sync(sync_playwright()) as p:
+        browser = p.chromium.launch()
+        ctx = browser.new_context()
+        page = ctx.new_page()
+
+        for url in seed_urls:
+            try:
+                # Try plain HTTP first (works for server-rendered pages, gets full content)
+                r = requests.get(url, timeout=15, headers={
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.5",
+                })
+                if r.status_code == 200 and "enable javascript" not in r.text.lower():
+                    html = r.content
+                else:
+                    # Fall back to Playwright for JS-rendered pages
+                    page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    page.wait_for_timeout(3000)
+                    page.evaluate("""() => {
+                        document.querySelectorAll('details').forEach(d => d.open = true);
+                        document.querySelectorAll('[aria-expanded="false"]').forEach(el => el.click());
+                        document.querySelectorAll('.coh-accordion-title a').forEach(el => el.click());
+                    }""")
+                    page.wait_for_timeout(1500)
+                    html = page.content().encode()
+            except Exception as e:
+                log("⚠️", f"Skipped {url}: {e}")
+                continue
+
+            page_name = url.rstrip("/").rsplit("/", 1)[-1] or "home"
+            soup = BeautifulSoup(html, "html.parser")
+            for tag in soup(["nav", "footer", "script", "style", "header"]):
+                tag.decompose()
+
+            # For FAQ pages: upload each Q&A as a separate document for better KB retrieval
+            accordion_titles = soup.find_all("h4", class_="coh-accordion-title")
+            if accordion_titles:
+                # Delete old monolithic file if it exists
+                if f"{page_name}.txt" in existing:
+                    qc.delete_content(knowledgeBaseId=kb_id, contentId=existing[f"{page_name}.txt"])
+                    log("🗑️", f"Deleted monolithic: {page_name}.txt")
+                for h4 in accordion_titles:
+                    question = h4.get_text(strip=True)
+                    # Find the sibling content div
+                    content_div = h4.find_next_sibling("div", class_="coh-accordion-tabs-content")
+                    answer = content_div.get_text(separator="\n", strip=True) if content_div else ""
+                    if not answer:
+                        continue
+                    qa_text = f"Q: {question}\nA: {answer}\n".encode()
+                    safe_q = re.sub(r"[^a-zA-Z0-9._-]", "_", question)[:80]
+                    upload(f"faq_{safe_q}.txt", qa_text, "text/plain", url)
+            else:
+                clean_text = soup.get_text(separator="\n", strip=True).encode()
+                upload(f"{page_name}.txt", clean_text, "text/plain", url)
+
+            soup = BeautifulSoup(html, "html.parser")
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                if not href.lower().endswith(".pdf"):
+                    continue
+                pdf_url = href if href.startswith("http") else urljoin(url, href)
+                if pdf_url in pdf_seen:
+                    continue
+                pdf_seen.add(pdf_url)
+                try:
+                    r = requests.get(pdf_url, timeout=30)
+                    if r.status_code == 200:
+                        _upload_pdf(qc, kb_id, existing, pdf_url.rsplit("/", 1)[-1], r.content, pdf_url, upload)
+                    else:
+                        log("⚠️", f"PDF skipped: {pdf_url} ({r.status_code})")
+                except Exception as e:
+                    log("⚠️", f"PDF skipped: {pdf_url}: {e}")
+
+        browser.close()
+
+
 # ── Main ────────────────────────────────────────────────────
 
 def main():
@@ -369,8 +521,8 @@ def main():
     bot_alias_arn = outputs["BotAliasArn"]
     gateway_id = outputs["GatewayId"]
     lambda_arn = outputs["LambdaArn"]
+    kb_id = outputs["KnowledgeBaseId"]
     assistant_id = assistant_arn.rsplit("/", 1)[-1]
-
     log("ℹ️", f"Instance:  {instance_id}")
     log("ℹ️", f"Assistant: {assistant_id}")
     log("ℹ️", f"Gateway:   {gateway_id}")
@@ -378,7 +530,10 @@ def main():
     # Step 1
     upload_refund_data(bucket)
 
-    # Step 2
+    # Step 2 — KB content
+    sync_knowledge_base(kb_id)
+
+    # Step 3
     prompt_id, prompt_version_arn, prompt_version_number = sync_ai_prompt(assistant_id)
 
     # Step 3

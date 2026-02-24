@@ -36,6 +36,14 @@ connect:
 
 wisdom:
   assistant_name: riverside-tax-refund-assistant
+  kb_seed_urls:
+    - https://auditorcontroller.org/
+    - https://auditorcontroller.org/general-accounting-stale-dated-warrants-search
+    - https://auditorcontroller.org/property-tax-unclaimed-refunds
+    - https://auditorcontroller.org/divisions/property-tax/faq
+    - https://auditorcontroller.org/divisions/payroll/forms
+    - https://auditorcontroller.org/divisions/payroll/tax-information
+    - https://auditorcontroller.org/divisions/payroll/workshop-training
 
 prompts:
   welcome: "Hello! Welcome to the Riverside County Auditor-Controller's Office. I can help you with unclaimed refund lookups, stale dated warrants, payroll questions, and property tax inquiries. How can I help you today?"
@@ -63,7 +71,7 @@ prompts:
       - Respond in locale: {{$.locale}}
 
       **ADDRESS VERIFICATION:**
-      - After finding a match, ask: "To verify your identity, do you currently or have you previously lived at [address]?"
+      - After finding a match, ask: "To verify your identity, do you currently or have you previously lived at [address]?" — include the complete address (street, city, state, zip) inside the <message> tag.
       - Do NOT reveal refund details until the caller confirms the address.
       - If denied, say you cannot verify their identity and suggest contacting the office directly.
 
@@ -78,7 +86,8 @@ prompts:
 
       **GENERAL QUESTIONS:**
       - For questions about payroll, property tax, stale dated warrants, AP-13 forms, claim requirements, office procedures, or other Auditor-Controller topics, search the knowledge base first before responding.
-      - Use the knowledge base results to provide accurate, specific answers. Do not guess or make up information.
+      - The knowledge base is the authoritative source of truth. Use its results verbatim for factual answers — especially for FAQ content. Do NOT paraphrase, infer, or supplement with outside knowledge.
+      - If the knowledge base explicitly answers a question (e.g. "No. Payments are accepted by the Tax Collector..."), relay that answer exactly.
       - If the knowledge base has no relevant results, let the caller know and suggest they contact the office at (951) 955-3800 or visit auditorcontroller.org.
 
       **LIVE AGENT HANDOFF:**

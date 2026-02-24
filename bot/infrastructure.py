@@ -52,7 +52,7 @@ class NovaSonicConnectStack(Stack):
         ))
         # Q in Connect session data injection (channel-aware prompts)
         role.add_to_policy(iam.PolicyStatement(
-            actions=["qconnect:UpdateSessionData"],
+            actions=["wisdom:UpdateSessionData"],
             resources=[f"arn:aws:wisdom:{self.region}:{self.account}:*"],
         ))
         role.add_to_policy(iam.PolicyStatement(
@@ -116,24 +116,12 @@ class NovaSonicConnectStack(Stack):
             type="AGENT",
         )
 
-        # --- Task 7: Website Q&A Knowledge Base (web crawler) ---
+        # --- Task 7: Website Q&A Knowledge Base (custom, content uploaded by post_deploy.py) ---
         kb = wisdom.CfnKnowledgeBase(
             self, "WebsiteKB",
             name=f"{proj}-auditor-website",
-            knowledge_base_type="MANAGED",
+            knowledge_base_type="CUSTOM",
             description="Riverside County Auditor-Controller website content for general Q&A",
-            source_configuration={
-                "managedSourceConfiguration": {
-                    "webCrawlerConfiguration": {
-                        "urlConfiguration": {
-                            "seedUrls": [{"url": "https://auditorcontroller.org/"}]
-                        },
-                        "scope": "HOST_ONLY",
-                        "crawlerLimits": {"rateLimit": 10},
-                        "inclusionFilters": [".*auditorcontroller\\.org.*"],
-                    }
-                }
-            },
         )
 
         kb_assoc = wisdom.CfnAssistantAssociation(

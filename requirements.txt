@@ -1,3 +1,8 @@
 aws-cdk-lib>=2.170.0
 constructs>=10.0.0
 pyyaml
+requests
+beautifulsoup4
+playwright
+playwright-stealth
+pypdf
