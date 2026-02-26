@@ -268,19 +268,19 @@ SCENARIOS: list[Scenario] = [
         ],
     ),
     Scenario(
-        name="Knowledge base — W2 question",
+        name="Knowledge base — IRS taxable wage limits",
         tags=["knowledge_base", "payroll"],
-        messages=["I dont understand my W2"],
+        messages=["what are the limits on taxable wage from the irs?"],
         expected=(
-            "The bot should search the knowledge base for W-2 information and provide a helpful response "
-            "about W-2 forms, payroll tax information, or direct the caller to the Payroll division. "
-            "It should NOT attempt a refund lookup. It should reference the Payroll division or "
-            "the payroll tax information page (auditorcontroller.org/divisions/payroll/tax-information)."
+            "The bot should search the knowledge base and provide information about IRS taxable wage limits, "
+            "such as Social Security wage limits ($176,100) or Medicare wage thresholds. "
+            "It should NOT attempt a refund lookup. It should reference payroll tax information "
+            "or the Payroll division."
         ),
         critical_checks=[
-            "Bot used knowledge base (response references W-2 or payroll information)",
+            "Bot used knowledge base (response references taxable wage limits or payroll tax info)",
             "Bot did NOT attempt a refund lookup",
-            "Response is relevant to W-2 or payroll tax topics",
+            "Response mentions specific dollar amounts or IRS wage limits",
         ],
     ),
     Scenario(
