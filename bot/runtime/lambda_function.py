@@ -102,13 +102,34 @@ def find_best_match(query: str) -> tuple[str | None, list[dict[str, Any]]]:
     return best_name, matching_records
 
 
-def lookup(name: str) -> str:
+def lookup(name: str, address: str = '') -> str:
     best_name, records = find_best_match(name)
     if not best_name:
         return (
             f"We found no refunds for {name}. "
             "You may have no refunds or your refund may have passed its claim deadline."
         )
+
+    # Disambiguate when multiple distinct addresses exist for the same name
+    addresses = sorted(set(r.get('address', '') for r in records))
+    if len(addresses) > 1:
+        if not address:
+            return json.dumps({
+                'disambiguation_needed': True,
+                'name': best_name,
+                'addresses': addresses,
+                'message': f"We found multiple people named {best_name}. Which address is yours?",
+            })
+        # Filter to the address the caller selected
+        addr_lower = address.lower().strip()
+        records = [r for r in records if addr_lower in r.get('address', '').lower()]
+        if not records:
+            return json.dumps({
+                'disambiguation_needed': True,
+                'name': best_name,
+                'addresses': addresses,
+                'message': f"That address didn't match our records for {best_name}. Which of these is yours?",
+            })
 
     results = []
     for r in records:
@@ -194,7 +215,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             return {'result': 'Transfer flag set. The caller will be routed to a live agent.'}
 
         if 'customer_name' in event:
-            return {'result': lookup(event['customer_name'])}
+            return {'result': lookup(event['customer_name'], event.get('customer_address', ''))}
 
         if 'phone_number' in event:
             return {'result': send_sms(event['phone_number'], event.get('message', ''))}

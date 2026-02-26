@@ -370,6 +370,31 @@ def setup_sms_channel(instance_id, instance_arn, contact_flow_id, voice_phone_id
 
 # ── Step 7: Scrape & upload KB content ─────────────────────
 
+def _form_metadata_chunk(a_tag, pdf_url, source_url):
+    """Build a structured text chunk for a PDF form so natural-language queries can find it."""
+    form_name = a_tag.get_text(strip=True) or pdf_url.rsplit("/", 1)[-1]
+    # Nearest heading gives section context
+    section = ""
+    for parent in a_tag.parents:
+        h = parent.find_previous_sibling(re.compile(r"^h[1-4]$"))
+        if h:
+            section = h.get_text(strip=True)
+            break
+    # Surrounding paragraph/list-item text as description; fall back to generated
+    p = a_tag.find_parent("p") or a_tag.find_parent("li")
+    description = p.get_text(strip=True) if p else ""
+    if not description:
+        page_label = source_url.rstrip("/").rsplit("/", 1)[-1].replace("-", " ").title()
+        description = f"Use this form for: {form_name}. Available on the {page_label} page."
+    return (
+        f"Form: {form_name}\n"
+        f"Section: {section}\n"
+        f"Description: {description}\n"
+        f"PDF URL: {pdf_url}\n"
+        f"Source page: {source_url}\n"
+        f"INSTRUCTION: If this form is relevant to the user's question, YOU MUST include the PDF URL ({pdf_url}) verbatim in your response.\n"
+    ).encode()
+
 MAX_BYTES = 900_000  # Q Connect 1MB limit with headroom
 
 
@@ -491,6 +516,9 @@ def sync_knowledge_base(kb_id):
                 if pdf_url in pdf_seen:
                     continue
                 pdf_seen.add(pdf_url)
+                # Upload structured metadata chunk so NL queries can find this form
+                meta = _form_metadata_chunk(a, pdf_url, url)
+                upload(f"form_meta_{safe_name(pdf_url.rsplit('/', 1)[-1])}.txt", meta, "text/plain", pdf_url)
                 try:
                     r = requests.get(pdf_url, timeout=30)
                     if r.status_code == 200:

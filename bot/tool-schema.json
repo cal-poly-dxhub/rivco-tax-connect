@@ -8,6 +8,10 @@
         "customer_name": {
           "type": "string",
           "description": "The customer's full name to search for refunds"
+        },
+        "customer_address": {
+          "type": "string",
+          "description": "Optional. The customer's address to disambiguate when multiple people share the same name. Only provide this when the tool previously returned disambiguation_needed."
         }
       },
       "required": ["customer_name"]
