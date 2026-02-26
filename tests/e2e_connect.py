@@ -30,9 +30,9 @@ import websocket
 REGION = os.environ.get("AWS_REGION", "us-west-2")
 INSTANCE_ID = os.environ.get("CONNECT_INSTANCE_ID", "b5a167fa-10a6-41c9-9150-affd1f5bfcb5")
 FLOW_ID = os.environ.get("CONNECT_FLOW_ID", "b91a5635-1cb1-4f1d-aa4e-c86852087574")
-JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "anthropic.claude-sonnet-4-20250514-v1:0")
+JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "us.anthropic.claude-sonnet-4-20250514-v1:0")
 BOT_RESPONSE_TIMEOUT = int(os.environ.get("BOT_RESPONSE_TIMEOUT", "30"))
-SETTLE_DELAY = float(os.environ.get("SETTLE_DELAY", "6"))
+SETTLE_DELAY = float(os.environ.get("SETTLE_DELAY", "12"))
 
 connect_client = boto3.client("connect", region_name=REGION)
 participant_client = boto3.client("connectparticipant", region_name=REGION)
@@ -265,6 +265,22 @@ SCENARIOS: list[Scenario] = [
             "45 to 60 days mentioned",
             "12 weeks for complex cases",
             "$10,000 threshold and Board approval mentioned",
+        ],
+    ),
+    Scenario(
+        name="Knowledge base — W2 question",
+        tags=["knowledge_base", "payroll"],
+        messages=["I dont understand my W2"],
+        expected=(
+            "The bot should search the knowledge base for W-2 information and provide a helpful response "
+            "about W-2 forms, payroll tax information, or direct the caller to the Payroll division. "
+            "It should NOT attempt a refund lookup. It should reference the Payroll division or "
+            "the payroll tax information page (auditorcontroller.org/divisions/payroll/tax-information)."
+        ),
+        critical_checks=[
+            "Bot used knowledge base (response references W-2 or payroll information)",
+            "Bot did NOT attempt a refund lookup",
+            "Response is relevant to W-2 or payroll tax topics",
         ],
     ),
     # ── Escalation ────────────────────────────────────────────────────
