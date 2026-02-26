@@ -120,15 +120,20 @@ def lookup(name: str, address: str = '') -> str:
                 'addresses': addresses,
                 'message': f"We found multiple people named {best_name}. Which address is yours?",
             })
-        # Filter to the address the caller selected
+        # Fuzzy match caller's response against addresses
         addr_lower = address.lower().strip()
-        records = [r for r in records if addr_lower in r.get('address', '').lower()]
-        if not records:
+        selected = next((a for a in addresses if addr_lower in a.lower()), None)
+        if not selected:
+            # Try reverse: any address word in the caller's response
+            selected = next((a for a in addresses if any(w in addr_lower for w in a.lower().split() if len(w) >= 4)), None)
+        if selected:
+            records = [r for r in records if r.get('address', '') == selected]
+        else:
             return json.dumps({
                 'disambiguation_needed': True,
                 'name': best_name,
                 'addresses': addresses,
-                'message': f"That address didn't match our records for {best_name}. Which of these is yours?",
+                'message': f"That didn't match our records for {best_name}. Which of these is yours?",
             })
 
     results = []
