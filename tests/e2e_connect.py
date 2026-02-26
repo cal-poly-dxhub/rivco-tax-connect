@@ -283,6 +283,21 @@ SCENARIOS: list[Scenario] = [
             "Response is relevant to W-2 or payroll tax topics",
         ],
     ),
+    Scenario(
+        name="Knowledge base — W2 then escalate",
+        tags=["knowledge_base", "escalation"],
+        messages=["I dont understand my W2", "I want to speak to a real person"],
+        expected=(
+            "The bot should first search the knowledge base and provide W-2 information. "
+            "Then when the caller asks for a live person, the bot should acknowledge and transfer to a live agent. "
+            "It should say something like 'transferring you' or 'connecting you to a representative'."
+        ),
+        critical_checks=[
+            "Bot provided W-2 or payroll information from knowledge base",
+            "Bot acknowledged the transfer request after the W2 answer",
+            "Bot indicated it is transferring to a live agent",
+        ],
+    ),
     # ── Escalation ────────────────────────────────────────────────────
     Scenario(
         name="Escalation — request live agent",
