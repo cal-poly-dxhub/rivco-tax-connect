@@ -7,7 +7,7 @@
       "properties": {
         "customer_name": {
           "type": "string",
-          "description": "The customer's full name to search for refunds"
+          "description": "The customer's name to search for refunds. Can be a full name, first name only, or business name."
         },
         "customer_address": {
           "type": "string",

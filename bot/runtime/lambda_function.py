@@ -54,7 +54,10 @@ def build_claim_url(record: dict[str, Any]) -> str:
 
 def build_portal_url(records: list[dict[str, Any]]) -> str:
     """Build a single claims portal URL with all refund types and amounts."""
-    if not UPLOAD_PORTAL_URL or not records:
+    if not UPLOAD_PORTAL_URL:
+        logger.warning("UPLOAD_PORTAL_URL not set — portal link will be empty")
+        return ''
+    if not records:
         return ''
     types = ','.join(r['refund_type'] for r in records)
     amounts = ','.join(str(r['amount']) for r in records)
@@ -156,8 +159,8 @@ def send_sms(phone_number: str, message: str) -> str:
         return 'Message is required.'
     if not re.match(r'^\+1\d{10}$', phone_number):
         return 'Invalid phone number. Must be a US number in E.164 format (+1XXXXXXXXXX).'
-    if len(message) > 160:
-        message = message[:157] + '...'
+    if len(message) > 1600:
+        message = message[:1597] + '...'
     sns.publish(
         PhoneNumber=phone_number,
         Message=message,
@@ -170,12 +173,24 @@ def send_sms(phone_number: str, message: str) -> str:
 
 
 def inject_channel(event: dict[str, Any]) -> dict[str, str]:
-    """Push the Connect channel into the Q in Connect session as custom data."""
+    """Push the Connect channel and language into the Q in Connect session as custom data."""
     contact_data = event['Details']['ContactData']
     channel = contact_data.get('Channel', 'VOICE')
+    language = (contact_data.get('Attributes') or {}).get('language', 'en_US')
     contact_id = contact_data['ContactId']
     instance_arn = contact_data['InstanceARN']
     instance_id = instance_arn.split('/')[-1]
+
+    # Explicitly set language contact attribute so the flow's Compare block can read it.
+    # For VOICE contacts this is set by the flow's UpdateContactAttributes action,
+    # but for CHAT contacts the initial attribute from start_chat_contact may not
+    # propagate to $.Attributes in time. Setting it here ensures consistent behavior.
+    connect_client.update_contact_attributes(
+        InstanceId=instance_id,
+        InitialContactId=contact_id,
+        Attributes={'language': language},
+    )
+
     assistant_id = os.environ.get('ASSISTANT_ID', '')
 
     if not assistant_id:
@@ -195,9 +210,12 @@ def inject_channel(event: dict[str, Any]) -> dict[str, str]:
     qconnect.update_session_data(
         assistantId=assistant_id,
         sessionId=session_id,
-        data=[{'key': 'channel', 'value': {'stringValue': channel}}],
+        data=[
+            {'key': 'channel', 'value': {'stringValue': channel}},
+            {'key': 'locale', 'value': {'stringValue': language}},
+        ],
     )
-    logger.info("Injected channel=%s into session %s", channel, session_id)
+    logger.info("Injected channel=%s locale=%s into session %s", channel, language, session_id)
     return {'lambdaResult': 'Success'}
 
 

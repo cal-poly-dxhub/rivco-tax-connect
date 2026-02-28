@@ -15,6 +15,8 @@
         "parameters": { "TextToSpeechVoice": { "languageCode": "es-US" } },
         "overrideConsoleVoice": true
       },
+      "action-set-lang-english": { "position": { "x": 940, "y": -300 } },
+      "action-set-lang-spanish": { "position": { "x": 940, "y": -100 } },
       "action-set-caller-phone": { "position": { "x": 1050, "y": -40 } },
       "action-wisdom-session-1": { "position": { "x": 1100, "y": -200 },
         "children": ["action-update-contact-1"],
@@ -47,7 +49,8 @@
       },
       "action-update-contact-2": { "position": { "x": 1380, "y": -200 }, "dynamicParams": [] },
       "action-inject-channel": { "position": { "x": 1520, "y": -200 } },
-      "action-lex-bot": { "position": { "x": 1660, "y": -200 },
+      "action-check-language": { "position": { "x": 1600, "y": -200 } },
+      "action-lex-bot": { "position": { "x": 1660, "y": -300 },
         "parameters": {
           "LexV2Bot": {
             "AliasArn": {
@@ -63,7 +66,24 @@
         "lexV2BotAliasName": "live",
         "conditionMetadata": []
       },
-      "action-check-transfer": { "position": { "x": 1660, "y": -200 } },
+      "action-lex-bot-es": { "position": { "x": 1660, "y": -100 },
+        "parameters": {
+          "LexV2Bot": {
+            "AliasArn": {
+              "displayName": "live",
+              "useLexBotDropdown": true,
+              "lexV2BotName": "TaxRefundBot"
+            }
+          }
+        },
+        "dynamicMetadata": { "x-amz-lex:q-in-connect:ai-agent-arn": false },
+        "useLexBotDropdown": true,
+        "lexV2BotName": "TaxRefundBot",
+        "lexV2BotAliasName": "live",
+        "conditionMetadata": []
+      },
+      "action-check-transfer": { "position": { "x": 1940, "y": -200 } },
+      "action-set-working-queue": { "position": { "x": 2050, "y": -300 } },
       "action-handoff-message": { "position": { "x": 1940, "y": -400 } },
       "action-transfer-to-queue": { "position": { "x": 2160, "y": -300 } },
       "action-goodbye": { "position": { "x": 1940, "y": -100 } },
@@ -143,6 +163,19 @@
       "Identifier": "action-set-voice-english",
       "Type": "UpdateContactTextToSpeechVoice",
       "Transitions": {
+        "NextAction": "action-set-lang-english",
+        "Errors": [{ "NextAction": "action-set-lang-english", "ErrorType": "NoMatchingError" }]
+      }
+    },
+    {
+      "Parameters": {
+        "Attributes": {
+          "language": "en_US"
+        }
+      },
+      "Identifier": "action-set-lang-english",
+      "Type": "UpdateContactAttributes",
+      "Transitions": {
         "NextAction": "action-set-caller-phone",
         "Errors": [{ "NextAction": "action-set-caller-phone", "ErrorType": "NoMatchingError" }]
       }
@@ -155,6 +188,19 @@
       },
       "Identifier": "action-set-voice-spanish",
       "Type": "UpdateContactTextToSpeechVoice",
+      "Transitions": {
+        "NextAction": "action-set-lang-spanish",
+        "Errors": [{ "NextAction": "action-set-lang-spanish", "ErrorType": "NoMatchingError" }]
+      }
+    },
+    {
+      "Parameters": {
+        "Attributes": {
+          "language": "es_US"
+        }
+      },
+      "Identifier": "action-set-lang-spanish",
+      "Type": "UpdateContactAttributes",
       "Transitions": {
         "NextAction": "action-set-caller-phone",
         "Errors": [{ "NextAction": "action-set-caller-phone", "ErrorType": "NoMatchingError" }]
@@ -227,9 +273,32 @@
       "Identifier": "action-inject-channel",
       "Type": "InvokeLambdaFunction",
       "Transitions": {
-        "NextAction": "action-lex-bot",
+        "NextAction": "action-check-language",
         "Errors": [
-          { "NextAction": "action-lex-bot", "ErrorType": "NoMatchingError" }
+          { "NextAction": "action-check-language", "ErrorType": "NoMatchingError" }
+        ]
+      }
+    },
+    {
+      "Parameters": {
+        "ComparisonValue": "$.Attributes.language"
+      },
+      "Identifier": "action-check-language",
+      "Type": "Compare",
+      "Transitions": {
+        "NextAction": "action-lex-bot",
+        "Conditions": [
+          {
+            "NextAction": "action-lex-bot",
+            "Condition": { "Operator": "Equals", "Operands": ["en_US"] }
+          },
+          {
+            "NextAction": "action-lex-bot-es",
+            "Condition": { "Operator": "Equals", "Operands": ["es_US"] }
+          }
+        ],
+        "Errors": [
+          { "NextAction": "action-lex-bot", "ErrorType": "NoMatchingCondition" }
         ]
       }
     },
@@ -242,6 +311,24 @@
         }
       },
       "Identifier": "action-lex-bot",
+      "Type": "ConnectParticipantWithLexBot",
+      "Transitions": {
+        "NextAction": "action-check-transfer",
+        "Errors": [
+          { "NextAction": "action-check-transfer", "ErrorType": "NoMatchingCondition" },
+          { "NextAction": "action-error", "ErrorType": "NoMatchingError" }
+        ]
+      }
+    },
+    {
+      "Parameters": {
+        "Text": "¡Hola! Bienvenido al servicio de búsqueda de reembolsos de impuestos no reclamados del Condado de Riverside. Para comenzar, por favor proporcione su nombre o el nombre de su empresa.",
+        "LexV2Bot": { "AliasArn": "${BotAliasArn}" },
+        "LexSessionAttributes": {
+          "x-amz-lex:q-in-connect:ai-agent-arn": "${AIAgentArn}"
+        }
+      },
+      "Identifier": "action-lex-bot-es",
       "Type": "ConnectParticipantWithLexBot",
       "Transitions": {
         "NextAction": "action-check-transfer",
