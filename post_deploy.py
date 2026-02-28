@@ -220,9 +220,13 @@ def sync_contact_flow(instance_id, assistant_arn, ai_agent_arn, bot_alias_arn, q
 
     if existing:
         flow_id = existing["Id"]
-        connect.update_contact_flow_content(
-            InstanceId=instance_id, ContactFlowId=flow_id, Content=content
-        )
+        try:
+            connect.update_contact_flow_content(
+                InstanceId=instance_id, ContactFlowId=flow_id, Content=content
+            )
+        except connect.exceptions.InvalidContactFlowException as e:
+            log("❌", f"Flow validation failed: {e.response}")
+            raise
         log("✅", f"Updated flow: {flow_id}")
     else:
         resp = connect.create_contact_flow(
@@ -606,5 +610,43 @@ def main():
         print()
 
 
+def flow_only():
+    """Deploy only the contact flow."""
+    print("=" * 44)
+    print(f"  Contact Flow Update for {STACK_NAME}")
+    print("=" * 44)
+
+    log_step("Reading stack outputs...")
+    outputs = get_stack_outputs()
+
+    instance_id = outputs["ConnectInstanceId"]
+    assistant_arn = outputs["AssistantArn"]
+    bot_alias_arn = outputs["BotAliasArn"]
+    queue_arn = outputs["QueueArn"]
+    lambda_arn = outputs["LambdaArn"]
+    assistant_id = assistant_arn.rsplit("/", 1)[-1]
+
+    # Resolve AI agent ARN
+    qc = boto3.client("qconnect", region_name=REGION)
+    agents = qc.list_ai_agents(assistantId=assistant_id)["aiAgentSummaries"]
+    agent = next(
+        (a for a in agents if a["name"] == AGENT_NAME and a["type"] == "ORCHESTRATION"),
+        None,
+    )
+    if not agent:
+        log("❌", f"No ORCHESTRATION agent named '{AGENT_NAME}' found.")
+        sys.exit(1)
+    ai_agent_arn = agent["aiAgentArn"] + ":$LATEST"
+    log("ℹ️", f"Agent ARN: {ai_agent_arn}")
+
+    flow_id = sync_contact_flow(
+        instance_id, assistant_arn, ai_agent_arn, bot_alias_arn, queue_arn, lambda_arn
+    )
+    print(f"\n  ✅ Flow updated: {flow_id}\n")
+
+
 if __name__ == "__main__":
-    main()
+    if "--flow-only" in sys.argv:
+        flow_only()
+    else:
+        main()
