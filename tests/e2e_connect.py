@@ -49,6 +49,7 @@ class Scenario:
     messages: list[str]
     expected: str
     critical_checks: list[str] = field(default_factory=list)
+    attributes: dict[str, str] = field(default_factory=dict)
 
 
 SCENARIOS: list[Scenario] = [
@@ -116,7 +117,7 @@ SCENARIOS: list[Scenario] = [
     # ── Lookup: multiple records same person ──────────────────────────
     Scenario(
         name="Multiple refunds — same person, mixed types",
-        tags=["lookup", "verification", "multi_refund"],
+        tags=["lookup", "verification", "multi_refund", "demo"],
         messages=["My name is Michael Brown", "Yes"],
         expected=(
             "The bot should find MULTIPLE refunds for Michael Brown (3 stale warrants and 1 property tax, all at the same address in Riverside). "
@@ -132,7 +133,7 @@ SCENARIOS: list[Scenario] = [
     # ── Disambiguation ────────────────────────────────────────────────
     Scenario(
         name="Disambiguation — multiple people, same name",
-        tags=["lookup", "disambiguation"],
+        tags=["lookup", "disambiguation", "demo"],
         messages=["My name is David Wilson", "Temecula", "Yes"],
         expected=(
             "The bot should detect that there are multiple people named David Wilson at different addresses. "
@@ -284,17 +285,18 @@ SCENARIOS: list[Scenario] = [
         ],
     ),
     Scenario(
-        name="Knowledge base — W2 then escalate",
-        tags=["knowledge_base", "escalation"],
-        messages=["I dont understand my W2", "I want to speak to a real person"],
+        name="Knowledge base — IRS wage limits then escalate",
+        tags=["knowledge_base", "escalation", "demo"],
+        messages=["what are the limits on taxable wage from the irs?", "I want to speak to a real person"],
         expected=(
-            "The bot should first search the knowledge base and provide W-2 information. "
+            "The bot should first search the knowledge base and provide IRS taxable wage limit information "
+            "(e.g. Social Security wage base $176,100, Medicare has no limit). "
             "Then when the caller asks for a live person, the bot should acknowledge and transfer to a live agent. "
             "It should say something like 'transferring you' or 'connecting you to a representative'."
         ),
         critical_checks=[
-            "Bot provided W-2 or payroll information from knowledge base",
-            "Bot acknowledged the transfer request after the W2 answer",
+            "Bot provided IRS taxable wage limit information from knowledge base",
+            "Bot acknowledged the transfer request",
             "Bot indicated it is transferring to a live agent",
         ],
     ),
@@ -354,6 +356,109 @@ SCENARIOS: list[Scenario] = [
             "Redirected to relevant county services",
         ],
     ),
+    # ── Portal link regression ────────────────────────────────────────
+    Scenario(
+        name="Portal link — pre-filled URL, not generic",
+        tags=["lookup", "portal_link", "regression"],
+        messages=["My name is David Wilson", "Magnolia Ave", "Yes"],
+        expected=(
+            "After disambiguation and address verification, the bot should reveal the refund details "
+            "and provide a Claims Portal link. The link MUST be the pre-filled portal URL from the tool response "
+            "(an S3 website URL like http://<bucket>.s3-website-<region>.amazonaws.com?name=...&type=...&amount=...). "
+            "It must NOT be a generic or made-up URL like 'rivcoauditor.org/claims' or 'auditorcontroller.org/claims'. "
+            "The URL should contain query parameters with the customer's name, refund type, and amount."
+        ),
+        critical_checks=[
+            "Portal link is an S3 website URL (contains 's3-website' or 's3.amazonaws.com'), NOT a generic rivcoauditor.org or auditorcontroller.org URL",
+            "Portal link contains query parameters (has '?' followed by name, type, amount params)",
+            "Bot did not fabricate or hallucinate a URL",
+        ],
+    ),
+    # ── SMS sending (chat-based proxy for voice SMS flow) ─────────────
+    Scenario(
+        name="SMS sending — bot responds after phone number",
+        tags=["lookup", "disambiguation", "sms", "regression"],
+        messages=[
+            "My name is David Wilson",
+            "Magnolia",
+            "Yes",
+            "Can you send that link to my phone via text? My number is 951-555-0199",
+        ],
+        expected=(
+            "After disambiguation (Magnolia) and address verification, the bot should reveal the refund. "
+            "When the caller then asks to receive the link via text and provides a phone number, the bot must NOT go silent. "
+            "It should respond in one of these acceptable ways: "
+            "(a) confirm the phone number and attempt to send an SMS, "
+            "(b) say it already provided the link in the chat, "
+            "(c) ask to confirm the number before sending. "
+            "The critical requirement is that the bot RESPONDS — any reasonable reply is acceptable. "
+            "Silence or no response after the phone number is a FAIL."
+        ),
+        critical_checks=[
+            "Bot responded after the user provided a phone number (did not go silent)",
+            "Bot's response was relevant to the SMS/text request (acknowledged the phone number, offered to send, or explained the link was already provided)",
+        ],
+    ),
+    # ── Spanish mode ──────────────────────────────────────────────────
+    Scenario(
+        name="Spanish — greeting is in Spanish",
+        tags=["spanish"],
+        messages=[],
+        attributes={"language": "es_US"},
+        expected=(
+            "The bot's initial greeting/welcome message should be in Spanish, not English. "
+            "It should welcome the caller and ask for their name in Spanish."
+        ),
+        critical_checks=[
+            "Greeting is in Spanish (contains Spanish words like 'Bienvenido', 'nombre', 'reembolso', or similar)",
+            "Greeting is NOT in English",
+        ],
+    ),
+    Scenario(
+        name="Spanish — lookup responds in Spanish",
+        tags=["spanish", "lookup"],
+        messages=["Mi nombre es Jane Doe", "Sí"],
+        attributes={"language": "es_US"},
+        expected=(
+            "The bot should respond entirely in Spanish throughout the conversation. "
+            "It should find a refund for Jane Doe, ask for address verification in Spanish, "
+            "and after the caller confirms with 'Sí', reveal the refund details in Spanish. "
+            "A claims portal link should be provided."
+        ),
+        critical_checks=[
+            "All bot responses are in Spanish",
+            "Address verification was requested in Spanish before revealing amounts",
+            "Refund details were revealed in Spanish after confirmation",
+        ],
+    ),
+    Scenario(
+        name="Spanish — no match responds in Spanish",
+        tags=["spanish", "no_match"],
+        messages=["Mi nombre es Zzzzzyx Qqqqqbert"],
+        attributes={"language": "es_US"},
+        expected=(
+            "The bot should respond in Spanish indicating no refunds were found. "
+            "The 'no match' message should be in Spanish, not English."
+        ),
+        critical_checks=[
+            "No-match response is in Spanish",
+            "Response is NOT in English",
+        ],
+    ),
+    Scenario(
+        name="Spanish — knowledge base question in Spanish",
+        tags=["spanish", "knowledge_base"],
+        messages=["¿Cuál es el horario de la oficina?"],
+        attributes={"language": "es_US"},
+        expected=(
+            "The bot should answer the office hours question in Spanish. "
+            "It should mention Monday-Thursday 8am-5pm and Friday 8am-4:30pm, but in Spanish."
+        ),
+        critical_checks=[
+            "Response is in Spanish",
+            "Office hours information is present (Monday-Thursday and Friday hours)",
+        ],
+    ),
 ]
 
 
@@ -372,13 +477,16 @@ class ChatSession:
         self._bot_count = 0
         self._typing_at = 0.0
 
-    def start(self) -> None:
-        resp = connect_client.start_chat_contact(
+    def start(self, attributes: dict[str, str] | None = None) -> None:
+        kwargs = dict(
             InstanceId=INSTANCE_ID,
             ContactFlowId=FLOW_ID,
             ParticipantDetails={"DisplayName": "E2ETest"},
             ChatDurationInMinutes=60,
         )
+        if attributes:
+            kwargs["Attributes"] = attributes
+        resp = connect_client.start_chat_contact(**kwargs)
         token = resp["ParticipantToken"]
         conn = participant_client.create_participant_connection(
             ParticipantToken=token, Type=["WEBSOCKET", "CONNECTION_CREDENTIALS"]
@@ -585,7 +693,7 @@ def run_scenario(idx: int, scenario: Scenario, total: int) -> dict:
     session = ChatSession()
     t0 = time.time()
     try:
-        session.start()
+        session.start(attributes=scenario.attributes or None)
 
         for i, msg in enumerate(scenario.messages):
             session.send(msg)
