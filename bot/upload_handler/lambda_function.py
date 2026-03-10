@@ -13,6 +13,7 @@ ALLOWED_TYPES = {
     "image/jpeg",
     "image/png",
     "image/heic",
+    "application/json",
 }
 MAX_SIZE = 10 * 1024 * 1024  # 10 MB
 _SAFE_FILENAME = re.compile(r'[^\w.\-]')
@@ -68,11 +69,18 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "Bucket": BUCKET,
                 "Key": key,
                 "ContentType": content_type,
-                "Metadata": {"name": name, "refund-type": refund_type},
             },
             ExpiresIn=900,
         )
         urls.append({"filename": filename, "uploadUrl": presigned, "key": key})
+
+    # Write submission manifest so metadata is preserved alongside uploads
+    s3.put_object(
+        Bucket=BUCKET,
+        Key=f"{submission_id}/_manifest.json",
+        Body=json.dumps({"name": name, "refundType": refund_type}),
+        ContentType="application/json",
+    )
 
     return {
         "statusCode": 200,

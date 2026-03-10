@@ -468,6 +468,7 @@ class NovaSonicConnectStack(Stack):
             },
         )
         uploads_bucket.grant_put(upload_fn)
+        uploads_bucket.grant_write(upload_fn)
 
         # API Gateway REST API
         upload_api = apigw.RestApi(
@@ -503,19 +504,20 @@ class NovaSonicConnectStack(Stack):
             ),
         )
 
-        s3deploy.BucketDeployment(
+        portal_deploy = s3deploy.BucketDeployment(
             self, "PortalDeployment",
             sources=[s3deploy.Source.asset("bot/upload_portal")],
             destination_bucket=portal_bucket,
         )
 
         config_js = f'window.API_URL = "{upload_api.url.rstrip("/")}";\n'
-        s3deploy.BucketDeployment(
+        portal_config = s3deploy.BucketDeployment(
             self, "PortalConfig",
             sources=[s3deploy.Source.data("config.js", config_js)],
             destination_bucket=portal_bucket,
             prune=False,
         )
+        portal_config.node.add_dependency(portal_deploy)
 
         # Wire upload portal URL into main Lambda so the bot can reference it
         fn.add_environment("UPLOAD_PORTAL_URL", portal_bucket.bucket_website_url)
