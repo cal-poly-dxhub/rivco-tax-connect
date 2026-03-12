@@ -25,10 +25,6 @@ By deploying an AI agent, the county can consolidate all unclaimed fund sources 
 
 **_While built for Riverside County, the solution is designed to be adaptable for any government agency or organization that needs to provide secure, AI-assisted record lookups over voice, chat, and SMS channels. The AI agent's behavior, data sources, and verification logic can be customized through configuration to match different use cases._**
 
-## Demo
-
-<!-- Add demo video link here -->
-
 # Description
 
 ## Problem Statement
