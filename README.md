@@ -9,7 +9,7 @@
 | [Troubleshooting](#troubleshooting)     | Common issues and solutions                                      |
 | [Lessons Learned](#lessons-learned)     | Key takeaways and insights from the project, and next steps      |
 | [Bill of Materials](#bill-of-materials) | Cost of deployment and resources used                            |
-| [Credits](#credits)                     | Meet the team behind this project                                |
+| [Support](#support)                     | The team behind this project                                     |
 | [License](#license)                     | See the project's license information                            |
 | [Disclaimers](#disclaimers)             | Disclaimers information                                          |
 
@@ -314,11 +314,12 @@ See [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md) for detailed deployment learnin
 
 For current AWS pricing information, visit the [AWS Pricing Calculator](https://calculator.aws).
 
-# Credits
+# Support
 
 **Riverside County Tax Refund Lookup** is a project developed for the Riverside County Auditor-Controller's office.
 
-> To be updated with team members and project leadership.
+Darren Kraker, Sr. Solutions Architect - dkraker@amazon.com
+Nick Riley, Student Developer - njriley@calpoly.edu
 
 # License
 
