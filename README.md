@@ -318,8 +318,8 @@ For current AWS pricing information, visit the [AWS Pricing Calculator](https://
 
 **Riverside County Tax Refund Lookup** is a project developed for the Riverside County Auditor-Controller's office.
 
-Darren Kraker, Sr. Solutions Architect - dkraker@amazon.com
-Nick Riley, Student Developer - njriley@calpoly.edu
+- Darren Kraker, Sr. Solutions Architect - dkraker@amazon.com
+- Nick Riley, Student Developer - njriley@calpoly.edu
 
 # License
 
