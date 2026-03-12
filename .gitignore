@@ -30,3 +30,4 @@ bot/runtime/typing_extensions.py
 
 # Secrets
 .env
+test-widget.html
