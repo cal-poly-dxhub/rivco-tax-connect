@@ -5,8 +5,12 @@
 | [Overview](#overview)                   | See the motivation behind this project                           |
 | [Description](#description)             | Learn more about the problem, and how we approached the solution |
 | [Deployment](#deployment)               | How to install and deploy the solution                           |
+| [Environment Variables](#environment-variables) | Configuration options for Lambda functions |
+| [Data Format](#data-format)             | Schema and examples for refund data                              |
 | [Usage](#usage)                         | How to use the Tax Refund Lookup bot                             |
 | [Troubleshooting](#troubleshooting)     | Common issues and solutions                                      |
+| [Post-Deploy Troubleshooting](#post-deploy-troubleshooting) | Deployment script issues and recovery |
+| [SMS Setup](#sms-setup)                 | Enable SMS channel for text-based refund lookups                 |
 | [Lessons Learned](#lessons-learned)     | Key takeaways and insights from the project, and next steps      |
 | [Bill of Materials](#bill-of-materials) | Cost of deployment and resources used                            |
 | [Support](#support)                     | The team behind this project                                     |
@@ -216,6 +220,92 @@ This script:
 2. Complete the console setup steps above
 3. Run `python3 post_deploy.py` again → updates agent prompt, versions it, and wires it into the flow
 
+For detailed deployment troubleshooting and recovery procedures, see [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md).
+
+## Environment Variables
+
+The Lambda functions use the following environment variables, configured in `config.yaml`:
+
+| Variable | Purpose | Example |
+|----------|---------|---------|
+| `PROPERTY_TAX_URL` | URL for property tax claim form | `https://apps.auditorcontroller.org/unclaimedrefund/refundform.aspx` |
+| `AP13_PDF_URL` | URL for AP-13 stale warrant affidavit form | `https://auditorcontroller.org/.../AP13Affidavit...pdf` |
+| `FUZZY_THRESHOLD` | Jaro-Winkler similarity threshold for name matching (0.0-1.0) | `0.8` |
+| `S3_BUCKET` | S3 bucket containing refund data | Auto-set by CDK |
+| `DATA_FILE` | JSONL file name in S3 | `refunds_demo_balanced.jsonl` |
+| `UPLOAD_PORTAL_URL` | URL to the claims document upload portal | Auto-set by CDK |
+
+**Adjusting the fuzzy threshold:**
+- Lower values (e.g., 0.7) match more loosely, catching more misspellings but risking false positives
+- Higher values (e.g., 0.9) require closer matches, reducing false positives but missing some legitimate variations
+- Default 0.8 balances accuracy and recall for common name variations
+
+## Data Format
+
+The refund data is stored as JSONL (JSON Lines) in S3. Each line is a complete JSON object representing one refund record.
+
+### Schema
+
+```json
+{
+  "name": "John A Smith",
+  "address": "123 Main St, Anytown, CA 92241",
+  "city": "Anytown",
+  "state": "CA",
+  "zip": "92241",
+  "refund_type": "PROPERTY_TAX",
+  "amount": 1234.56,
+  "claim_deadline": "12/31/2025",
+  "index": "12345",
+  "assessment": "67890",
+  "taxyear": "2023"
+}
+```
+
+### Field Descriptions
+
+| Field | Type | Description | Example |
+|-------|------|-------------|---------|
+| `name` | string | Full name of the refund claimant | "John A Smith" |
+| `address` | string | Full street address (used for identity verification) | "123 Main St, Anytown, CA 92241" |
+| `city` | string | City name | "Anytown" |
+| `state` | string | State abbreviation | "CA" |
+| `zip` | string | ZIP code | "92241" |
+| `refund_type` | string | Type of refund: `PROPERTY_TAX`, `STALE_WARRANT`, or `PAYROLL` | "PROPERTY_TAX" |
+| `amount` | number | Refund amount in dollars | 1234.56 |
+| `claim_deadline` | string | Deadline to claim refund (MM/DD/YYYY format) | "12/31/2025" |
+| `index` | string | Property tax index number (for PROPERTY_TAX only) | "12345" |
+| `assessment` | string | Property assessment number (for PROPERTY_TAX only) | "67890" |
+| `taxyear` | string | Tax year (for PROPERTY_TAX only) | "2023" |
+
+### Example Records
+
+**Property Tax Refund:**
+```json
+{"name": "Jane Doe", "address": "456 Oak Ave, Sampleville, CA 92345", "city": "Sampleville", "state": "CA", "zip": "92345", "refund_type": "PROPERTY_TAX", "amount": 879.59, "claim_deadline": "06/30/2026", "index": "54321", "assessment": "98765", "taxyear": "2024"}
+```
+
+**Stale Warrant Refund:**
+```json
+{"name": "Robert Johnson", "address": "789 Pine Rd, Riverside, CA 92501", "city": "Riverside", "state": "CA", "zip": "92501", "refund_type": "STALE_WARRANT", "amount": 1959.14, "claim_deadline": "03/15/2027"}
+```
+
+**Payroll Refund:**
+```json
+{"name": "Maria Garcia", "address": "321 Elm St, Corona, CA 92879", "city": "Corona", "state": "CA", "zip": "92879", "refund_type": "PAYROLL", "amount": 2076.70, "claim_deadline": "12/31/2099"}
+```
+
+### Preparing Your Own Data
+
+To use your own refund data:
+
+1. Create a JSONL file with one record per line
+2. Ensure all required fields are present
+3. Use MM/DD/YYYY format for `claim_deadline`
+4. Upload to S3: `aws s3 cp your_data.jsonl s3://<bucket>/your_data.jsonl`
+5. Update `config.yaml` with the new filename: `data_file: your_data.jsonl`
+6. Lambda will use the new data on the next invocation (cache expires automatically)
+
 ## Configure Nova Sonic (Optional, for Voice)
 
 1. In the Connect admin site, go to **Routing** → **Flows** → **Conversational AI**
@@ -265,7 +355,100 @@ This script:
 | SMS not sending | Toll-free registration not approved | Check status in End User Messaging console; SMS won't work until carrier approval |
 | CDK deploy fails on Lambda bundling | Docker not running | Start Docker and retry |
 
-See [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md) for detailed deployment learnings and additional troubleshooting.
+## Post-Deploy Troubleshooting
+
+### Script Fails at "Uploading Refund Data"
+
+**Symptom**: `refunds_demo_balanced.jsonl not found`
+
+**Solutions**:
+1. Verify file exists in the project root: `ls -la refunds_demo_balanced.jsonl`
+2. If missing, create demo data using the [Data Format](#data-format) schema
+3. Ensure the file is in the same directory as `post_deploy.py`
+
+### Script Fails at "Creating AI Prompt"
+
+**Symptom**: Q in Connect API error or timeout
+
+**Solutions**:
+1. Verify Q in Connect is enabled in your region (us-west-2)
+2. Check IAM permissions: `aws iam get-user` and verify `qconnect:*` actions are allowed
+3. Validate `config.yaml` syntax: `python3 -c "import yaml; yaml.safe_load(open('config.yaml'))"`
+4. Check CloudWatch logs: `aws logs tail /aws/lambda/post-deploy --follow`
+
+### Script Fails at "Syncing Knowledge Base"
+
+**Symptom**: Playwright timeout or URL fetch error
+
+**Solutions**:
+1. Verify seed URLs are accessible: `curl -I https://auditorcontroller.org/`
+2. Check network connectivity from Lambda environment
+3. Reduce the number of seed URLs in `config.yaml` to test with fewer pages
+4. Check CloudWatch logs for detailed error: `aws logs tail /aws/lambda/post-deploy --follow`
+
+### Lambda Returns "No Refunds Found"
+
+**Symptom**: Tax lookup always returns no matches
+
+**Solutions**:
+1. Verify refund data was uploaded: `aws s3 ls s3://<bucket>/refunds_demo_balanced.jsonl`
+2. Check data file format: `aws s3 cp s3://<bucket>/refunds_demo_balanced.jsonl - | head -1 | jq .`
+3. Verify claim deadlines in data are in the future: `aws s3 cp s3://<bucket>/refunds_demo_balanced.jsonl - | jq '.claim_deadline' | head -5`
+4. Check Lambda logs: `aws logs tail /aws/lambda/riverside-tax-lookup --follow`
+
+For additional troubleshooting and recovery procedures, see [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md).
+
+## SMS Setup
+
+SMS support allows callers to receive claim links via text message. This requires registering a toll-free number with AWS and your carrier.
+
+### Prerequisites
+
+- An active Amazon Connect instance
+- A toll-free number (or existing number to repurpose)
+- Carrier approval (typically 1-2 business days)
+
+### Registration Steps
+
+1. **Request Toll-Free Number**:
+   - Go to **Amazon Connect** → **Channels** → **Phone Numbers**
+   - Click **Request phone number**
+   - Select **Toll-free** and choose a number
+   - Fill out the use case form (explain this is for government refund notifications)
+   - Submit for carrier approval
+
+2. **Wait for Approval**:
+   - AWS will notify you via email when the number is approved
+   - This typically takes 1-2 business days
+   - Check status in **End User Messaging** console
+
+3. **Enable SMS in Contact Flow**:
+   - Once approved, the number will appear in your phone number list
+   - The `post_deploy.py` script will automatically configure it for SMS
+   - Run: `python3 post_deploy.py`
+
+4. **Test SMS**:
+   - Text the toll-free number with a name
+   - Bot should respond with refund information or "no refunds found"
+
+### SMS Message Format
+
+When a voice caller requests to receive a claim link via SMS, the bot sends:
+
+```
+Riverside County Claims Portal: https://s3.amazonaws.com/...?submission_id=...
+```
+
+The link is a presigned S3 URL valid for 24 hours. After expiration, the caller must call back to request a new link.
+
+### Troubleshooting SMS
+
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| SMS not sending | Toll-free not approved | Check status in End User Messaging console |
+| SMS sending but no response | Contact flow not configured for SMS | Verify SMS channel is enabled in Connect |
+| SMS response is generic error | Lambda permission issue | Check Lambda execution role has SNS permissions |
+| SMS link expires too quickly | Presigned URL expiry too short | Adjust `PACKAGE_EXPIRY` in `bot/upload_handler/lambda_function.py` |
 
 # Lessons Learned
 
