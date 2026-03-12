@@ -469,6 +469,7 @@ class NovaSonicConnectStack(Stack):
         )
         uploads_bucket.grant_put(upload_fn)
         uploads_bucket.grant_write(upload_fn)
+        uploads_bucket.grant_read(upload_fn)
 
         # API Gateway REST API
         upload_api = apigw.RestApi(
@@ -476,7 +477,7 @@ class NovaSonicConnectStack(Stack):
             rest_api_name=f"{proj}-upload-api",
             default_cors_preflight_options=apigw.CorsOptions(
                 allow_origins=[portal_origin],
-                allow_methods=["POST", "OPTIONS"],
+                allow_methods=["POST", "GET", "OPTIONS"],
                 allow_headers=["Content-Type"],
             ),
             deploy_options=apigw.StageOptions(
@@ -486,6 +487,9 @@ class NovaSonicConnectStack(Stack):
         )
         upload_api.root.add_resource("upload").add_method(
             "POST", apigw.LambdaIntegration(upload_fn),
+        )
+        upload_api.root.add_resource("package").add_method(
+            "GET", apigw.LambdaIntegration(upload_fn),
         )
 
         # S3 bucket for static portal site (public website hosting)

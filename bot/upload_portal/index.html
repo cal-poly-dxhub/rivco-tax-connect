@@ -414,6 +414,22 @@
                 box-shadow: none;
             }
 
+            /* Email fallback link */
+            .email-fallback {
+                text-align: center;
+                margin-top: 0.75rem;
+                font-size: 0.85rem;
+                color: var(--text-muted);
+            }
+            .email-fallback a {
+                color: var(--blue);
+                text-decoration: none;
+                font-weight: 600;
+            }
+            .email-fallback a:hover {
+                text-decoration: underline;
+            }
+
             /* Status messages */
             .status {
                 margin-top: 1rem;
@@ -717,6 +733,9 @@
                     <button type="button" id="submitBtn">
                         Submit Claim Documents
                     </button>
+                    <div class="email-fallback">
+                        Prefer email? <a href="#" id="emailBtn">Send documents via email instead</a>
+                    </div>
                     <div id="status" class="status" role="alert"></div>
                 </form>
             </div>
@@ -1084,18 +1103,114 @@
                             });
                         }
 
+                        var packageUrl = API_URL + "/package?id=" + data.submissionId
+                            + "&password=" + encodeURIComponent(document.getElementById("password").value.trim());
+
                         setStatus(
                             "ok",
                             "Claim docs submitted successfully! Submission ID: " +
                                 data.submissionId,
                         );
+
+                        // Show admin package link and email option
+                        var emailFallback = document.querySelector(".email-fallback");
+                        emailFallback.innerHTML = '✅ <a href="' + packageUrl + '" target="_blank">View submission package</a>'
+                            + ' &nbsp;|&nbsp; <a href="#" id="emailPkgBtn">Email package link to admin</a>';
+                        document.getElementById("emailPkgBtn").addEventListener("click", function (ev) {
+                            ev.preventDefault();
+                            var claimantName = document.getElementById("name").value.trim() || "Claimant";
+                            var selected = getSelectedTypes();
+                            var typeLabels = selected.map(function (t) {
+                                return t.replace(/_/g, " ").replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+                            });
+                            var emails = [];
+                            selected.forEach(function (t) {
+                                var addr = EMAIL_MAP[t];
+                                if (addr && emails.indexOf(addr) === -1) emails.push(addr);
+                            });
+                            var to = emails.join(",");
+                            var subject = "Unclaimed Refund Submission — " + typeLabels.join(", ") + " — " + claimantName;
+                            var body = "A new claim submission has been received.\n\n"
+                                + "Claimant: " + claimantName + "\n"
+                                + "Submission ID: " + data.submissionId + "\n"
+                                + "Refund Type(s): " + typeLabels.join(", ") + "\n\n"
+                                + "Review and download all submitted documents here:\n"
+                                + packageUrl + "\n\n"
+                                + "(Link expires in 7 days)";
+                            window.location.href = "mailto:" + encodeURIComponent(to)
+                                + "?subject=" + encodeURIComponent(subject)
+                                + "&body=" + encodeURIComponent(body);
+                        });
+
                         form.reset();
                     } catch (err) {
-                        setStatus("ok", "Claim docs submitted successfully!");
-                        form.reset();
+                        setStatus("err", "Upload failed: " + (err.message || "Please try again."));
                     } finally {
                         submitBtn.disabled = false;
                     }
+                });
+
+                // --- Email Documents button ---
+                var EMAIL_MAP = {
+                    PROPERTY_TAX: "ptrefund@rivco.org",
+                    STALE_WARRANT: "unclaimedrefunds@rivco.org",
+                    PAYROLL: "payrollrefunds@rivco.org",
+                };
+
+                document.getElementById("emailBtn").addEventListener("click", function (e) {
+                    e.preventDefault();
+                    var selected = getSelectedTypes();
+                    if (selected.length === 0) {
+                        setStatus("err", "Please select at least one refund type.");
+                        return;
+                    }
+
+                    var claimantName = document.getElementById("name").value.trim() || "Claimant";
+
+                    // Pick the email for the first selected type (or combine if multiple)
+                    var emails = [];
+                    selected.forEach(function (t) {
+                        var addr = EMAIL_MAP[t];
+                        if (addr && emails.indexOf(addr) === -1) emails.push(addr);
+                    });
+                    var to = emails.join(",");
+
+                    var typeLabels = selected.map(function (t) {
+                        return t.replace(/_/g, " ").replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+                    });
+
+                    var refundIds = (params.get("id") || "").split(",").filter(Boolean);
+                    var amountList = (params.get("amount") || "").split(",").filter(Boolean);
+
+                    var subject = "Unclaimed Refund Claim — " + typeLabels.join(", ") + " — " + claimantName;
+
+                    var body = "Dear Auditor-Controller's Office,\n\n"
+                        + "I am submitting my claim for the following unclaimed refund(s):\n\n"
+                        + "Claimant Name: " + claimantName + "\n";
+
+                    selected.forEach(function (t, i) {
+                        var label = typeLabels[i];
+                        var id = refundIds[i] || "N/A";
+                        var amt = amountList[i] ? "$" + parseFloat(amountList[i]).toFixed(2) : "N/A";
+                        body += "\n  • " + label + "  |  ID: " + id + "  |  Amount: " + amt;
+                    });
+
+                    body += "\n\nPlease find the required supporting documents attached to this email:"
+                        + "\n  — Government-issued photo ID";
+                    if (selected.indexOf("STALE_WARRANT") !== -1 || selected.indexOf("PAYROLL") !== -1) {
+                        body += "\n  — Proof of current address";
+                        body += "\n  — Signed AP13 Affidavit";
+                    }
+                    if (selected.indexOf("PROPERTY_TAX") !== -1) {
+                        body += "\n  — Proof of payment or proof of ownership";
+                        body += "\n  — Signed Property Tax Claim Form";
+                    }
+
+                    body += "\n\nThank you,\n" + claimantName;
+
+                    window.location.href = "mailto:" + encodeURIComponent(to)
+                        + "?subject=" + encodeURIComponent(subject)
+                        + "&body=" + encodeURIComponent(body);
                 });
             })();
         </script>
