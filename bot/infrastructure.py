@@ -13,6 +13,7 @@ from aws_cdk import (
     aws_logs as logs,
     aws_bedrockagentcore as agentcore,
     aws_apigateway as apigw,
+    aws_dynamodb as dynamodb,
     custom_resources as cr,
 )
 from constructs import Construct
@@ -452,6 +453,15 @@ class NovaSonicConnectStack(Stack):
             )],
         )
 
+        # DynamoDB table for claim submissions
+        submissions_table = dynamodb.Table(
+            self, "ClaimSubmissions",
+            table_name=f"{proj}-claim-submissions",
+            partition_key=dynamodb.Attribute(name="submissionId", type=dynamodb.AttributeType.STRING),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+
         # Lambda for presigned URL generation
         upload_fn = _lambda.Function(
             self, "UploadHandler",
@@ -464,8 +474,10 @@ class NovaSonicConnectStack(Stack):
             environment={
                 "UPLOAD_BUCKET": uploads_bucket.bucket_name,
                 "ALLOWED_ORIGIN": portal_origin,
+                "TABLE_NAME": submissions_table.table_name,
             },
         )
+        submissions_table.grant_read_write_data(upload_fn)
         uploads_bucket.grant_put(upload_fn)
         uploads_bucket.grant_write(upload_fn)
         uploads_bucket.grant_read(upload_fn)
@@ -493,6 +505,10 @@ class NovaSonicConnectStack(Stack):
 
         upload_api.root.add_resource("status").add_method(
             "GET", apigw.LambdaIntegration(upload_fn),
+        )
+
+        upload_api.root.add_resource("upload-complete").add_method(
+            "POST", apigw.LambdaIntegration(upload_fn),
         )
 
         # S3 bucket for static portal site (public website hosting)
@@ -528,3 +544,4 @@ class NovaSonicConnectStack(Stack):
         CfnOutput(self, "UploadPortalUrl", value=portal_bucket.bucket_website_url)
         CfnOutput(self, "UploadApiUrl", value=upload_api.url)
         CfnOutput(self, "UploadsBucketName", value=uploads_bucket.bucket_name)
+        CfnOutput(self, "SubmissionsTableName", value=submissions_table.table_name)

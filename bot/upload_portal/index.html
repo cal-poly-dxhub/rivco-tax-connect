@@ -1087,6 +1087,16 @@
                             });
                         }
 
+                        // Notify backend that all files are uploaded
+                        await fetch(API_URL + "/upload-complete", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                submissionId: data.submissionId,
+                                filenames: data.uploads.map(function (u) { return u.filename; }),
+                            }),
+                        });
+
                         var packageUrl = API_URL + "/package?id=" + data.submissionId;
 
                         setStatus(
