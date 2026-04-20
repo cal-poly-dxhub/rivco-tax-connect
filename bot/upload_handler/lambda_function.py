@@ -2,11 +2,16 @@ import json
 import os
 import re
 import uuid
-import boto3
+from datetime import datetime, timezone
 from typing import Any
 
+import boto3
+
 s3 = boto3.client("s3")
+dynamodb = boto3.resource("dynamodb")
 BUCKET = os.environ["UPLOAD_BUCKET"]
+TABLE_NAME = os.environ.get("TABLE_NAME", "")
+table = dynamodb.Table(TABLE_NAME) if TABLE_NAME else None
 ALLOWED_TYPES = {
     "application/pdf",
     "image/jpeg",
@@ -47,6 +52,10 @@ def _err(code: int, msg: str, headers: dict[str, str]) -> dict[str, Any]:
     return {"statusCode": code, "headers": headers, "body": json.dumps({"error": msg})}
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     headers = _cors_headers()
 
@@ -58,6 +67,8 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return _handle_package(event, headers)
     if resource == "/status" and event.get("httpMethod") == "GET":
         return _handle_status(headers)
+    if resource == "/upload-complete" and event.get("httpMethod") == "POST":
+        return _handle_upload_complete(event, headers)
 
     return _handle_upload(event, headers)
 
@@ -111,16 +122,35 @@ def _classify_status(refund_types: list[str], filenames: list[str]) -> str:
     uploaded_prefixes = {f.split("_", 1)[0].rsplit(".", 1)[0] for f in filenames}
     if not expected <= uploaded_prefixes:
         return "partial"
-    # Property tax also needs at least one of proof-of-payment / proof-of-ownership
     if "PROPERTY_TAX" in refund_types and not (_PT_EITHER & uploaded_prefixes):
         return "partial"
     return "complete"
 
 
 def _handle_status(headers: dict[str, str]) -> dict[str, Any]:
-    """List all submissions with name, docs, and completeness — sorted by doneness."""
+    """List all submissions — from DynamoDB if available, else fall back to S3."""
+    if table:
+        resp = table.scan()
+        submissions = []
+        for item in resp.get("Items", []):
+            submissions.append({
+                "submissionId": item["submissionId"],
+                "name": item.get("name", ""),
+                "refundType": item.get("refundType", ""),
+                "status": item.get("status", "partial"),
+                "documents": item.get("documents", []),
+                "submittedAt": item.get("submittedAt", ""),
+            })
+        submissions.sort(key=lambda s: (0 if s["status"] == "complete" else 1, s["submittedAt"]))
+        return {"statusCode": 200, "headers": headers, "body": json.dumps(submissions)}
+
+    # Fallback: S3 scan (original behavior)
+    return _handle_status_s3(headers)
+
+
+def _handle_status_s3(headers: dict[str, str]) -> dict[str, Any]:
+    """Original S3-based status listing."""
     paginator = s3.get_paginator("list_objects_v2")
-    # Collect all manifest keys
     manifests = []
     for page in paginator.paginate(Bucket=BUCKET, Delimiter="/"):
         for prefix in page.get("CommonPrefixes", []):
@@ -158,14 +188,52 @@ def _handle_status(headers: dict[str, str]) -> dict[str, Any]:
             "submittedAt": latest,
         })
 
-    # Sort: complete first, then by submission time descending
-    submissions.sort(key=lambda s: (0 if s["status"] == "complete" else 1, s["submittedAt"]), reverse=False)
-    submissions.sort(key=lambda s: (0 if s["status"] == "complete" else 1))
+    submissions.sort(key=lambda s: (0 if s["status"] == "complete" else 1, s["submittedAt"]))
+    return {"statusCode": 200, "headers": headers, "body": json.dumps(submissions)}
+
+
+def _handle_upload_complete(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    """Called by portal after all files are uploaded. Computes status and updates DynamoDB."""
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except json.JSONDecodeError:
+        return _err(400, "Invalid JSON", headers)
+
+    submission_id = (body.get("submissionId") or "").strip()
+    filenames = body.get("filenames") or []
+
+    if not submission_id:
+        return _err(400, "submissionId is required", headers)
+    if not re.fullmatch(r'[0-9a-f]{12}', submission_id):
+        return _err(400, "Invalid submission id", headers)
+
+    if not table:
+        return _err(500, "DynamoDB not configured", headers)
+
+    # Get the item to read refundType
+    resp = table.get_item(Key={"submissionId": submission_id})
+    item = resp.get("Item")
+    if not item:
+        return _err(404, "Submission not found", headers)
+
+    refund_types = [t.strip() for t in item.get("refundType", "").split(",") if t.strip()]
+    status = _classify_status(refund_types, filenames)
+
+    table.update_item(
+        Key={"submissionId": submission_id},
+        UpdateExpression="SET #s = :s, documents = :d, updatedAt = :u",
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={
+            ":s": status,
+            ":d": filenames,
+            ":u": _now_iso(),
+        },
+    )
 
     return {
         "statusCode": 200,
         "headers": headers,
-        "body": json.dumps(submissions),
+        "body": json.dumps({"submissionId": submission_id, "status": status}),
     }
 
 
@@ -186,6 +254,7 @@ def _handle_upload(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
 
     urls = []
     submission_id = uuid.uuid4().hex[:12]
+    now = _now_iso()
 
     for f in files:
         content_type = f.get("contentType", "")
@@ -207,6 +276,18 @@ def _handle_upload(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
         Body=json.dumps({"name": name, "refundType": refund_type}),
         ContentType="application/json",
     )
+
+    # Write initial record to DynamoDB
+    if table:
+        table.put_item(Item={
+            "submissionId": submission_id,
+            "name": name,
+            "refundType": refund_type,
+            "status": "partial",
+            "documents": [],
+            "submittedAt": now,
+            "updatedAt": now,
+        })
 
     return {
         "statusCode": 200,
