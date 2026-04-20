@@ -511,6 +511,10 @@ class NovaSonicConnectStack(Stack):
             "POST", apigw.LambdaIntegration(upload_fn),
         )
 
+        upload_api.root.add_resource("update-status").add_method(
+            "POST", apigw.LambdaIntegration(upload_fn),
+        )
+
         # S3 bucket for static portal site (public website hosting)
         portal_bucket = s3.Bucket(
             self, "PortalBucket",

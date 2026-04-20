@@ -69,6 +69,8 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return _handle_status(headers)
     if resource == "/upload-complete" and event.get("httpMethod") == "POST":
         return _handle_upload_complete(event, headers)
+    if resource == "/update-status" and event.get("httpMethod") == "POST":
+        return _handle_update_status(event, headers)
 
     return _handle_upload(event, headers)
 
@@ -234,6 +236,46 @@ def _handle_upload_complete(event: dict[str, Any], headers: dict[str, str]) -> d
         "statusCode": 200,
         "headers": headers,
         "body": json.dumps({"submissionId": submission_id, "status": status}),
+    }
+
+
+_VALID_STATUSES = {"partial", "complete", "under-review", "approved", "denied"}
+
+
+def _handle_update_status(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    """Admin endpoint to manually change a submission's status."""
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except json.JSONDecodeError:
+        return _err(400, "Invalid JSON", headers)
+
+    submission_id = (body.get("submissionId") or "").strip()
+    new_status = (body.get("status") or "").strip()
+
+    if not submission_id or not new_status:
+        return _err(400, "submissionId and status are required", headers)
+    if not re.fullmatch(r'[0-9a-f]{12}', submission_id):
+        return _err(400, "Invalid submission id", headers)
+    if new_status not in _VALID_STATUSES:
+        return _err(400, f"Invalid status. Must be one of: {', '.join(sorted(_VALID_STATUSES))}", headers)
+    if not table:
+        return _err(500, "DynamoDB not configured", headers)
+
+    resp = table.get_item(Key={"submissionId": submission_id})
+    if not resp.get("Item"):
+        return _err(404, "Submission not found", headers)
+
+    table.update_item(
+        Key={"submissionId": submission_id},
+        UpdateExpression="SET #s = :s, updatedAt = :u",
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={":s": new_status, ":u": _now_iso()},
+    )
+
+    return {
+        "statusCode": 200,
+        "headers": headers,
+        "body": json.dumps({"submissionId": submission_id, "status": new_status}),
     }
 
 
