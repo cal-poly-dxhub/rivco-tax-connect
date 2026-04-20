@@ -114,6 +114,9 @@
             }
             .badge.complete { background: #e8f5e9; color: var(--green); }
             .badge.partial { background: #fff3e0; color: var(--orange); }
+            .badge.under-review { background: #e3f2fd; color: var(--blue); }
+            .badge.approved { background: #e8f5e9; color: var(--green); }
+            .badge.denied { background: #fce4ec; color: var(--red); }
 
             .type-tag {
                 display: inline-block; padding: .1rem .45rem; border-radius: 3px;
@@ -131,6 +134,22 @@
             .error { text-align: center; padding: 2rem; color: var(--red); }
 
             .time { font-size: .8rem; color: var(--text-muted); white-space: nowrap; }
+
+            .status-select {
+                appearance: none; -webkit-appearance: none;
+                padding: .15rem .55rem; border: none; border-radius: 10px;
+                font-size: .75rem; font-weight: 700; font-family: "Montserrat", sans-serif;
+                text-transform: uppercase; letter-spacing: .03em;
+                cursor: pointer; outline: none;
+                background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%23556575'/%3E%3C/svg%3E");
+                background-repeat: no-repeat; background-position: right .4rem center;
+                padding-right: 1.2rem;
+            }
+            .status-select.partial { background-color: #fff3e0; color: var(--orange); }
+            .status-select.complete { background-color: #e8f5e9; color: var(--green); }
+            .status-select.under-review { background-color: #e3f2fd; color: var(--blue); }
+            .status-select.approved { background-color: #e8f5e9; color: var(--green); }
+            .status-select.denied { background-color: #fce4ec; color: var(--red); }
         </style>
     </head>
     <body>
@@ -149,8 +168,11 @@
                 <h1>Submissions</h1>
                 <select id="filterStatus" aria-label="Filter by status">
                     <option value="">All statuses</option>
-                    <option value="complete">Complete</option>
                     <option value="partial">Partial</option>
+                    <option value="complete">Complete</option>
+                    <option value="under-review">Under Review</option>
+                    <option value="approved">Approved</option>
+                    <option value="denied">Denied</option>
                 </select>
                 <select id="filterType" aria-label="Filter by refund type">
                     <option value="">All types</option>
@@ -174,6 +196,8 @@
             var API_URL = window.API_URL || "";
             var allData = [];
 
+            var STATUSES = ["partial", "complete", "under-review", "approved", "denied"];
+
             function formatType(t) {
                 return t.replace(/_/g, " ").replace(/\b\w/g, function (c) { return c.toUpperCase(); });
             }
@@ -187,11 +211,17 @@
             function renderStats(data) {
                 var total = data.length;
                 var complete = data.filter(function (s) { return s.status === "complete"; }).length;
-                var partial = total - complete;
+                var partial = data.filter(function (s) { return s.status === "partial"; }).length;
+                var review = data.filter(function (s) { return s.status === "under-review"; }).length;
+                var approved = data.filter(function (s) { return s.status === "approved"; }).length;
+                var denied = data.filter(function (s) { return s.status === "denied"; }).length;
                 document.getElementById("stats").innerHTML =
                     '<div class="stat-card"><div class="num">' + total + '</div><div class="label">Total</div></div>' +
+                    '<div class="stat-card partial"><div class="num">' + partial + '</div><div class="label">Partial</div></div>' +
                     '<div class="stat-card complete"><div class="num">' + complete + '</div><div class="label">Complete</div></div>' +
-                    '<div class="stat-card partial"><div class="num">' + partial + '</div><div class="label">Partial</div></div>';
+                    '<div class="stat-card" style="border-left:3px solid var(--blue)"><div class="num" style="color:var(--blue)">' + review + '</div><div class="label">Under Review</div></div>' +
+                    '<div class="stat-card complete"><div class="num">' + approved + '</div><div class="label">Approved</div></div>' +
+                    '<div class="stat-card" style="border-left:3px solid var(--red)"><div class="num" style="color:var(--red)">' + denied + '</div><div class="label">Denied</div></div>';
             }
 
             function render(data) {
@@ -206,10 +236,14 @@
                     var types = s.refundType.split(",").filter(Boolean).map(function (t) {
                         return '<span class="type-tag">' + formatType(t.trim()) + '</span>';
                     }).join(" ");
+                    var statusOptions = STATUSES.map(function (st) {
+                        var sel = st === s.status ? " selected" : "";
+                        return '<option value="' + st + '"' + sel + '>' + formatType(st) + '</option>';
+                    }).join("");
                     html += '<tr>'
                         + '<td><strong>' + (s.name || "—") + '</strong><br><span class="time">' + s.submissionId + '</span></td>'
                         + '<td>' + types + '</td>'
-                        + '<td><span class="badge ' + s.status + '">' + s.status + '</span></td>'
+                        + '<td><select class="status-select ' + s.status + '" data-id="' + s.submissionId + '" aria-label="Change status">' + statusOptions + '</select></td>'
                         + '<td><ul class="doc-list">' + s.documents.map(function (d) { return '<li>📄 ' + d + '</li>'; }).join("") + '</ul></td>'
                         + '<td><span class="time">' + formatTime(s.submittedAt) + '</span></td>'
                         + '<td><a href="package.html?id=' + s.submissionId + '" target="_blank" style="color:var(--blue);font-weight:600;font-size:.8rem;text-decoration:none;">Download ↗</a></td>'
@@ -217,6 +251,30 @@
                 });
                 html += '</tbody></table>';
                 el.innerHTML = html;
+
+                // Auto-save status on change
+                el.addEventListener("change", function (e) {
+                    if (!e.target.classList.contains("status-select")) return;
+                    var sel = e.target;
+                    var id = sel.dataset.id;
+                    var newStatus = sel.value;
+                    sel.disabled = true;
+                    fetch(API_URL + "/update-status", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ submissionId: id, status: newStatus }),
+                    })
+                    .then(function (r) {
+                        if (!r.ok) throw new Error("Failed");
+                        var item = allData.find(function (s) { return s.submissionId === id; });
+                        if (item) item.status = newStatus;
+                        applyFilters();
+                    })
+                    .catch(function () {
+                        alert("Failed to update status. Please try again.");
+                        sel.disabled = false;
+                    });
+                });
             }
 
             function applyFilters() {
