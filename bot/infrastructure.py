@@ -459,11 +459,10 @@ class NovaSonicConnectStack(Stack):
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="lambda_function.lambda_handler",
             code=_lambda.Code.from_asset("bot/upload_handler"),
-            timeout=Duration.seconds(10),
+            timeout=Duration.seconds(30),
             memory_size=128,
             environment={
                 "UPLOAD_BUCKET": uploads_bucket.bucket_name,
-                "UPLOAD_PASSWORD": os.environ.get("UPLOAD_PASSWORD", ""),
                 "ALLOWED_ORIGIN": portal_origin,
             },
         )
@@ -492,6 +491,10 @@ class NovaSonicConnectStack(Stack):
             "GET", apigw.LambdaIntegration(upload_fn),
         )
 
+        upload_api.root.add_resource("status").add_method(
+            "GET", apigw.LambdaIntegration(upload_fn),
+        )
+
         # S3 bucket for static portal site (public website hosting)
         portal_bucket = s3.Bucket(
             self, "PortalBucket",
@@ -508,20 +511,15 @@ class NovaSonicConnectStack(Stack):
             ),
         )
 
-        portal_deploy = s3deploy.BucketDeployment(
-            self, "PortalDeployment",
-            sources=[s3deploy.Source.asset("bot/upload_portal")],
-            destination_bucket=portal_bucket,
-        )
-
         config_js = f'window.API_URL = "{upload_api.url.rstrip("/")}";\n'
-        portal_config = s3deploy.BucketDeployment(
-            self, "PortalConfig",
-            sources=[s3deploy.Source.data("config.js", config_js)],
+        s3deploy.BucketDeployment(
+            self, "PortalDeployment",
+            sources=[
+                s3deploy.Source.asset("bot/upload_portal"),
+                s3deploy.Source.data("config.js", config_js),
+            ],
             destination_bucket=portal_bucket,
-            prune=False,
         )
-        portal_config.node.add_dependency(portal_deploy)
 
         # Wire upload portal URL into main Lambda so the bot can reference it
         fn.add_environment("UPLOAD_PORTAL_URL", portal_bucket.bucket_website_url)

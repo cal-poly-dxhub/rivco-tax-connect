@@ -1,5 +1,5 @@
 project:
-  name: riverside-tax-refund
+  name: riverside-tax-refund-v2
   description: Riverside County Tax Refund Lookup
 
 aws:

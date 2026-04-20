@@ -1,270 +1,109 @@
-# Deployment Guide
+# Deployment Guide & Learnings
 
-This guide provides detailed deployment instructions, troubleshooting steps, and recovery procedures for the Riverside County Tax Refund Lookup system.
+## Architecture Overview
 
-## Pre-Deployment Checklist
+```
+Customer → Connect Chat → Lex Bot (QInConnectIntent)
+                              ↓
+                        Q in Connect (ORCHESTRATION AI Agent)
+                              ↓
+                        MCP Gateway (AgentCore)
+                              ↓
+                        Lambda (tax_lookup) → S3 (refund data)
+```
 
-Before running the deployment scripts, ensure:
+## Key Learnings
 
-1. **AWS Credentials**: Configure AWS CLI with appropriate credentials
-   ```bash
-   aws configure
-   ```
+### 1. AI Agent Type Must Be ORCHESTRATION
 
-2. **Python Environment**: Python 3.12+ with required dependencies
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt
-   ```
+The AI agent **must** be `ORCHESTRATION` type to use MCP tools. `SELF_SERVICE` agents do not support MCP tool configuration. This is a Q in Connect limitation — the console only allows adding MCP tools to ORCHESTRATION agents.
 
-3. **AWS Permissions**: Your IAM user/role has permissions for:
-   - CDK deployment (CloudFormation, IAM, S3, Lambda, Connect, Lex, Q in Connect, Bedrock)
-   - S3 bucket creation and management
-   - Lambda function creation and updates
-   - Amazon Connect instance access
-   - Q in Connect knowledge base management
+The AWS CLI `create-ai-agent` command does **not** support creating ORCHESTRATION agents (only `SELF_SERVICE`, `ANSWER_RECOMMENDATION`, `MANUAL_SEARCH`). The agent must be created in the Q in Connect console.
 
-4. **Configuration**: Update `config.yaml` with your environment-specific values:
-   - AWS region
-   - Lambda timeout and memory settings
-   - Environment variables (URLs, thresholds)
-   - Connect flow name and voice IDs
-   - Wisdom assistant name and seed URLs
+However, boto3 **can** read and update an existing ORCHESTRATION agent's configuration (including the prompt reference), and the CLI can version it via `create-ai-agent-version`. The `post_deploy.py` script uses boto3 for the update and versioning.
+
+### 2. MCP Gateway Registration Is Manual
+
+The AgentCore MCP Gateway must be registered as a third-party application in the Connect console. There is no API or CloudFormation resource for this. The CDK stack creates the gateway, but the Connect registration is a manual step.
+
+### 3. Agent Prompt Updates Are Automated
+
+The `post_deploy.py` script uses boto3 to update the agent's `orchestrationAIAgentConfiguration` with the latest prompt version. The AWS CLI cannot do this — it shows the orchestration config as `SDK_UNKNOWN_MEMBER` — but boto3 handles it natively. This eliminates the need to manually update the prompt in the console after each change.
+
+### 4. CreateWisdomSession Block Configuration
+
+The contact flow's `CreateWisdomSession` block must include:
+
+```json
+{
+  "Parameters": {
+    "WisdomAssistantArn": "<assistant-arn>",
+    "OrchestrationAIAgentConfiguration": {
+      "AgentAssistanceAgentVersionArn": "<agent-version-arn>"
+    }
+  },
+  "Type": "CreateWisdomSession"
+}
+```
+
+Using a `SELF_SERVICE` agent ARN in `AgentAssistanceAgentVersionArn` causes an error. Only `ORCHESTRATION` agent ARNs work here.
+
+### 5. Lex Session Attribute
+
+The Lex bot block must also pass the agent ARN via session attribute:
+
+```json
+"LexSessionAttributes": {
+  "x-amz-lex:q-in-connect:ai-agent-arn": "<agent-version-arn>"
+}
+```
+
+Both the CreateWisdomSession config AND the Lex session attribute are required for the ORCHESTRATION agent to invoke MCP tools.
+
+### 6. Agent Versioning Matters
+
+After configuring tools on the agent in the console, you must create a new version. The `post_deploy.py` script handles this automatically — it updates the prompt reference and creates a new version each run.
+
+### 7. MCP Gateway Tool Naming
+
+The gateway exposes tools with a prefixed name: `<target-name>___<tool-name>` (e.g., `tax-lookup-target___tax_lookup`). Q in Connect handles this mapping automatically when the tool is added to the agent via the console.
 
 ## Deployment Steps
 
-### Step 1: Deploy Infrastructure (CDK)
+### Automated (CDK + post_deploy.py)
 
-```bash
-cdk deploy --require-approval=never
-```
+1. `CDK_DOCKER=finch cdk deploy` — Creates:
+   - Connect instance, Lex bot, Lambda, S3 bucket
+   - Q in Connect assistant + knowledge base
+   - AgentCore MCP Gateway + Lambda target
+   - IAM roles and permissions
 
-This creates:
-- S3 buckets (data, uploads, portal)
-- Lambda functions (main lookup, upload handler)
-- IAM roles and policies
-- Amazon Connect integration
-- Q in Connect knowledge base
+2. `python3 post_deploy.py` — Handles:
+   - Upload refund data to S3
+   - Create/update AI prompt from config.yaml
+   - Update agent to use latest prompt version
+   - Version the AI agent
+   - Create/update contact flow with resolved ARNs
+   - Claim and associate phone number
+   - Set up SMS channel
 
-**Expected output**: CloudFormation stack name and resource ARNs
+### Manual (Console — required before first `post_deploy.py` run)
 
-### Step 2: Run Post-Deploy Script
+See README.md for step-by-step console instructions.
 
-```bash
-python3 post_deploy.py
-```
-
-This script:
-1. Uploads refund data (`refunds_demo_balanced.jsonl`) to S3
-2. Creates/updates the AI orchestration prompt in Q in Connect
-3. Syncs knowledge base content from seed URLs
-4. Configures Amazon Connect contact flow
-5. Registers MCP Gateway tools
-
-**Expected output**: Success messages for each step
-
-## Post-Deployment Configuration (Manual)
-
-The following steps require AWS Console access and cannot be automated:
-
-### 1. Amazon Connect Instance Setup
-
-1. Navigate to Amazon Connect in AWS Console
-2. Select your instance
-3. Go to **Contact Flows** → **Manage phone numbers**
-4. Claim a phone number (or use existing)
-5. Set the contact flow to `TaxRefundFlow`
-
-### 2. SMS Channel Setup (Optional)
-
-To enable SMS:
-
-1. Go to **Channels** → **Phone Numbers**
-2. Request a toll-free number for SMS
-3. AWS will verify your use case (typically 1-2 business days)
-4. Once approved, configure the number in the contact flow
-
-### 3. Chat Channel Setup (Optional)
-
-1. Go to **Channels** → **Chat**
-2. Create a chat widget
-3. Embed the widget code in your website
-4. Configure the contact flow for chat
-
-### 4. Live Agent Queue Setup (Optional)
-
-1. Go to **Routing** → **Queues**
-2. Create a queue for live agents
-3. Create a routing profile for agents
-4. Add agents to the queue
-5. Update the contact flow to route to this queue
+**Order matters:**
+1. Register MCP gateway as third-party app in Connect console
+2. Create ORCHESTRATION AI agent in Q in Connect console
+3. Add MCP tool to the agent
+4. Save and publish the agent
+5. Run `python3 post_deploy.py` (updates agent prompt, versions the agent, and wires it into the flow)
 
 ## Troubleshooting
 
-### Issue: CDK Deployment Fails
-
-**Symptom**: CloudFormation stack creation fails
-
-**Solutions**:
-1. Check IAM permissions: `aws iam get-user`
-2. Verify region is correct: `aws configure get region`
-3. Check for existing resources with same name: `aws s3 ls | grep riverside`
-4. Review CloudFormation events: `aws cloudformation describe-stack-events --stack-name <stack-name>`
-
-### Issue: Post-Deploy Script Fails at "Uploading Refund Data"
-
-**Symptom**: `refunds_demo_balanced.jsonl not found`
-
-**Solutions**:
-1. Verify file exists: `ls -la refunds_demo_balanced.jsonl`
-2. If missing, create demo data: See [Data Format Documentation](README.md#data-format)
-3. Ensure file is in the same directory as `post_deploy.py`
-
-### Issue: Post-Deploy Script Fails at "Creating AI Prompt"
-
-**Symptom**: Q in Connect API error
-
-**Solutions**:
-1. Verify Q in Connect is enabled in your region
-2. Check IAM permissions for `qconnect:*` actions
-3. Verify `config.yaml` has valid YAML syntax: `python3 -c "import yaml; yaml.safe_load(open('config.yaml'))"`
-4. Check CloudWatch logs: `aws logs tail /aws/lambda/post-deploy --follow`
-
-### Issue: Post-Deploy Script Fails at "Syncing Knowledge Base"
-
-**Symptom**: Playwright timeout or URL fetch error
-
-**Solutions**:
-1. Verify seed URLs are accessible: `curl -I https://auditorcontroller.org/`
-2. Check network connectivity from Lambda environment
-3. Increase timeout in `post_deploy.py` (line 476): `timeout=30000` → `timeout=60000`
-4. Reduce number of seed URLs in `config.yaml` to test with fewer pages
-5. Check CloudWatch logs for detailed error: `aws logs tail /aws/lambda/post-deploy --follow`
-
-### Issue: Lambda Function Returns "No Refunds Found"
-
-**Symptom**: Tax lookup always returns no matches
-
-**Solutions**:
-1. Verify refund data was uploaded: `aws s3 ls s3://<bucket>/refunds_demo_balanced.jsonl`
-2. Check data file format: `aws s3 cp s3://<bucket>/refunds_demo_balanced.jsonl - | head -1 | jq .`
-3. Verify claim deadlines in data are in the future: `aws s3 cp s3://<bucket>/refunds_demo_balanced.jsonl - | jq '.claim_deadline' | head -5`
-4. Check Lambda logs: `aws logs tail /aws/lambda/riverside-tax-lookup --follow`
-
-### Issue: Amazon Connect Contact Flow Fails
-
-**Symptom**: Calls drop or flow doesn't execute
-
-**Solutions**:
-1. Verify contact flow exists: `aws connect list-contact-flows --instance-id <instance-id>`
-2. Check flow configuration: `aws connect describe-contact-flow --instance-id <instance-id> --contact-flow-id <flow-id>`
-3. Verify Lambda permissions: `aws lambda get-policy --function-name riverside-tax-lookup`
-4. Check CloudWatch logs: `aws logs tail /aws/connect/TaxRefundFlow --follow`
-
-### Issue: SMS Not Sending
-
-**Symptom**: SMS tool returns error
-
-**Solutions**:
-1. Verify SNS topic exists: `aws sns list-topics | grep riverside`
-2. Check SNS permissions: `aws sns get-topic-attributes --topic-arn <topic-arn> --attribute-name Policy`
-3. Verify phone number format is E.164: `+1` followed by 10 digits
-4. Check CloudWatch logs: `aws logs tail /aws/lambda/riverside-tax-lookup --follow`
-5. Verify toll-free number is registered and active in Amazon Connect
-
-## Recovery Procedures
-
-### Rollback to Previous Version
-
-If deployment fails and you need to rollback:
-
-```bash
-# List previous stack versions
-aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE
-
-# Rollback to previous version
-aws cloudformation cancel-update-stack --stack-name riverside-tax-refund
-```
-
-### Reset Knowledge Base
-
-To clear and rebuild the knowledge base:
-
-```bash
-# Delete existing knowledge base
-aws qconnect delete-knowledge-base --knowledge-base-id <kb-id>
-
-# Re-run post-deploy script
-python3 post_deploy.py
-```
-
-### Update Refund Data
-
-To upload new refund data without redeploying:
-
-```bash
-# Upload new data file
-aws s3 cp refunds_demo_balanced.jsonl s3://<bucket>/refunds_demo_balanced.jsonl
-
-# Lambda will automatically use new data on next invocation (cache expires)
-```
-
-### Update AI Prompt
-
-To update the AI orchestration prompt without redeploying:
-
-1. Edit `config.yaml` with new prompt text
-2. Run: `python3 post_deploy.py`
-3. The script will update the prompt in Q in Connect
-
-## Monitoring
-
-### CloudWatch Logs
-
-Monitor Lambda execution:
-
-```bash
-# Main lookup function
-aws logs tail /aws/lambda/riverside-tax-lookup --follow
-
-# Upload handler
-aws logs tail /aws/lambda/upload-handler --follow
-
-# Post-deploy script
-aws logs tail /aws/lambda/post-deploy --follow
-```
-
-### CloudWatch Metrics
-
-Monitor key metrics:
-
-```bash
-# Lambda invocations
-aws cloudwatch get-metric-statistics \
-  --namespace AWS/Lambda \
-  --metric-name Invocations \
-  --dimensions Name=FunctionName,Value=riverside-tax-lookup \
-  --start-time 2024-01-01T00:00:00Z \
-  --end-time 2024-01-02T00:00:00Z \
-  --period 3600 \
-  --statistics Sum
-```
-
-### Amazon Connect Metrics
-
-Monitor contact center performance:
-
-1. Go to Amazon Connect Console
-2. Select your instance
-3. Go to **Metrics and quality** → **Real-time metrics**
-4. Monitor: Contacts in queue, Average handle time, Abandonment rate
-
-## Support
-
-For issues not covered in this guide:
-
-1. Check CloudWatch Logs for detailed error messages
-2. Review AWS service quotas: `aws service-quotas list-service-quotas --service-code connect`
-3. Contact AWS Support or your AWS account team
-4. Review the main [README.md](README.md) for additional context
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `CreateWisdomSession` errors | Wrong agent type in `AgentAssistanceAgentVersionArn` | Use ORCHESTRATION agent ARN, not SELF_SERVICE |
+| `GetUserInput` errors with "Amazon Lex could not access your Q In Connect Assistant" | SELF_SERVICE agent with empty config | Use ORCHESTRATION agent instead |
+| Bot says "I don't have an answer" | Agent not configured with MCP tool | Add tool in Q in Connect console, create new version |
+| Bot says "I'll look up..." but returns no results | Agent hallucinating — tool not actually invoked | Check Lambda logs for MCP invocations; ensure agent version has tool configured |
+| No welcome message | `CreateWisdomSession` block failing | Check flow logs in CloudWatch `/aws/connect/<instance-name>` |

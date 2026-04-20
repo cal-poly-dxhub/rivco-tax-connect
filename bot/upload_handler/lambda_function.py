@@ -7,7 +7,6 @@ from typing import Any
 
 s3 = boto3.client("s3")
 BUCKET = os.environ["UPLOAD_BUCKET"]
-UPLOAD_PASSWORD = os.environ.get("UPLOAD_PASSWORD", "")
 ALLOWED_TYPES = {
     "application/pdf",
     "image/jpeg",
@@ -18,6 +17,15 @@ ALLOWED_TYPES = {
 MAX_SIZE = 10 * 1024 * 1024  # 10 MB
 _SAFE_FILENAME = re.compile(r'[^\w.\-]')
 PACKAGE_EXPIRY = 7 * 24 * 3600  # 7 days
+
+# Expected document types per refund category
+_EXPECTED_DOCS = {
+    "STALE_WARRANT": {"photo-id", "proof-of-address", "ap13-affidavit"},
+    "PAYROLL": {"photo-id", "proof-of-address", "ap13-affidavit"},
+    "PROPERTY_TAX": {"photo-id", "property-tax-claim"},
+}
+# Property tax also requires proof-of-payment OR proof-of-ownership (either satisfies)
+_PT_EITHER = {"proof-of-payment", "proof-of-ownership"}
 
 
 def _sanitize_filename(name: str) -> str:
@@ -48,6 +56,8 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     resource = event.get("resource", "")
     if resource == "/package" and event.get("httpMethod") == "GET":
         return _handle_package(event, headers)
+    if resource == "/status" and event.get("httpMethod") == "GET":
+        return _handle_status(headers)
 
     return _handle_upload(event, headers)
 
@@ -55,24 +65,18 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 def _handle_package(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
     qs = event.get("queryStringParameters") or {}
     submission_id = (qs.get("id") or "").strip()
-    password = (qs.get("password") or "").strip()
 
     if not submission_id:
         return _err(400, "id is required", headers)
-    if UPLOAD_PASSWORD and password != UPLOAD_PASSWORD:
-        return _err(403, "Invalid password", headers)
-    # Sanitize: submission_id should be hex only
     if not re.fullmatch(r'[0-9a-f]{12}', submission_id):
         return _err(400, "Invalid submission id", headers)
 
-    # Load manifest
     try:
         manifest_obj = s3.get_object(Bucket=BUCKET, Key=f"{submission_id}/_manifest.json")
         manifest = json.loads(manifest_obj["Body"].read())
     except s3.exceptions.NoSuchKey:
         return _err(404, "Submission not found", headers)
 
-    # List all files in the submission prefix
     resp = s3.list_objects_v2(Bucket=BUCKET, Prefix=f"{submission_id}/")
     files = []
     for obj in resp.get("Contents", []):
@@ -99,6 +103,72 @@ def _handle_package(event: dict[str, Any], headers: dict[str, str]) -> dict[str,
     }
 
 
+def _classify_status(refund_types: list[str], filenames: list[str]) -> str:
+    """Return 'complete' or 'partial' based on expected vs actual docs."""
+    expected = set()
+    for rt in refund_types:
+        expected |= _EXPECTED_DOCS.get(rt, set())
+    uploaded_prefixes = {f.split("_", 1)[0].rsplit(".", 1)[0] for f in filenames}
+    if not expected <= uploaded_prefixes:
+        return "partial"
+    # Property tax also needs at least one of proof-of-payment / proof-of-ownership
+    if "PROPERTY_TAX" in refund_types and not (_PT_EITHER & uploaded_prefixes):
+        return "partial"
+    return "complete"
+
+
+def _handle_status(headers: dict[str, str]) -> dict[str, Any]:
+    """List all submissions with name, docs, and completeness — sorted by doneness."""
+    paginator = s3.get_paginator("list_objects_v2")
+    # Collect all manifest keys
+    manifests = []
+    for page in paginator.paginate(Bucket=BUCKET, Delimiter="/"):
+        for prefix in page.get("CommonPrefixes", []):
+            manifests.append(prefix["Prefix"])
+
+    submissions = []
+    for prefix in manifests:
+        sid = prefix.rstrip("/")
+        try:
+            obj = s3.get_object(Bucket=BUCKET, Key=f"{sid}/_manifest.json")
+            manifest = json.loads(obj["Body"].read())
+        except Exception:
+            continue
+
+        resp = s3.list_objects_v2(Bucket=BUCKET, Prefix=f"{sid}/")
+        docs = []
+        latest = ""
+        for o in resp.get("Contents", []):
+            fname = o["Key"].split("/", 1)[1]
+            if fname.startswith("_"):
+                continue
+            docs.append(fname)
+            ts = o["LastModified"].isoformat()
+            if ts > latest:
+                latest = ts
+
+        refund_types = [t.strip() for t in manifest.get("refundType", "").split(",") if t.strip()]
+        status = _classify_status(refund_types, docs)
+        submissions.append({
+            "submissionId": sid,
+            "name": manifest.get("name", ""),
+            "refundType": manifest.get("refundType", ""),
+            "status": status,
+            "documents": docs,
+            "submittedAt": latest,
+        })
+
+    # Sort: complete first, then by submission time descending
+    submissions.sort(key=lambda s: (0 if s["status"] == "complete" else 1, s["submittedAt"]), reverse=False)
+    submissions.sort(key=lambda s: (0 if s["status"] == "complete" else 1))
+
+    return {
+        "statusCode": 200,
+        "headers": headers,
+        "body": json.dumps(submissions),
+    }
+
+
 def _handle_upload(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
     try:
         body = json.loads(event.get("body") or "{}")
@@ -107,13 +177,10 @@ def _handle_upload(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
 
     name = (body.get("name") or "").strip()
     refund_type = (body.get("refundType") or "").strip()
-    password = (body.get("password") or "").strip()
     files = body.get("files") or []
 
     if not name or not refund_type:
         return _err(400, "name and refundType are required", headers)
-    if UPLOAD_PASSWORD and password != UPLOAD_PASSWORD:
-        return _err(403, "Invalid password", headers)
     if not files or len(files) > 5:
         return _err(400, "Provide 1-5 files", headers)
 
@@ -134,7 +201,6 @@ def _handle_upload(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
         )
         urls.append({"filename": filename, "uploadUrl": presigned, "key": key})
 
-    # Write submission manifest so metadata is preserved alongside uploads
     s3.put_object(
         Bucket=BUCKET,
         Key=f"{submission_id}/_manifest.json",
