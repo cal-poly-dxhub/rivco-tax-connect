@@ -150,6 +150,12 @@
             .status-select.under-review { background-color: #e3f2fd; color: var(--blue); }
             .status-select.approved { background-color: #e8f5e9; color: var(--green); }
             .status-select.denied { background-color: #fce4ec; color: var(--red); }
+
+            .delete-btn {
+                background: none; border: none; cursor: pointer; font-size: .9rem;
+                padding: .1rem .3rem; border-radius: 4px; vertical-align: middle; margin-left: .4rem;
+            }
+            .delete-btn:hover { background: #fce4ec; }
         </style>
     </head>
     <body>
@@ -246,7 +252,8 @@
                         + '<td><select class="status-select ' + s.status + '" data-id="' + s.submissionId + '" aria-label="Change status">' + statusOptions + '</select></td>'
                         + '<td><ul class="doc-list">' + s.documents.map(function (d) { return '<li>📄 ' + d + '</li>'; }).join("") + '</ul></td>'
                         + '<td><span class="time">' + formatTime(s.submittedAt) + '</span></td>'
-                        + '<td><a href="package.html?id=' + s.submissionId + '" target="_blank" style="color:var(--blue);font-weight:600;font-size:.8rem;text-decoration:none;">Download ↗</a></td>'
+                        + '<td><a href="package.html?id=' + s.submissionId + '" target="_blank" style="color:var(--blue);font-weight:600;font-size:.8rem;text-decoration:none;">Download ↗</a>'
+                        + ' <button class="delete-btn" data-id="' + s.submissionId + '" data-name="' + (s.name || "") + '" aria-label="Delete submission">🗑</button></td>'
                         + '</tr>';
                 });
                 html += '</tbody></table>';
@@ -273,6 +280,30 @@
                     .catch(function () {
                         alert("Failed to update status. Please try again.");
                         sel.disabled = false;
+                    });
+                });
+
+                // Delete submission on click
+                el.addEventListener("click", function (e) {
+                    var btn = e.target.closest(".delete-btn");
+                    if (!btn) return;
+                    var id = btn.dataset.id;
+                    var name = btn.dataset.name || id;
+                    if (!confirm('Delete submission for "' + name + '"? This removes all files and cannot be undone.')) return;
+                    btn.disabled = true;
+                    fetch(API_URL + "/delete-submission", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ submissionId: id }),
+                    })
+                    .then(function (r) {
+                        if (!r.ok) throw new Error("Failed");
+                        allData = allData.filter(function (s) { return s.submissionId !== id; });
+                        applyFilters();
+                    })
+                    .catch(function () {
+                        alert("Failed to delete. Please try again.");
+                        btn.disabled = false;
                     });
                 });
             }

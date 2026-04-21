@@ -71,6 +71,8 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return _handle_upload_complete(event, headers)
     if resource == "/update-status" and event.get("httpMethod") == "POST":
         return _handle_update_status(event, headers)
+    if resource == "/delete-submission" and event.get("httpMethod") == "POST":
+        return _handle_delete_submission(event, headers)
 
     return _handle_upload(event, headers)
 
@@ -276,6 +278,41 @@ def _handle_update_status(event: dict[str, Any], headers: dict[str, str]) -> dic
         "statusCode": 200,
         "headers": headers,
         "body": json.dumps({"submissionId": submission_id, "status": new_status}),
+    }
+
+
+def _handle_delete_submission(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    """Delete a submission from DynamoDB and S3."""
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except json.JSONDecodeError:
+        return _err(400, "Invalid JSON", headers)
+
+    submission_id = (body.get("submissionId") or "").strip()
+    if not submission_id:
+        return _err(400, "submissionId is required", headers)
+    if not re.fullmatch(r'[0-9a-f]{12}', submission_id):
+        return _err(400, "Invalid submission id", headers)
+
+    # Delete all S3 objects under this submission prefix
+    paginator = s3.get_paginator("list_objects_v2")
+    keys = []
+    for page in paginator.paginate(Bucket=BUCKET, Prefix=f"{submission_id}/"):
+        for obj in page.get("Contents", []):
+            keys.append({"Key": obj["Key"]})
+    if keys:
+        # delete_objects supports max 1000 keys per call
+        for i in range(0, len(keys), 1000):
+            s3.delete_objects(Bucket=BUCKET, Delete={"Objects": keys[i:i + 1000]})
+
+    # Delete from DynamoDB
+    if table:
+        table.delete_item(Key={"submissionId": submission_id})
+
+    return {
+        "statusCode": 200,
+        "headers": headers,
+        "body": json.dumps({"submissionId": submission_id, "deleted": True}),
     }
 
 
