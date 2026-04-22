@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import yaml
 from aws_cdk import (
     Stack, Duration, RemovalPolicy, CfnOutput, BundlingOptions, BundlingFileAccess,
@@ -14,6 +15,7 @@ from aws_cdk import (
     aws_bedrockagentcore as agentcore,
     aws_apigateway as apigw,
     aws_dynamodb as dynamodb,
+    aws_cognito as cognito,
     custom_resources as cr,
 )
 from constructs import Construct
@@ -475,10 +477,6 @@ class NovaSonicConnectStack(Stack):
                 "UPLOAD_BUCKET": uploads_bucket.bucket_name,
                 "ALLOWED_ORIGIN": portal_origin,
                 "TABLE_NAME": submissions_table.table_name,
-                "DEPARTMENTS": json.dumps([
-                    {"key": d["key"], "refund_types": d["refund_types"]}
-                    for d in cfg.get("departments", [])
-                ]),
             },
         )
         submissions_table.grant_read_write_data(upload_fn)
@@ -486,42 +484,139 @@ class NovaSonicConnectStack(Stack):
         uploads_bucket.grant_write(upload_fn)
         uploads_bucket.grant_read(upload_fn)
 
+        # --- Cognito User Pool for admin dashboard ---
+        user_pool = cognito.UserPool(
+            self, "AdminUserPool",
+            user_pool_name=f"{proj}-admin-pool",
+            self_sign_up_enabled=False,
+            sign_in_aliases=cognito.SignInAliases(email=True, username=True),
+            auto_verify=cognito.AutoVerifiedAttrs(email=True),
+            password_policy=cognito.PasswordPolicy(
+                min_length=8, require_lowercase=True, require_uppercase=True,
+                require_digits=True, require_symbols=False,
+            ),
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+        user_pool_client = cognito.UserPoolClient(
+            self, "AdminUserPoolClient",
+            user_pool=user_pool,
+            auth_flows=cognito.AuthFlow(user_password=True, user_srp=True),
+            generate_secret=False,
+        )
+        cognito.CfnUserPoolGroup(
+            self, "GroupSuperAdmin",
+            user_pool_id=user_pool.user_pool_id,
+            group_name="super-admin",
+            description="Full access, all departments",
+        )
+
+        # Bootstrap: create the initial super-admin user from config.yaml.
+        # Idempotent via AwsSdkCall — if the user already exists the call errors
+        # out, which we swallow by using ignore_error_codes_matching.
+        super_admin_email = (cfg.get("super_admin") or {}).get("email")
+        if super_admin_email:
+            # Username cannot be email format when email is a sign-in alias.
+            # Sanitize to a deterministic non-email string.
+            super_admin_username = "sa-" + re.sub(r'[^a-z0-9]', '-', super_admin_email.lower())[:64]
+            bootstrap_pw = "Kiro!Temp" + self.account[-4:]  # deterministic but unique per account
+            create_super_admin = cr.AwsCustomResource(
+                self, "BootstrapSuperAdmin",
+                on_create=cr.AwsSdkCall(
+                    service="CognitoIdentityServiceProvider",
+                    action="adminCreateUser",
+                    parameters={
+                        "UserPoolId": user_pool.user_pool_id,
+                        "Username": super_admin_username,
+                        "UserAttributes": [
+                            {"Name": "email", "Value": super_admin_email},
+                            {"Name": "email_verified", "Value": "true"},
+                        ],
+                        "TemporaryPassword": bootstrap_pw,
+                        "MessageAction": "SUPPRESS",
+                    },
+                    physical_resource_id=cr.PhysicalResourceId.of(f"bootstrap-{super_admin_username}"),
+                    ignore_error_codes_matching="UsernameExistsException",
+                ),
+                policy=cr.AwsCustomResourcePolicy.from_statements([
+                    iam.PolicyStatement(
+                        actions=["cognito-idp:AdminCreateUser", "cognito-idp:AdminAddUserToGroup"],
+                        resources=[user_pool.user_pool_arn],
+                    ),
+                ]),
+            )
+            add_to_group = cr.AwsCustomResource(
+                self, "BootstrapSuperAdminGroup",
+                on_create=cr.AwsSdkCall(
+                    service="CognitoIdentityServiceProvider",
+                    action="adminAddUserToGroup",
+                    parameters={
+                        "UserPoolId": user_pool.user_pool_id,
+                        "Username": super_admin_username,
+                        "GroupName": "super-admin",
+                    },
+                    physical_resource_id=cr.PhysicalResourceId.of(f"bootstrap-group-{super_admin_username}"),
+                ),
+                policy=cr.AwsCustomResourcePolicy.from_statements([
+                    iam.PolicyStatement(
+                        actions=["cognito-idp:AdminAddUserToGroup"],
+                        resources=[user_pool.user_pool_arn],
+                    ),
+                ]),
+            )
+            add_to_group.node.add_dependency(create_super_admin)
+            CfnOutput(self, "SuperAdminUsername", value=super_admin_username)
+            CfnOutput(self, "SuperAdminBootstrapPassword", value=bootstrap_pw,
+                      description="Temp password for initial super-admin (forced change on first login)")
+
+        upload_fn.add_environment("USER_POOL_ID", user_pool.user_pool_id)
+
+        authorizer = apigw.CognitoUserPoolsAuthorizer(
+            self, "AdminAuthorizer",
+            cognito_user_pools=[user_pool],
+        )
+
         # API Gateway REST API
         upload_api = apigw.RestApi(
             self, "UploadApi",
             rest_api_name=f"{proj}-upload-api",
             default_cors_preflight_options=apigw.CorsOptions(
-                allow_origins=[portal_origin],
+                allow_origins=apigw.Cors.ALL_ORIGINS,
                 allow_methods=["POST", "GET", "OPTIONS"],
-                allow_headers=["Content-Type"],
+                allow_headers=["Content-Type", "Authorization"],
             ),
             deploy_options=apigw.StageOptions(
                 throttling_rate_limit=2,
                 throttling_burst_limit=5,
             ),
         )
+        # Public: claimants and bot use these
         upload_api.root.add_resource("upload").add_method(
             "POST", apigw.LambdaIntegration(upload_fn),
         )
-        upload_api.root.add_resource("package").add_method(
-            "GET", apigw.LambdaIntegration(upload_fn),
-        )
-
-        upload_api.root.add_resource("status").add_method(
-            "GET", apigw.LambdaIntegration(upload_fn),
-        )
-
         upload_api.root.add_resource("upload-complete").add_method(
             "POST", apigw.LambdaIntegration(upload_fn),
         )
 
+        # Admin-only: require Cognito JWT
+        upload_api.root.add_resource("package").add_method(
+            "GET", apigw.LambdaIntegration(upload_fn), authorizer=authorizer,
+            authorization_type=apigw.AuthorizationType.COGNITO,
+        )
+        upload_api.root.add_resource("status").add_method(
+            "GET", apigw.LambdaIntegration(upload_fn), authorizer=authorizer,
+            authorization_type=apigw.AuthorizationType.COGNITO,
+        )
         upload_api.root.add_resource("update-status").add_method(
-            "POST", apigw.LambdaIntegration(upload_fn),
+            "POST", apigw.LambdaIntegration(upload_fn), authorizer=authorizer,
+            authorization_type=apigw.AuthorizationType.COGNITO,
+        )
+        upload_api.root.add_resource("delete-submission").add_method(
+            "POST", apigw.LambdaIntegration(upload_fn), authorizer=authorizer,
+            authorization_type=apigw.AuthorizationType.COGNITO,
         )
 
-        upload_api.root.add_resource("delete-submission").add_method(
-            "POST", apigw.LambdaIntegration(upload_fn),
-        )
+        CfnOutput(self, "UserPoolId", value=user_pool.user_pool_id)
+        CfnOutput(self, "UserPoolClientId", value=user_pool_client.user_pool_client_id)
 
         # S3 bucket for static portal site (public website hosting)
         portal_bucket = s3.Bucket(
