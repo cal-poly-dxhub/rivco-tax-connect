@@ -12,9 +12,6 @@ dynamodb = boto3.resource("dynamodb")
 BUCKET = os.environ["UPLOAD_BUCKET"]
 TABLE_NAME = os.environ.get("TABLE_NAME", "")
 table = dynamodb.Table(TABLE_NAME) if TABLE_NAME else None
-# Department config passed as JSON env var from CDK. Shape:
-#   [{"key": "general", "refund_types": ["STALE_WARRANT"]}, ...]
-DEPARTMENTS = json.loads(os.environ.get("DEPARTMENTS", "[]"))
 ALLOWED_TYPES = {
     "application/pdf",
     "image/jpeg",
@@ -60,12 +57,9 @@ def _now_iso() -> str:
 
 
 def _derive_departments(refund_types: list[str]) -> list[str]:
-    """Map refund types to department keys using DEPARTMENTS config."""
-    depts = set()
-    for d in DEPARTMENTS:
-        if any(rt in d.get("refund_types", []) for rt in refund_types):
-            depts.add(d["key"])
-    return sorted(depts)
+    """Map refund types to department keys. Phase 2b will populate this from
+    DynamoDB. For now returns []; super-admin sees everything regardless."""
+    return []
 
 
 def _derive_tasks(status: str, refund_types: list[str], documents: list[str]) -> list[dict[str, str]]:
@@ -85,6 +79,21 @@ def _derive_tasks(status: str, refund_types: list[str], documents: list[str]) ->
     return tasks
 
 
+def _auth(event: dict[str, Any]) -> tuple[set[str], bool]:
+    """Return (allowed_department_keys, is_super_admin) from the JWT claims.
+
+    Super-admin sees everything and gets all department keys. Non-admins get the
+    set of departments derived from their admin-<key> group memberships.
+    """
+    claims = ((event.get("requestContext") or {}).get("authorizer") or {}).get("claims") or {}
+    groups_raw = claims.get("cognito:groups") or ""
+    # API Gateway serializes the groups list as "[a b c]" or a comma-separated string.
+    groups = set(re.split(r"[,\s\[\]]+", groups_raw)) - {""}
+    is_super = "super-admin" in groups
+    dept_keys = {g[len("admin-"):] for g in groups if g.startswith("admin-")}
+    return dept_keys, is_super
+
+
 def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     headers = _cors_headers()
 
@@ -95,7 +104,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     if resource == "/package" and event.get("httpMethod") == "GET":
         return _handle_package(event, headers)
     if resource == "/status" and event.get("httpMethod") == "GET":
-        return _handle_status(headers)
+        return _handle_status(event, headers)
     if resource == "/upload-complete" and event.get("httpMethod") == "POST":
         return _handle_upload_complete(event, headers)
     if resource == "/update-status" and event.get("httpMethod") == "POST":
@@ -120,6 +129,12 @@ def _handle_package(event: dict[str, Any], headers: dict[str, str]) -> dict[str,
         manifest = json.loads(manifest_obj["Body"].read())
     except s3.exceptions.NoSuchKey:
         return _err(404, "Submission not found", headers)
+
+    dept_keys, is_super = _auth(event)
+    refund_types = [t.strip() for t in manifest.get("refundType", "").split(",") if t.strip()]
+    submission_depts = set(_derive_departments(refund_types))
+    if not is_super and not (dept_keys & submission_depts):
+        return _err(403, "Not authorized for this submission", headers)
 
     resp = s3.list_objects_v2(Bucket=BUCKET, Prefix=f"{submission_id}/")
     files = []
@@ -160,13 +175,17 @@ def _classify_status(refund_types: list[str], filenames: list[str]) -> str:
     return "complete"
 
 
-def _handle_status(headers: dict[str, str]) -> dict[str, Any]:
-    """List all submissions — from DynamoDB if available, else fall back to S3."""
+def _handle_status(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    """List submissions the caller is allowed to see."""
+    dept_keys, is_super = _auth(event)
     if table:
         resp = table.scan()
         submissions = []
         for item in resp.get("Items", []):
             refund_types = [t.strip() for t in item.get("refundType", "").split(",") if t.strip()]
+            depts = item.get("departments") or _derive_departments(refund_types)
+            if not is_super and not (dept_keys & set(depts)):
+                continue
             docs = item.get("documents", [])
             status = item.get("status", "partial")
             submissions.append({
@@ -176,13 +195,19 @@ def _handle_status(headers: dict[str, str]) -> dict[str, Any]:
                 "status": status,
                 "documents": docs,
                 "submittedAt": item.get("submittedAt", ""),
-                "departments": item.get("departments") or _derive_departments(refund_types),
+                "departments": depts,
                 "tasks": _derive_tasks(status, refund_types, docs),
             })
         submissions.sort(key=lambda s: (0 if s["status"] == "complete" else 1, s["submittedAt"]))
-        return {"statusCode": 200, "headers": headers, "body": json.dumps(submissions)}
+        permissions = {
+            "isSuperAdmin": is_super,
+            "canDelete": is_super,
+            "departments": sorted(dept_keys) if not is_super else None,
+        }
+        return {"statusCode": 200, "headers": headers,
+                "body": json.dumps({"submissions": submissions, "permissions": permissions})}
 
-    # Fallback: S3 scan (original behavior)
+    # Fallback: S3 scan (unauthenticated legacy, kept for local dev)
     return _handle_status_s3(headers)
 
 
@@ -298,8 +323,15 @@ def _handle_update_status(event: dict[str, Any], headers: dict[str, str]) -> dic
         return _err(500, "DynamoDB not configured", headers)
 
     resp = table.get_item(Key={"submissionId": submission_id})
-    if not resp.get("Item"):
+    item = resp.get("Item")
+    if not item:
         return _err(404, "Submission not found", headers)
+
+    dept_keys, is_super = _auth(event)
+    submission_depts = set(item.get("departments") or _derive_departments(
+        [t.strip() for t in item.get("refundType", "").split(",") if t.strip()]))
+    if not is_super and not (dept_keys & submission_depts):
+        return _err(403, "Not authorized for this submission", headers)
 
     table.update_item(
         Key={"submissionId": submission_id},
@@ -316,7 +348,11 @@ def _handle_update_status(event: dict[str, Any], headers: dict[str, str]) -> dic
 
 
 def _handle_delete_submission(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
-    """Delete a submission from DynamoDB and S3."""
+    """Delete a submission from DynamoDB and S3. Super-admin only."""
+    _, is_super = _auth(event)
+    if not is_super:
+        return _err(403, "Only super-admin can delete submissions", headers)
+
     try:
         body = json.loads(event.get("body") or "{}")
     except json.JSONDecodeError:
