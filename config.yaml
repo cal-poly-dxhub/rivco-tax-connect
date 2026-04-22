@@ -18,27 +18,9 @@ s3:
   bucket_suffix: data
   data_file: refunds_demo_balanced.jsonl
 
-# Admin dashboard configuration.
-# `departments` maps refund_type values to departments. Each department becomes a
-# Cognito group (admin-<key>) and has one or more admin accounts. A submission
-# shows up in every department its refund types map to.
-departments:
-  - key: general
-    label: General
-    refund_types: [STALE_WARRANT]
-    admins:
-      - email: gflusser+general@amazon.com
-  - key: property-tax
-    label: Property Tax
-    refund_types: [PROPERTY_TAX]
-    admins:
-      - email: gflusser+property@amazon.com
-  - key: payroll
-    label: Payroll
-    refund_types: [PAYROLL]
-    admins:
-      - email: gflusser+payroll@amazon.com
-
+# Super-admin bootstrap. Created by CDK custom resource on first deploy.
+# Additional super-admins and all other admin users/departments are managed
+# at runtime from the dashboard.
 super_admin:
   email: gflusser+super@amazon.com
 
