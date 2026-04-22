@@ -475,6 +475,10 @@ class NovaSonicConnectStack(Stack):
                 "UPLOAD_BUCKET": uploads_bucket.bucket_name,
                 "ALLOWED_ORIGIN": portal_origin,
                 "TABLE_NAME": submissions_table.table_name,
+                "DEPARTMENTS": json.dumps([
+                    {"key": d["key"], "refund_types": d["refund_types"]}
+                    for d in cfg.get("departments", [])
+                ]),
             },
         )
         submissions_table.grant_read_write_data(upload_fn)
