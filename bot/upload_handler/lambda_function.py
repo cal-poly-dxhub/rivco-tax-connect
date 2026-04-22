@@ -12,6 +12,9 @@ dynamodb = boto3.resource("dynamodb")
 BUCKET = os.environ["UPLOAD_BUCKET"]
 TABLE_NAME = os.environ.get("TABLE_NAME", "")
 table = dynamodb.Table(TABLE_NAME) if TABLE_NAME else None
+# Department config passed as JSON env var from CDK. Shape:
+#   [{"key": "general", "refund_types": ["STALE_WARRANT"]}, ...]
+DEPARTMENTS = json.loads(os.environ.get("DEPARTMENTS", "[]"))
 ALLOWED_TYPES = {
     "application/pdf",
     "image/jpeg",
@@ -54,6 +57,32 @@ def _err(code: int, msg: str, headers: dict[str, str]) -> dict[str, Any]:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _derive_departments(refund_types: list[str]) -> list[str]:
+    """Map refund types to department keys using DEPARTMENTS config."""
+    depts = set()
+    for d in DEPARTMENTS:
+        if any(rt in d.get("refund_types", []) for rt in refund_types):
+            depts.add(d["key"])
+    return sorted(depts)
+
+
+def _derive_tasks(status: str, refund_types: list[str], documents: list[str]) -> list[dict[str, str]]:
+    """Build a list of task dicts {label, done} for a submission based on its state."""
+    tasks: list[dict[str, str]] = []
+    expected = set()
+    for rt in refund_types:
+        expected |= _EXPECTED_DOCS.get(rt, set())
+    uploaded_prefixes = {f.split("_", 1)[0].rsplit(".", 1)[0] for f in documents}
+    for doc in sorted(expected):
+        tasks.append({"label": f"Claimant uploads {doc.replace('-', ' ')}", "done": doc in uploaded_prefixes})
+    if "PROPERTY_TAX" in refund_types:
+        pt_ok = bool(_PT_EITHER & uploaded_prefixes)
+        tasks.append({"label": "Claimant uploads proof of payment or ownership", "done": pt_ok})
+    tasks.append({"label": "Admin reviews documents", "done": status in {"under-review", "approved", "denied"}})
+    tasks.append({"label": "Admin approves or denies claim", "done": status in {"approved", "denied"}})
+    return tasks
 
 
 def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -137,13 +166,18 @@ def _handle_status(headers: dict[str, str]) -> dict[str, Any]:
         resp = table.scan()
         submissions = []
         for item in resp.get("Items", []):
+            refund_types = [t.strip() for t in item.get("refundType", "").split(",") if t.strip()]
+            docs = item.get("documents", [])
+            status = item.get("status", "partial")
             submissions.append({
                 "submissionId": item["submissionId"],
                 "name": item.get("name", ""),
                 "refundType": item.get("refundType", ""),
-                "status": item.get("status", "partial"),
-                "documents": item.get("documents", []),
+                "status": status,
+                "documents": docs,
                 "submittedAt": item.get("submittedAt", ""),
+                "departments": item.get("departments") or _derive_departments(refund_types),
+                "tasks": _derive_tasks(status, refund_types, docs),
             })
         submissions.sort(key=lambda s: (0 if s["status"] == "complete" else 1, s["submittedAt"]))
         return {"statusCode": 200, "headers": headers, "body": json.dumps(submissions)}
@@ -358,10 +392,12 @@ def _handle_upload(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
 
     # Write initial record to DynamoDB
     if table:
+        refund_types = [t.strip() for t in refund_type.split(",") if t.strip()]
         table.put_item(Item={
             "submissionId": submission_id,
             "name": name,
             "refundType": refund_type,
+            "departments": _derive_departments(refund_types),
             "status": "partial",
             "documents": [],
             "submittedAt": now,
