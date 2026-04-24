@@ -464,6 +464,15 @@ class NovaSonicConnectStack(Stack):
             removal_policy=RemovalPolicy.DESTROY,
         )
 
+        # Admin config: departments, users, refund-type labels (super-admin managed)
+        admin_config_table = dynamodb.Table(
+            self, "AdminConfig",
+            table_name=f"{proj}-admin-config",
+            partition_key=dynamodb.Attribute(name="pk", type=dynamodb.AttributeType.STRING),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+
         # Lambda for presigned URL generation
         upload_fn = _lambda.Function(
             self, "UploadHandler",
@@ -477,9 +486,11 @@ class NovaSonicConnectStack(Stack):
                 "UPLOAD_BUCKET": uploads_bucket.bucket_name,
                 "ALLOWED_ORIGIN": portal_origin,
                 "TABLE_NAME": submissions_table.table_name,
+                "ADMIN_CONFIG_TABLE": admin_config_table.table_name,
             },
         )
         submissions_table.grant_read_write_data(upload_fn)
+        admin_config_table.grant_read_write_data(upload_fn)
         uploads_bucket.grant_put(upload_fn)
         uploads_bucket.grant_write(upload_fn)
         uploads_bucket.grant_read(upload_fn)
@@ -494,6 +505,15 @@ class NovaSonicConnectStack(Stack):
             password_policy=cognito.PasswordPolicy(
                 min_length=8, require_lowercase=True, require_uppercase=True,
                 require_digits=True, require_symbols=False,
+            ),
+            user_invitation=cognito.UserInvitationConfig(
+                email_subject="Your Riverside County admin account",
+                email_body=(
+                    "An admin account has been created for you.\n\n"
+                    "Username: {username}\n"
+                    "Temporary password: {####}\n\n"
+                    "Sign in and set a permanent password to finish setup."
+                ),
             ),
             removal_policy=RemovalPolicy.DESTROY,
         )
@@ -569,6 +589,22 @@ class NovaSonicConnectStack(Stack):
                       description="Temp password for initial super-admin (forced change on first login)")
 
         upload_fn.add_environment("USER_POOL_ID", user_pool.user_pool_id)
+        upload_fn.add_to_role_policy(iam.PolicyStatement(
+            actions=[
+                "cognito-idp:AdminCreateUser",
+                "cognito-idp:AdminDeleteUser",
+                "cognito-idp:AdminUpdateUserAttributes",
+                "cognito-idp:AdminAddUserToGroup",
+                "cognito-idp:AdminRemoveUserFromGroup",
+                "cognito-idp:AdminListGroupsForUser",
+                "cognito-idp:AdminGetUser",
+                "cognito-idp:ListUsers",
+                "cognito-idp:ListUsersInGroup",
+                "cognito-idp:CreateGroup",
+                "cognito-idp:DeleteGroup",
+            ],
+            resources=[user_pool.user_pool_arn],
+        ))
 
         authorizer = apigw.CognitoUserPoolsAuthorizer(
             self, "AdminAuthorizer",
@@ -612,6 +648,13 @@ class NovaSonicConnectStack(Stack):
         )
         upload_api.root.add_resource("delete-submission").add_method(
             "POST", apigw.LambdaIntegration(upload_fn), authorizer=authorizer,
+            authorization_type=apigw.AuthorizationType.COGNITO,
+        )
+
+        # Super-admin config CRUD — catch-all under /admin/*
+        admin_resource = upload_api.root.add_resource("admin")
+        admin_resource.add_resource("{proxy+}").add_method(
+            "ANY", apigw.LambdaIntegration(upload_fn), authorizer=authorizer,
             authorization_type=apigw.AuthorizationType.COGNITO,
         )
 
