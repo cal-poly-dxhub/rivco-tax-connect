@@ -9,9 +9,13 @@ import boto3
 
 s3 = boto3.client("s3")
 dynamodb = boto3.resource("dynamodb")
+cognito = boto3.client("cognito-idp")
 BUCKET = os.environ["UPLOAD_BUCKET"]
 TABLE_NAME = os.environ.get("TABLE_NAME", "")
+ADMIN_CONFIG_TABLE = os.environ.get("ADMIN_CONFIG_TABLE", "")
+USER_POOL_ID = os.environ.get("USER_POOL_ID", "")
 table = dynamodb.Table(TABLE_NAME) if TABLE_NAME else None
+admin_table = dynamodb.Table(ADMIN_CONFIG_TABLE) if ADMIN_CONFIG_TABLE else None
 ALLOWED_TYPES = {
     "application/pdf",
     "image/jpeg",
@@ -56,10 +60,24 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _load_departments() -> list[dict[str, Any]]:
+    """Return all department records from the admin-config table."""
+    if not admin_table:
+        return []
+    resp = admin_table.scan(
+        FilterExpression="begins_with(pk, :p)",
+        ExpressionAttributeValues={":p": "DEPT#"},
+    )
+    return resp.get("Items", [])
+
+
 def _derive_departments(refund_types: list[str]) -> list[str]:
-    """Map refund types to department keys. Phase 2b will populate this from
-    DynamoDB. For now returns []; super-admin sees everything regardless."""
-    return []
+    """Map refund types to department keys using the admin-config table."""
+    depts = set()
+    for d in _load_departments():
+        if any(rt in (d.get("refund_types") or []) for rt in refund_types):
+            depts.add(d["key"])
+    return sorted(depts)
 
 
 def _derive_tasks(status: str, refund_types: list[str], documents: list[str]) -> list[dict[str, str]]:
@@ -101,6 +119,8 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return {"statusCode": 200, "headers": headers, "body": ""}
 
     resource = event.get("resource", "")
+    if resource.startswith("/admin/"):
+        return _handle_admin(event, headers)
     if resource == "/package" and event.get("httpMethod") == "GET":
         return _handle_package(event, headers)
     if resource == "/status" and event.get("httpMethod") == "GET":
@@ -445,3 +465,315 @@ def _handle_upload(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
         "headers": headers,
         "body": json.dumps({"submissionId": submission_id, "uploads": urls}),
     }
+
+
+# ── Super-admin config CRUD ────────────────────────────────
+
+_VALID_KEY = re.compile(r'^[a-z0-9][a-z0-9-]{0,31}$')
+
+
+def _username_from_email(email: str) -> str:
+    """Local-part of the email as username. Reject unsafe chars."""
+    local = email.split("@", 1)[0].lower()
+    local = re.sub(r'[^a-z0-9._-]', '', local)
+    return local or ""
+
+
+def _handle_admin(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    _, is_super = _auth(event)
+    if not is_super:
+        return _err(403, "Super-admin only", headers)
+    if not admin_table or not USER_POOL_ID:
+        return _err(500, "Admin backend not configured", headers)
+
+    path = (event.get("pathParameters") or {}).get("proxy", "")
+    method = event.get("httpMethod", "GET")
+    parts = path.split("/") if path else []
+
+    # /admin/config (GET)
+    if path == "config" and method == "GET":
+        return _admin_get_config(headers)
+    # /admin/departments
+    if parts[:1] == ["departments"]:
+        if len(parts) == 1 and method == "POST":
+            return _admin_create_department(event, headers)
+        if len(parts) == 2 and method == "PATCH":
+            return _admin_update_department(event, parts[1], headers)
+        if len(parts) == 2 and method == "DELETE":
+            return _admin_delete_department(parts[1], headers)
+    # /admin/users
+    if parts[:1] == ["users"]:
+        if len(parts) == 1 and method == "POST":
+            return _admin_create_user(event, headers)
+        if len(parts) == 2 and method == "PATCH":
+            return _admin_update_user(event, parts[1], headers)
+        if len(parts) == 2 and method == "DELETE":
+            return _admin_delete_user(parts[1], headers)
+    # /admin/refund-types/<TYPE> (PUT to set label)
+    if parts[:1] == ["refund-types"] and len(parts) == 2 and method == "PUT":
+        return _admin_set_refund_type_label(event, parts[1], headers)
+
+    return _err(404, f"Unknown admin route: {method} {path}", headers)
+
+
+def _admin_get_config(headers: dict[str, str]) -> dict[str, Any]:
+    resp = admin_table.scan()
+    departments = []
+    users = []
+    refund_type_labels = {}
+    for item in resp.get("Items", []):
+        pk = item.get("pk", "")
+        if pk.startswith("DEPT#"):
+            departments.append({
+                "key": item["key"], "label": item.get("label", item["key"]),
+                "refund_types": item.get("refund_types") or [],
+            })
+        elif pk.startswith("USER#"):
+            users.append({
+                "username": item["username"], "email": item.get("email", ""),
+                "groups": item.get("groups") or [],
+                "createdAt": item.get("createdAt", ""),
+            })
+        elif pk.startswith("TYPELABEL#"):
+            refund_type_labels[item["refund_type"]] = item.get("label", "")
+
+    # Merge in Cognito users that aren't in admin-config yet (e.g. bootstrap super-admin)
+    known = {u["username"] for u in users}
+    cognito_users = cognito.list_users(UserPoolId=USER_POOL_ID).get("Users", [])
+    for cu in cognito_users:
+        uname = cu.get("Username")
+        if not uname or uname in known:
+            continue
+        attrs = {a["Name"]: a["Value"] for a in cu.get("Attributes", [])}
+        groups_resp = cognito.admin_list_groups_for_user(UserPoolId=USER_POOL_ID, Username=uname)
+        users.append({
+            "username": uname, "email": attrs.get("email", ""),
+            "groups": [g["GroupName"] for g in groups_resp.get("Groups", [])],
+            "createdAt": cu.get("UserCreateDate").isoformat() if cu.get("UserCreateDate") else "",
+        })
+
+    return {"statusCode": 200, "headers": headers, "body": json.dumps({
+        "departments": sorted(departments, key=lambda d: d["key"]),
+        "users": sorted(users, key=lambda u: u["username"]),
+        "refundTypeLabels": refund_type_labels,
+    })}
+
+
+def _admin_create_department(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except json.JSONDecodeError:
+        return _err(400, "Invalid JSON", headers)
+    key = (body.get("key") or "").strip().lower()
+    label = (body.get("label") or "").strip()
+    refund_types = body.get("refund_types") or []
+    if not _VALID_KEY.match(key):
+        return _err(400, "key must be lowercase alphanumeric/dashes, 1-32 chars", headers)
+    if not label:
+        return _err(400, "label is required", headers)
+    if admin_table.get_item(Key={"pk": f"DEPT#{key}"}).get("Item"):
+        return _err(409, "Department already exists", headers)
+    group_name = f"admin-{key}"
+    try:
+        cognito.create_group(UserPoolId=USER_POOL_ID, GroupName=group_name, Description=label)
+    except cognito.exceptions.GroupExistsException:
+        pass
+    admin_table.put_item(Item={
+        "pk": f"DEPT#{key}", "key": key, "label": label,
+        "refund_types": refund_types, "createdAt": _now_iso(),
+    })
+    return {"statusCode": 201, "headers": headers,
+            "body": json.dumps({"key": key, "label": label, "refund_types": refund_types})}
+
+
+def _admin_update_department(event: dict[str, Any], key: str, headers: dict[str, str]) -> dict[str, Any]:
+    if not _VALID_KEY.match(key):
+        return _err(400, "invalid key", headers)
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except json.JSONDecodeError:
+        return _err(400, "Invalid JSON", headers)
+    resp = admin_table.get_item(Key={"pk": f"DEPT#{key}"})
+    if not resp.get("Item"):
+        return _err(404, "Department not found", headers)
+    updates = {}
+    if "label" in body:
+        updates["label"] = str(body["label"]).strip() or resp["Item"]["label"]
+    if "refund_types" in body:
+        updates["refund_types"] = list(body["refund_types"] or [])
+    if not updates:
+        return _err(400, "No updates", headers)
+    expr = ", ".join(f"#{k} = :{k}" for k in updates)
+    admin_table.update_item(
+        Key={"pk": f"DEPT#{key}"},
+        UpdateExpression=f"SET {expr}, updatedAt = :u",
+        ExpressionAttributeNames={f"#{k}": k for k in updates},
+        ExpressionAttributeValues={**{f":{k}": v for k, v in updates.items()}, ":u": _now_iso()},
+    )
+    return {"statusCode": 200, "headers": headers, "body": json.dumps({"key": key, **updates})}
+
+
+def _admin_delete_department(key: str, headers: dict[str, str]) -> dict[str, Any]:
+    if not _VALID_KEY.match(key):
+        return _err(400, "invalid key", headers)
+    if not admin_table.get_item(Key={"pk": f"DEPT#{key}"}).get("Item"):
+        return _err(404, "Department not found", headers)
+    group_name = f"admin-{key}"
+    try:
+        cognito.delete_group(UserPoolId=USER_POOL_ID, GroupName=group_name)
+    except cognito.exceptions.ResourceNotFoundException:
+        pass
+    admin_table.delete_item(Key={"pk": f"DEPT#{key}"})
+    return {"statusCode": 200, "headers": headers, "body": json.dumps({"key": key, "deleted": True})}
+
+
+def _admin_create_user(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except json.JSONDecodeError:
+        return _err(400, "Invalid JSON", headers)
+    email = (body.get("email") or "").strip().lower()
+    groups = list(body.get("groups") or [])
+    if "@" not in email:
+        return _err(400, "valid email required", headers)
+    username = _username_from_email(email)
+    if not username:
+        return _err(400, "Cannot derive username from email", headers)
+    # Collision check
+    if admin_table.get_item(Key={"pk": f"USER#{username}"}).get("Item"):
+        return _err(409, f"Username '{username}' already exists (email prefix collision)", headers)
+    try:
+        cognito.admin_create_user(
+            UserPoolId=USER_POOL_ID,
+            Username=username,
+            UserAttributes=[
+                {"Name": "email", "Value": email},
+                {"Name": "email_verified", "Value": "true"},
+            ],
+            DesiredDeliveryMediums=["EMAIL"],
+        )
+    except cognito.exceptions.UsernameExistsException:
+        return _err(409, "Username already exists in Cognito", headers)
+    for group in groups:
+        try:
+            cognito.admin_add_user_to_group(
+                UserPoolId=USER_POOL_ID, Username=username, GroupName=group,
+            )
+        except cognito.exceptions.ResourceNotFoundException:
+            return _err(400, f"Group not found: {group}", headers)
+    admin_table.put_item(Item={
+        "pk": f"USER#{username}", "username": username, "email": email,
+        "groups": groups, "createdAt": _now_iso(),
+    })
+    return {"statusCode": 201, "headers": headers,
+            "body": json.dumps({"username": username, "email": email, "groups": groups})}
+
+
+def _get_or_materialize_user(username: str) -> dict[str, Any] | None:
+    """Return the user's admin-config record, creating it from Cognito if missing."""
+    existing = admin_table.get_item(Key={"pk": f"USER#{username}"}).get("Item")
+    if existing:
+        return existing
+    # Fallback: materialize from Cognito (handles bootstrap super-admin)
+    try:
+        cu = cognito.admin_get_user(UserPoolId=USER_POOL_ID, Username=username)
+    except cognito.exceptions.UserNotFoundException:
+        return None
+    attrs = {a["Name"]: a["Value"] for a in cu.get("UserAttributes", [])}
+    groups_resp = cognito.admin_list_groups_for_user(UserPoolId=USER_POOL_ID, Username=username)
+    item = {
+        "pk": f"USER#{username}", "username": username, "email": attrs.get("email", ""),
+        "groups": [g["GroupName"] for g in groups_resp.get("Groups", [])],
+        "createdAt": cu.get("UserCreateDate").isoformat() if cu.get("UserCreateDate") else _now_iso(),
+    }
+    admin_table.put_item(Item=item)
+    return item
+
+
+def _admin_update_user(event: dict[str, Any], username: str, headers: dict[str, str]) -> dict[str, Any]:
+    if not re.fullmatch(r'[a-z0-9._-]+', username):
+        return _err(400, "invalid username", headers)
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except json.JSONDecodeError:
+        return _err(400, "Invalid JSON", headers)
+    existing = _get_or_materialize_user(username)
+    if not existing:
+        return _err(404, "User not found", headers)
+
+    # Email update
+    new_email = (body.get("email") or "").strip().lower()
+    if new_email and new_email != existing.get("email"):
+        cognito.admin_update_user_attributes(
+            UserPoolId=USER_POOL_ID, Username=username,
+            UserAttributes=[
+                {"Name": "email", "Value": new_email},
+                {"Name": "email_verified", "Value": "true"},
+            ],
+        )
+
+    # Groups update (diff add/remove)
+    if "groups" in body:
+        desired = set(body["groups"] or [])
+        current = set(existing.get("groups") or [])
+        # Safety: don't remove last super-admin
+        if "super-admin" in current and "super-admin" not in desired:
+            remaining = cognito.list_users_in_group(UserPoolId=USER_POOL_ID, GroupName="super-admin")
+            if len([u for u in remaining.get("Users", []) if u.get("Username") != username]) == 0:
+                return _err(400, "Cannot remove the last super-admin", headers)
+        for g in desired - current:
+            cognito.admin_add_user_to_group(UserPoolId=USER_POOL_ID, Username=username, GroupName=g)
+        for g in current - desired:
+            cognito.admin_remove_user_from_group(UserPoolId=USER_POOL_ID, Username=username, GroupName=g)
+    else:
+        desired = set(existing.get("groups") or [])
+
+    updates = {"groups": sorted(desired)}
+    if new_email:
+        updates["email"] = new_email
+    expr = ", ".join(f"#{k} = :{k}" for k in updates)
+    admin_table.update_item(
+        Key={"pk": f"USER#{username}"},
+        UpdateExpression=f"SET {expr}, updatedAt = :u",
+        ExpressionAttributeNames={f"#{k}": k for k in updates},
+        ExpressionAttributeValues={**{f":{k}": v for k, v in updates.items()}, ":u": _now_iso()},
+    )
+    return {"statusCode": 200, "headers": headers, "body": json.dumps({"username": username, **updates})}
+
+
+def _admin_delete_user(username: str, headers: dict[str, str]) -> dict[str, Any]:
+    if not re.fullmatch(r'[a-z0-9._-]+', username):
+        return _err(400, "invalid username", headers)
+    existing = _get_or_materialize_user(username)
+    if not existing:
+        return _err(404, "User not found", headers)
+    # Safety: don't delete last super-admin
+    if "super-admin" in (existing.get("groups") or []):
+        remaining = cognito.list_users_in_group(UserPoolId=USER_POOL_ID, GroupName="super-admin")
+        if len([u for u in remaining.get("Users", []) if u.get("Username") != username]) == 0:
+            return _err(400, "Cannot delete the last super-admin", headers)
+    try:
+        cognito.admin_delete_user(UserPoolId=USER_POOL_ID, Username=username)
+    except cognito.exceptions.UserNotFoundException:
+        pass
+    admin_table.delete_item(Key={"pk": f"USER#{username}"})
+    return {"statusCode": 200, "headers": headers, "body": json.dumps({"username": username, "deleted": True})}
+
+
+def _admin_set_refund_type_label(event: dict[str, Any], refund_type: str, headers: dict[str, str]) -> dict[str, Any]:
+    refund_type = refund_type.upper()
+    if refund_type not in {"STALE_WARRANT", "PAYROLL", "PROPERTY_TAX"}:
+        return _err(400, "Unknown refund type", headers)
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except json.JSONDecodeError:
+        return _err(400, "Invalid JSON", headers)
+    label = (body.get("label") or "").strip()
+    if not label:
+        return _err(400, "label is required", headers)
+    admin_table.put_item(Item={
+        "pk": f"TYPELABEL#{refund_type}", "refund_type": refund_type,
+        "label": label, "updatedAt": _now_iso(),
+    })
+    return {"statusCode": 200, "headers": headers,
+            "body": json.dumps({"refund_type": refund_type, "label": label})}
