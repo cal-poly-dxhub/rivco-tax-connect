@@ -43,12 +43,20 @@ def _sanitize_filename(name: str) -> str:
     return name[:100] or 'file'
 
 
-def _cors_headers() -> dict[str, str]:
-    origin = os.environ.get("ALLOWED_ORIGIN", "*")
+def _cors_headers(event: dict[str, Any] | None = None) -> dict[str, str]:
+    # Echo the request Origin if it matches an allowed one; fall back to ALLOWED_ORIGIN env.
+    default_origin = os.environ.get("ALLOWED_ORIGIN", "*")
+    allowed = set(filter(None, (os.environ.get("ALLOWED_ORIGINS", "") or default_origin).split(",")))
+    origin = default_origin
+    if event is not None:
+        req_origin = (event.get("headers") or {}).get("Origin") or (event.get("headers") or {}).get("origin")
+        if req_origin and (req_origin in allowed or "*" in allowed):
+            origin = req_origin
     return {
         "Access-Control-Allow-Origin": origin,
-        "Access-Control-Allow-Headers": "Content-Type",
-        "Access-Control-Allow-Methods": "POST,GET,OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type,Authorization",
+        "Access-Control-Allow-Methods": "POST,GET,PATCH,PUT,DELETE,OPTIONS",
+        "Vary": "Origin",
     }
 
 
@@ -113,7 +121,7 @@ def _auth(event: dict[str, Any]) -> tuple[set[str], bool]:
 
 
 def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
-    headers = _cors_headers()
+    headers = _cors_headers(event)
 
     if event.get("httpMethod") == "OPTIONS":
         return {"statusCode": 200, "headers": headers, "body": ""}
