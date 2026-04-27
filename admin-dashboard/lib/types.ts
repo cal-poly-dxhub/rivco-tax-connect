@@ -1,3 +1,12 @@
+export type PackageFile = { filename: string; downloadUrl: string; size: number }
+
+export type Package = {
+  submissionId: string
+  name: string
+  refundType: string
+  files: PackageFile[]
+}
+
 export type Task = { label: string; done: boolean }
 
 export type Submission = {
