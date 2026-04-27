@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog"
 import { currentSession, signOut } from "@/lib/cognito"
 import { api } from "@/lib/api"
+import { ThemeToggle } from "@/components/theme-toggle"
 import { AdminConfig, Department, AdminUser, REFUND_TYPES } from "@/lib/types"
 
 export default function AdminConfigPage() {
@@ -57,6 +58,7 @@ export default function AdminConfigPage() {
         <header className="flex items-center justify-between">
           <h1 className="font-medium">Admin Config</h1>
           <div className="flex gap-2">
+            <ThemeToggle />
             <Link href="/dashboard"><Button variant="outline">← Submissions</Button></Link>
             <Button variant="outline" onClick={onSignOut}>Sign out</Button>
           </div>
