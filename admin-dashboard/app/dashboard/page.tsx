@@ -192,7 +192,7 @@ export default function DashboardPage() {
         </Table>
 
         <Dialog open={!!selected} onOpenChange={(o) => !o && setSelected(null)}>
-          <DialogContent className="max-w-4xl">
+          <DialogContent className="!max-w-none !w-[80vw] !h-[80vh] flex flex-col">
             {selected && <SubmissionDetail submission={selected} />}
           </DialogContent>
         </Dialog>
@@ -225,7 +225,7 @@ function SubmissionDetail({ submission }: { submission: Submission }) {
       <DialogHeader>
         <DialogTitle>{submission.name}</DialogTitle>
       </DialogHeader>
-      <div className="grid grid-cols-[220px_1fr] gap-4 text-sm max-h-[70vh]">
+      <div className="grid grid-cols-[260px_1fr] gap-4 text-sm flex-1 min-h-0">
         <aside className="flex flex-col gap-4 overflow-y-auto">
           <div>
             <p className="text-muted-foreground text-xs">ID: {submission.submissionId}</p>
