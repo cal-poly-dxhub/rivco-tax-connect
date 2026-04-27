@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/dialog"
 import { currentSession, signOut } from "@/lib/cognito"
 import { api } from "@/lib/api"
+import { ThemeToggle } from "@/components/theme-toggle"
 import {
   Submission, StatusResponse, Permissions, STATUSES, labelFor, Package, PackageFile,
 } from "@/lib/types"
@@ -105,6 +106,7 @@ export default function DashboardPage() {
         <header className="flex items-center justify-between">
           <h1 className="font-medium">Riverside County — Admin Dashboard</h1>
           <div className="flex gap-2">
+            <ThemeToggle />
             {perms?.isSuperAdmin && (
               <Link href="/dashboard/config"><Button variant="outline">Admin config</Button></Link>
             )}
