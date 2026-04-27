@@ -7,6 +7,7 @@ from aws_cdk import (
     aws_s3 as s3,
     aws_s3_deployment as s3deploy,
     aws_lambda as _lambda,
+    aws_lambda_event_sources as lambda_events,
     aws_iam as iam,
     aws_lex as lex,
     aws_connect as connect,
@@ -19,6 +20,7 @@ from aws_cdk import (
     aws_codebuild as codebuild,
     aws_cloudfront as cloudfront,
     aws_cloudfront_origins as cloudfront_origins,
+    aws_ses as ses,
     custom_resources as cr,
 )
 from constructs import Construct
@@ -473,6 +475,7 @@ class NovaSonicConnectStack(Stack):
             partition_key=dynamodb.Attribute(name="submissionId", type=dynamodb.AttributeType.STRING),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
             removal_policy=RemovalPolicy.DESTROY,
+            stream=dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
         )
 
         # Admin config: departments, users, refund-type labels (super-admin managed)
@@ -847,3 +850,48 @@ class NovaSonicConnectStack(Stack):
 
         CfnOutput(self, "AdminDashboardUrl", value=f"https://{admin_distribution.distribution_domain_name}")
         CfnOutput(self, "AdminBuildProjectName", value=admin_build.project_name)
+
+        # --- Notifications (DynamoDB stream → Lambda → SES) ---
+        notif_cfg = cfg.get("notifications") or {}
+        notif_mode = notif_cfg.get("mode", "ses")
+        notif_sender = notif_cfg.get("sender", "")
+
+        # SES identity — creating the resource sends a verification email on deploy.
+        # Idempotent; if the identity already exists, CFN no-ops.
+        if notif_sender:
+            ses.EmailIdentity(
+                self, "NotificationSenderIdentity",
+                identity=ses.Identity.email(notif_sender),
+            )
+
+        notif_fn = _lambda.Function(
+            self, "NotificationHandler",
+            function_name=f"{proj}-notification-handler",
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            handler="lambda_function.lambda_handler",
+            code=_lambda.Code.from_asset("bot/notification_handler"),
+            timeout=Duration.seconds(30),
+            memory_size=128,
+            environment={
+                "ADMIN_CONFIG_TABLE": admin_config_table.table_name,
+                "USER_POOL_ID": user_pool.user_pool_id,
+                "DASHBOARD_URL": f"https://{admin_distribution.distribution_domain_name}/dashboard",
+                "SES_SENDER": notif_sender,
+                "NOTIFICATIONS_MODE": notif_mode,
+            },
+        )
+        admin_config_table.grant_read_data(notif_fn)
+        notif_fn.add_to_role_policy(iam.PolicyStatement(
+            actions=["cognito-idp:ListUsersInGroup"],
+            resources=[user_pool.user_pool_arn],
+        ))
+        notif_fn.add_to_role_policy(iam.PolicyStatement(
+            actions=["ses:SendEmail", "ses:SendRawEmail"],
+            resources=["*"],
+        ))
+        notif_fn.add_event_source(lambda_events.DynamoEventSource(
+            submissions_table,
+            starting_position=_lambda.StartingPosition.LATEST,
+            batch_size=10,
+            retry_attempts=2,
+        ))
