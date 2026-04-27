@@ -37,6 +37,9 @@ export default function SignInPage() {
       sessionStorage.setItem("__cog_user", username.trim())
       sessionStorage.setItem("__cog_tmp_pw", password)
       router.push("/new-password")
+    } else if (result.kind === "reset-required") {
+      sessionStorage.setItem("__cog_user", result.username)
+      router.push("/reset-password")
     } else {
       setError(result.message)
     }
