@@ -16,6 +16,9 @@ from aws_cdk import (
     aws_apigateway as apigw,
     aws_dynamodb as dynamodb,
     aws_cognito as cognito,
+    aws_codebuild as codebuild,
+    aws_cloudfront as cloudfront,
+    aws_cloudfront_origins as cloudfront_origins,
     custom_resources as cr,
 )
 from constructs import Construct
@@ -695,3 +698,122 @@ class NovaSonicConnectStack(Stack):
         CfnOutput(self, "UploadApiUrl", value=upload_api.url)
         CfnOutput(self, "UploadsBucketName", value=uploads_bucket.bucket_name)
         CfnOutput(self, "SubmissionsTableName", value=submissions_table.table_name)
+
+        # --- Admin dashboard (Next.js) ---
+        # CodeBuild pulls from GitHub, builds `yarn build`, publishes `out/` to
+        # a private S3 bucket served via CloudFront. Triggered on every
+        # `cdk deploy` via a custom resource.
+        dash_cfg = cfg.get("admin_dashboard") or {}
+        gh_owner = dash_cfg.get("github_owner", "cal-poly-dxhub")
+        gh_repo = dash_cfg.get("github_repo", "rivco-tax-connect")
+        gh_branch = dash_cfg.get("github_branch", "main")
+
+        admin_bucket = s3.Bucket(
+            self, "AdminBucket",
+            bucket_name=f"{proj}-admin-{self.account}",
+            removal_policy=RemovalPolicy.DESTROY,
+            auto_delete_objects=True,
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            encryption=s3.BucketEncryption.S3_MANAGED,
+        )
+
+        admin_oac = cloudfront.S3OriginAccessControl(
+            self, "AdminBucketOAC", description="OAC for admin dashboard bucket",
+        )
+        admin_distribution = cloudfront.Distribution(
+            self, "AdminDistribution",
+            default_behavior=cloudfront.BehaviorOptions(
+                origin=cloudfront_origins.S3BucketOrigin.with_origin_access_control(
+                    admin_bucket, origin_access_control=admin_oac,
+                ),
+                viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
+            ),
+            default_root_object="index.html",
+        )
+
+        admin_build = codebuild.Project(
+            self, "AdminBuild",
+            source=codebuild.Source.git_hub(
+                owner=gh_owner, repo=gh_repo, branch_or_ref=gh_branch, clone_depth=1,
+            ),
+            environment=codebuild.BuildEnvironment(
+                build_image=codebuild.LinuxBuildImage.STANDARD_7_0,
+                compute_type=codebuild.ComputeType.SMALL,
+            ),
+            artifacts=codebuild.Artifacts.s3(
+                bucket=admin_bucket, include_build_id=False, package_zip=False,
+                name="/", encryption=False,
+            ),
+            environment_variables={
+                "API_URL": codebuild.BuildEnvironmentVariable(value=upload_api.url.rstrip("/")),
+                "USER_POOL_ID": codebuild.BuildEnvironmentVariable(value=user_pool.user_pool_id),
+                "USER_POOL_CLIENT_ID": codebuild.BuildEnvironmentVariable(value=user_pool_client.user_pool_client_id),
+            },
+            build_spec=codebuild.BuildSpec.from_object({
+                "version": "0.2",
+                "phases": {
+                    "install": {
+                        "runtime-versions": {"nodejs": "20"},
+                        "commands": [
+                            "cd admin-dashboard",
+                            "corepack enable",
+                            "yarn install --immutable",
+                        ],
+                    },
+                    "build": {
+                        "commands": [
+                            # Inject config.js so the static bundle can read runtime values.
+                            "cat > public/config.js <<EOF",
+                            "window.__APP_CONFIG__ = {\"API_URL\":\"$API_URL\",\"USER_POOL_ID\":\"$USER_POOL_ID\",\"USER_POOL_CLIENT_ID\":\"$USER_POOL_CLIENT_ID\"};",
+                            "EOF",
+                            "yarn build",
+                        ],
+                    },
+                },
+                "artifacts": {
+                    "base-directory": "admin-dashboard/out",
+                    "files": ["**/*"],
+                },
+            }),
+            logging=codebuild.LoggingOptions(
+                cloud_watch=codebuild.CloudWatchLoggingOptions(
+                    log_group=logs.LogGroup(
+                        self, "AdminBuildLogGroup",
+                        removal_policy=RemovalPolicy.DESTROY,
+                        retention=logs.RetentionDays.ONE_WEEK,
+                    ),
+                ),
+            ),
+        )
+        admin_distribution.grant(admin_build.role, "cloudfront:CreateInvalidation")
+        admin_bucket.grant_write(admin_build)
+
+        # Trigger the build on every stack create/update. Date.now()-style nonce
+        # forces the custom resource to run every deploy.
+        import time as _time
+        trigger = cr.AwsCustomResource(
+            self, "TriggerAdminBuild",
+            on_create=cr.AwsSdkCall(
+                service="CodeBuild", action="startBuild",
+                parameters={"projectName": admin_build.project_name},
+                physical_resource_id=cr.PhysicalResourceId.of(f"admin-build-{int(_time.time())}"),
+                output_paths=["build.id"],
+            ),
+            on_update=cr.AwsSdkCall(
+                service="CodeBuild", action="startBuild",
+                parameters={"projectName": admin_build.project_name},
+                physical_resource_id=cr.PhysicalResourceId.of(f"admin-build-{int(_time.time())}"),
+                output_paths=["build.id"],
+            ),
+            policy=cr.AwsCustomResourcePolicy.from_statements([
+                iam.PolicyStatement(
+                    actions=["codebuild:StartBuild"],
+                    resources=[admin_build.project_arn],
+                ),
+            ]),
+        )
+        trigger.node.add_dependency(admin_build)
+
+        CfnOutput(self, "AdminDashboardUrl", value=f"https://{admin_distribution.distribution_domain_name}")
+        CfnOutput(self, "AdminBuildProjectName", value=admin_build.project_name)
