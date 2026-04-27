@@ -28,6 +28,12 @@ notifications:
   mode: log         # "log" (CloudWatch only) or "ses"
   sender: gflusser+super@amazon.com
 
+# Admin dashboard (Next.js) build config. CodeBuild pulls from this repo/branch.
+admin_dashboard:
+  github_owner: cal-poly-dxhub
+  github_repo: rivco-tax-connect
+  github_branch: feat/accurate-dashboard-status
+
 lex:
   bot_name: TaxRefundBot
   alias_name: live
