@@ -18,7 +18,7 @@ import {
 import { currentSession, signOut } from "@/lib/cognito"
 import { api } from "@/lib/api"
 import {
-  Submission, StatusResponse, Permissions, STATUSES, labelFor,
+  Submission, StatusResponse, Permissions, STATUSES, labelFor, Package, PackageFile,
 } from "@/lib/types"
 
 export default function DashboardPage() {
@@ -192,31 +192,127 @@ export default function DashboardPage() {
         </Table>
 
         <Dialog open={!!selected} onOpenChange={(o) => !o && setSelected(null)}>
-          <DialogContent className="max-w-lg">
-            {selected && (
-              <>
-                <DialogHeader>
-                  <DialogTitle>{selected.name}</DialogTitle>
-                </DialogHeader>
-                <div className="text-sm">
-                  <p className="text-muted-foreground">ID: {selected.submissionId}</p>
-                  <p className="mt-2 font-medium">Tasks</p>
-                  <ul className="mt-1 space-y-1">
-                    {selected.tasks.map((t, i) => (
-                      <li key={i} className={t.done ? "text-green-700" : "text-muted-foreground"}>
-                        {t.done ? "✓" : "○"} {t.label}
-                      </li>
-                    ))}
-                  </ul>
-                  <p className="mt-4 font-medium">Documents ({selected.documents.length})</p>
-                  <ul className="mt-1 space-y-1">
-                    {selected.documents.map((d) => <li key={d}>📄 {d}</li>)}
-                  </ul>
-                </div>
-              </>
-            )}
+          <DialogContent className="max-w-4xl">
+            {selected && <SubmissionDetail submission={selected} />}
           </DialogContent>
         </Dialog>
+      </div>
+    </div>
+  )
+}
+
+function SubmissionDetail({ submission }: { submission: Submission }) {
+  const [pkg, setPkg] = useState<Package | null>(null)
+  const [active, setActive] = useState<PackageFile | null>(null)
+  const [err, setErr] = useState("")
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await api(`/package?id=${encodeURIComponent(submission.submissionId)}`)
+        if (!res.ok) throw new Error(`/package ${res.status}`)
+        const data: Package = await res.json()
+        setPkg(data)
+        if (data.files.length) setActive(data.files[0])
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : String(e))
+      }
+    })()
+  }, [submission.submissionId])
+
+  return (
+    <>
+      <DialogHeader>
+        <DialogTitle>{submission.name}</DialogTitle>
+      </DialogHeader>
+      <div className="grid grid-cols-[220px_1fr] gap-4 text-sm max-h-[70vh]">
+        <aside className="flex flex-col gap-4 overflow-y-auto">
+          <div>
+            <p className="text-muted-foreground text-xs">ID: {submission.submissionId}</p>
+            <p className="text-muted-foreground text-xs">{submission.refundType}</p>
+          </div>
+          <div>
+            <p className="font-medium">Tasks</p>
+            <ul className="mt-1 space-y-1">
+              {submission.tasks.map((t, i) => (
+                <li key={i} className={t.done ? "text-green-700" : "text-muted-foreground"}>
+                  {t.done ? "✓" : "○"} {t.label}
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div>
+            <p className="font-medium">Files {pkg && `(${pkg.files.length})`}</p>
+            {err && <p className="text-destructive text-xs mt-1">{err}</p>}
+            {!pkg && !err && <p className="text-muted-foreground text-xs mt-1">Loading…</p>}
+            <ul className="mt-1 space-y-1">
+              {pkg?.files.map((f) => (
+                <li key={f.filename}>
+                  <button
+                    onClick={() => setActive(f)}
+                    className={`text-left w-full truncate ${active?.filename === f.filename ? "font-semibold text-foreground" : "text-blue-600 hover:underline"}`}
+                  >
+                    📄 {f.filename}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </aside>
+        <section className="border rounded-md bg-muted/20 overflow-hidden flex flex-col">
+          {active ? <FileViewer file={active} /> : <p className="p-4 text-muted-foreground">Select a file to preview.</p>}
+        </section>
+      </div>
+    </>
+  )
+}
+
+function FileViewer({ file }: { file: PackageFile }) {
+  const [jsonText, setJsonText] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const ext = file.filename.split(".").pop()?.toLowerCase() || ""
+  const isPdf = ext === "pdf"
+  const isImage = ["jpg", "jpeg", "png", "heic", "gif", "webp"].includes(ext)
+  const isJson = ext === "json"
+
+  useEffect(() => {
+    if (!isJson) return
+    setLoading(true); setJsonText(null)
+    fetch(file.downloadUrl)
+      .then((r) => r.text())
+      .then((t) => {
+        try { setJsonText(JSON.stringify(JSON.parse(t), null, 2)) }
+        catch { setJsonText(t) }
+      })
+      .catch((e) => setJsonText(`Failed to load: ${e.message}`))
+      .finally(() => setLoading(false))
+  }, [file.downloadUrl, isJson])
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-between border-b p-2 bg-background">
+        <span className="text-xs truncate">{file.filename}</span>
+        <a
+          href={file.downloadUrl}
+          download={file.filename}
+          className="text-xs text-blue-600 hover:underline ml-2"
+        >
+          Download
+        </a>
+      </div>
+      <div className="flex-1 overflow-auto">
+        {isPdf && <iframe src={file.downloadUrl} className="w-full h-full min-h-[500px]" title={file.filename} />}
+        {isImage && <img src={file.downloadUrl} alt={file.filename} className="max-w-full h-auto p-4 mx-auto" />}
+        {isJson && (
+          loading
+            ? <p className="p-4 text-muted-foreground text-xs">Loading…</p>
+            : <pre className="p-4 text-xs whitespace-pre-wrap break-all">{jsonText}</pre>
+        )}
+        {!isPdf && !isImage && !isJson && (
+          <div className="p-4 text-sm text-muted-foreground">
+            Preview not supported for .{ext}. Use Download.
+          </div>
+        )}
       </div>
     </div>
   )
