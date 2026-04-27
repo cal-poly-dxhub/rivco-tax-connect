@@ -21,6 +21,14 @@ import {
   Submission, StatusResponse, Permissions, STATUSES, labelFor, Package, PackageFile,
 } from "@/lib/types"
 
+const STATUS_STYLES: Record<Submission["status"], string> = {
+  partial: "bg-orange-100 text-orange-800 border-orange-300",
+  complete: "bg-green-100 text-green-800 border-green-300",
+  "under-review": "bg-blue-100 text-blue-800 border-blue-300",
+  approved: "bg-emerald-100 text-emerald-900 border-emerald-300",
+  denied: "bg-red-100 text-red-800 border-red-300",
+}
+
 export default function DashboardPage() {
   const router = useRouter()
   const [subs, setSubs] = useState<Submission[]>([])
@@ -166,7 +174,9 @@ export default function DashboardPage() {
                   </TableCell>
                   <TableCell onClick={(e) => e.stopPropagation()}>
                     <Select value={s.status} onValueChange={(v) => v && changeStatus(s.submissionId, v)}>
-                      <SelectTrigger className="w-[140px] h-8"><SelectValue /></SelectTrigger>
+                      <SelectTrigger className={`w-[140px] h-8 ${STATUS_STYLES[s.status]}`}>
+                        <SelectValue />
+                      </SelectTrigger>
                       <SelectContent>
                         {STATUSES.map((st) => (
                           <SelectItem key={st} value={st}>{st}</SelectItem>
