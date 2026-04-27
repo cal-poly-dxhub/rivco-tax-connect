@@ -32,6 +32,7 @@ function pool() {
 export type SignInResult =
   | { kind: "success"; idToken: string; groups: string[] }
   | { kind: "new-password"; user: CognitoUser }
+  | { kind: "reset-required"; username: string }
   | { kind: "error"; message: string }
 
 export function signIn(username: string, password: string): Promise<SignInResult> {
@@ -40,8 +41,38 @@ export function signIn(username: string, password: string): Promise<SignInResult
   return new Promise((resolve) => {
     user.authenticateUser(details, {
       onSuccess: (session) => resolve({ kind: "success", ...unpackSession(session) }),
-      onFailure: (err) => resolve({ kind: "error", message: err.message || String(err) }),
+      onFailure: (err) => {
+        if (err?.code === "PasswordResetRequiredException") {
+          resolve({ kind: "reset-required", username })
+        } else {
+          resolve({ kind: "error", message: err.message || String(err) })
+        }
+      },
       newPasswordRequired: () => resolve({ kind: "new-password", user }),
+    })
+  })
+}
+
+export function sendResetCode(username: string): Promise<{ ok: boolean; message?: string }> {
+  const user = new CognitoUser({ Username: username, Pool: pool() })
+  return new Promise((resolve) => {
+    user.forgotPassword({
+      onSuccess: () => resolve({ ok: true }),
+      onFailure: (err) => resolve({ ok: false, message: err.message || String(err) }),
+    })
+  })
+}
+
+export function confirmReset(
+  username: string,
+  code: string,
+  newPassword: string,
+): Promise<{ ok: boolean; message?: string }> {
+  const user = new CognitoUser({ Username: username, Pool: pool() })
+  return new Promise((resolve) => {
+    user.confirmPassword(code, newPassword, {
+      onSuccess: () => resolve({ ok: true }),
+      onFailure: (err) => resolve({ ok: false, message: err.message || String(err) }),
     })
   })
 }
