@@ -728,8 +728,31 @@ class NovaSonicConnectStack(Stack):
                 ),
                 viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
                 cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
+                function_associations=[cloudfront.FunctionAssociation(
+                    function=cloudfront.Function(
+                        self, "AdminRewriteFunction",
+                        code=cloudfront.FunctionCode.from_inline(
+                            # Append index.html to directory-like requests so Next's
+                            # static export routes (e.g. /dashboard/) resolve correctly.
+                            "function handler(event) {\n"
+                            "  var req = event.request;\n"
+                            "  var uri = req.uri;\n"
+                            "  if (uri.endsWith('/')) { req.uri = uri + 'index.html'; }\n"
+                            "  else if (!uri.split('/').pop().includes('.')) { req.uri = uri + '/index.html'; }\n"
+                            "  return req;\n"
+                            "}\n"
+                        ),
+                    ),
+                    event_type=cloudfront.FunctionEventType.VIEWER_REQUEST,
+                )],
             ),
             default_root_object="index.html",
+        )
+
+        # Now that the CloudFront domain is known, allow the dashboard origin in CORS.
+        upload_fn.add_environment(
+            "ALLOWED_ORIGINS",
+            f"{portal_origin},https://{admin_distribution.distribution_domain_name}",
         )
 
         admin_build = codebuild.Project(
