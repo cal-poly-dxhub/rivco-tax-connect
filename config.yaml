@@ -25,7 +25,7 @@ super_admin:
   email: gflusser+super@amazon.com
 
 notifications:
-  mode: log         # "log" (CloudWatch only) or "ses"
+  mode: ses         # "ses" (real email) or "log" (CloudWatch only)
   sender: gflusser+super@amazon.com
 
 # Admin dashboard (Next.js) build config. CodeBuild pulls from this repo/branch.
