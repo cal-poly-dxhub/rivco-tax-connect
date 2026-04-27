@@ -450,12 +450,20 @@ class NovaSonicConnectStack(Stack):
             removal_policy=RemovalPolicy.DESTROY,
             auto_delete_objects=True,
             lifecycle_rules=[s3.LifecycleRule(expiration=Duration.days(90))],
-            cors=[s3.CorsRule(
-                allowed_methods=[s3.HttpMethods.PUT],
-                allowed_origins=[portal_origin],
-                allowed_headers=["*"],
-                max_age=3600,
-            )],
+            cors=[
+                s3.CorsRule(  # Claimant upload
+                    allowed_methods=[s3.HttpMethods.PUT],
+                    allowed_origins=[portal_origin],
+                    allowed_headers=["*"],
+                    max_age=3600,
+                ),
+                s3.CorsRule(  # Admin dashboard inline previews (e.g. JSON fetch)
+                    allowed_methods=[s3.HttpMethods.GET],
+                    allowed_origins=["*"],
+                    allowed_headers=["*"],
+                    max_age=3600,
+                ),
+            ],
         )
 
         # DynamoDB table for claim submissions
