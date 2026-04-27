@@ -763,10 +763,9 @@ class NovaSonicConnectStack(Stack):
                     },
                     "build": {
                         "commands": [
-                            # Inject config.js so the static bundle can read runtime values.
-                            "cat > public/config.js <<EOF",
-                            "window.__APP_CONFIG__ = {\"API_URL\":\"$API_URL\",\"USER_POOL_ID\":\"$USER_POOL_ID\",\"USER_POOL_CLIENT_ID\":\"$USER_POOL_CLIENT_ID\"};",
-                            "EOF",
+                            # Inject runtime config so the static bundle can read API URL + Cognito IDs.
+                            # Single-line printf avoids YAML/heredoc quoting hazards.
+                            'printf \'window.__APP_CONFIG__ = {"API_URL":"%s","USER_POOL_ID":"%s","USER_POOL_CLIENT_ID":"%s"};\\n\' "$API_URL" "$USER_POOL_ID" "$USER_POOL_CLIENT_ID" > public/config.js',
                             "yarn build",
                         ],
                     },
