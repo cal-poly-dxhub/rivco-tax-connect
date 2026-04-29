@@ -149,6 +149,97 @@ def _auth(event: dict[str, Any]) -> tuple[set[str], bool]:
     return dept_keys, is_super
 
 
+def _actor(event: dict[str, Any]) -> str:
+    """Return the Cognito username of the caller, or 'unknown' if missing."""
+    claims = ((event.get("requestContext") or {}).get("authorizer") or {}).get("claims") or {}
+    return claims.get("cognito:username") or claims.get("username") or "unknown"
+
+
+def _audit(submission_id: str, actor: str, action: str, details: dict[str, Any]) -> None:
+    """Record a change to a submission. Non-fatal on failure."""
+    if not table:
+        return
+    try:
+        ts = _now_iso()
+        table.put_item(Item={
+            "pk": f"SUBMISSION#{submission_id}",
+            "sk": f"AUDIT#{ts}",
+            "submissionId": submission_id,
+            "timestamp": ts,
+            "actor": actor,
+            "action": action,
+            "details": details,
+        })
+    except Exception:  # noqa: BLE001
+        # Audit is best-effort; don't fail the user's request if the log write errors.
+        pass
+
+
+# ── Single-table helpers ───────────────────────────────────
+
+def _sub_key(submission_id: str) -> dict[str, str]:
+    return {"pk": f"SUBMISSION#{submission_id}", "sk": "META"}
+
+
+def _get_submission(submission_id: str) -> dict[str, Any] | None:
+    if not table:
+        return None
+    return table.get_item(Key=_sub_key(submission_id)).get("Item")
+
+
+def _put_submission(item: dict[str, Any]) -> None:
+    """Write a submission record. Attaches pk/sk/gsi1 keys from submissionId."""
+    if not table:
+        return
+    sid = item["submissionId"]
+    item = {
+        **item,
+        "pk": f"SUBMISSION#{sid}",
+        "sk": "META",
+        "gsi1pk": "SUBMISSION_LIST",
+        "gsi1sk": item.get("submittedAt") or _now_iso(),
+    }
+    table.put_item(Item=item)
+
+
+def _list_submissions() -> list[dict[str, Any]]:
+    """Query the listIx GSI to return all submissions, newest first."""
+    if not table:
+        return []
+    resp = table.query(
+        IndexName="listIx",
+        KeyConditionExpression="gsi1pk = :p",
+        ExpressionAttributeValues={":p": "SUBMISSION_LIST"},
+        ScanIndexForward=False,
+    )
+    return resp.get("Items", [])
+
+
+def _list_audit(submission_id: str) -> list[dict[str, Any]]:
+    if not table:
+        return []
+    resp = table.query(
+        KeyConditionExpression="pk = :p AND begins_with(sk, :s)",
+        ExpressionAttributeValues={":p": f"SUBMISSION#{submission_id}", ":s": "AUDIT#"},
+        ScanIndexForward=False,
+    )
+    return resp.get("Items", [])
+
+
+def _delete_submission_data(submission_id: str) -> None:
+    """Delete the META row and all audit rows for a submission."""
+    if not table:
+        return
+    # Query all items under this submission's partition
+    resp = table.query(
+        KeyConditionExpression="pk = :p",
+        ExpressionAttributeValues={":p": f"SUBMISSION#{submission_id}"},
+    )
+    with table.batch_writer() as batch:
+        for it in resp.get("Items", []):
+            batch.delete_item(Key={"pk": it["pk"], "sk": it["sk"]})
+
+
 def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     headers = _cors_headers(event)
 
@@ -159,6 +250,8 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     method = event.get("httpMethod", "")
     if resource.startswith("/admin/"):
         return _handle_admin(event, headers)
+    if resource == "/audit/{submissionId}" and method == "GET":
+        return _handle_audit(event, headers)
     if resource == "/package" and method == "GET":
         return _handle_package(event, headers)
     if resource == "/status" and method == "GET":
@@ -241,7 +334,7 @@ def _handle_status(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
     dept_keys, is_super = _auth(event)
     if table:
         submissions = []
-        for item in _scan_all(table):
+        for item in _list_submissions():
             refund_types = [t.strip() for t in item.get("refundType", "").split(",") if t.strip()]
             depts = item.get("departments") or _derive_departments(refund_types)
             if not is_super and not (dept_keys & set(depts)):
@@ -289,8 +382,7 @@ def _handle_upload_complete(event: dict[str, Any], headers: dict[str, str]) -> d
         return _err(500, "DynamoDB not configured", headers)
 
     # Get the item to read refundType
-    resp = table.get_item(Key={"submissionId": submission_id})
-    item = resp.get("Item")
+    item = _get_submission(submission_id)
     if not item:
         return _err(404, "Submission not found", headers)
 
@@ -298,7 +390,7 @@ def _handle_upload_complete(event: dict[str, Any], headers: dict[str, str]) -> d
     status = _classify_status(refund_types, filenames)
 
     table.update_item(
-        Key={"submissionId": submission_id},
+        Key=_sub_key(submission_id),
         UpdateExpression="SET #s = :s, documents = :d, updatedAt = :u",
         ExpressionAttributeNames={"#s": "status"},
         ExpressionAttributeValues={
@@ -337,10 +429,10 @@ def _handle_update_status(event: dict[str, Any], headers: dict[str, str]) -> dic
     if not table:
         return _err(500, "DynamoDB not configured", headers)
 
-    resp = table.get_item(Key={"submissionId": submission_id})
-    item = resp.get("Item")
-    if not item:
+    resp_item = _get_submission(submission_id)
+    if not resp_item:
         return _err(404, "Submission not found", headers)
+    item = resp_item
 
     dept_keys, is_super = _auth(event)
     submission_depts = set(item.get("departments") or _derive_departments(
@@ -348,12 +440,15 @@ def _handle_update_status(event: dict[str, Any], headers: dict[str, str]) -> dic
     if not is_super and not (dept_keys & submission_depts):
         return _err(403, "Not authorized for this submission", headers)
 
+    prev_status = item.get("status", "")
     table.update_item(
-        Key={"submissionId": submission_id},
+        Key=_sub_key(submission_id),
         UpdateExpression="SET #s = :s, updatedAt = :u",
         ExpressionAttributeNames={"#s": "status"},
         ExpressionAttributeValues={":s": new_status, ":u": _now_iso()},
     )
+    _audit(submission_id, _actor(event), "status_change",
+           {"from": prev_status, "to": new_status})
 
     return {
         "statusCode": 200,
@@ -390,15 +485,41 @@ def _handle_delete_submission(event: dict[str, Any], headers: dict[str, str]) ->
         for i in range(0, len(keys), 1000):
             s3.delete_objects(Bucket=BUCKET, Delete={"Objects": keys[i:i + 1000]})
 
-    # Delete from DynamoDB
+    # Delete from DynamoDB (META row + all audit rows under this submission)
     if table:
-        table.delete_item(Key={"submissionId": submission_id})
+        _delete_submission_data(submission_id)
+    # Note: delete wipes the whole partition, so there's no useful place to
+    # write a final "deleted by X" audit row that would survive. If forensics
+    # are needed, consult CloudWatch Lambda logs instead.
 
     return {
         "statusCode": 200,
         "headers": headers,
         "body": json.dumps({"submissionId": submission_id, "deleted": True}),
     }
+
+
+def _handle_audit(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    """Return audit entries for a submission, scoped by caller permissions."""
+    submission_id = ((event.get("pathParameters") or {}).get("submissionId") or "").strip()
+    if not re.fullmatch(r'[0-9a-f]{12}', submission_id):
+        return _err(400, "Invalid submission id", headers)
+    if not table:
+        return _err(500, "Audit backend not configured", headers)
+
+    item = _get_submission(submission_id)
+    if not item:
+        return _err(404, "Submission not found", headers)
+
+    dept_keys, is_super = _auth(event)
+    submission_depts = set(item.get("departments") or _derive_departments(
+        [t.strip() for t in item.get("refundType", "").split(",") if t.strip()]))
+    if not is_super and not (dept_keys & submission_depts):
+        return _err(403, "Not authorized for this submission", headers)
+
+    entries = _list_audit(submission_id)
+    return {"statusCode": 200, "headers": headers,
+            "body": json.dumps({"submissionId": submission_id, "entries": entries})}
 
 
 def _handle_upload(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
@@ -444,7 +565,7 @@ def _handle_upload(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
     # Write initial record to DynamoDB
     if table:
         refund_types = [t.strip() for t in refund_type.split(",") if t.strip()]
-        table.put_item(Item={
+        _put_submission({
             "submissionId": submission_id,
             "name": name,
             "refundType": refund_type,
