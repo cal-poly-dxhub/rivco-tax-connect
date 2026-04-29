@@ -36,15 +36,17 @@ export type Package = {
 
 export type Task = { label: string; done: boolean }
 
+export type StatusValue = "partial" | "uploaded" | "under-review" | "approved" | "denied"
+
 export type Submission = {
   submissionId: string
   name: string
   refundType: string
-  status: "partial" | "complete" | "under-review" | "approved" | "denied"
+  statuses: Record<string, StatusValue>
   documents: string[]
   submittedAt: string
   departments: string[]
-  tasks: Task[]
+  tasksByDepartment: Record<string, Task[]>
 }
 
 export type Permissions = {
@@ -67,8 +69,8 @@ export type AdminConfig = {
   refundTypeLabels: Record<string, string>
 }
 
-export const STATUSES: Submission["status"][] = [
-  "partial", "complete", "under-review", "approved", "denied",
+export const STATUSES: StatusValue[] = [
+  "partial", "uploaded", "under-review", "approved", "denied",
 ]
 
 export const REFUND_TYPES = ["STALE_WARRANT", "PAYROLL", "PROPERTY_TAX"] as const
