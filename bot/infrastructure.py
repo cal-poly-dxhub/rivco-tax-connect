@@ -468,14 +468,25 @@ class NovaSonicConnectStack(Stack):
             ],
         )
 
-        # DynamoDB table for claim submissions
+        # Single application table: submissions + per-submission audit + future
+        # per-submission entities. Single-table pattern with pk+sk.
+        #   pk = SUBMISSION#<id>     sk = META         → submission record
+        #   pk = SUBMISSION#<id>     sk = AUDIT#<ts>   → audit entry
+        # GSI "listIx" exposes SUBMISSION_LIST for efficient queries over all
+        # submissions, sorted by submittedAt.
         submissions_table = dynamodb.Table(
-            self, "ClaimSubmissions",
-            table_name=f"{proj}-claim-submissions",
-            partition_key=dynamodb.Attribute(name="submissionId", type=dynamodb.AttributeType.STRING),
+            self, "AppData",
+            table_name=f"{proj}-app-data",
+            partition_key=dynamodb.Attribute(name="pk", type=dynamodb.AttributeType.STRING),
+            sort_key=dynamodb.Attribute(name="sk", type=dynamodb.AttributeType.STRING),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
             removal_policy=RemovalPolicy.DESTROY,
             stream=dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
+        )
+        submissions_table.add_global_secondary_index(
+            index_name="listIx",
+            partition_key=dynamodb.Attribute(name="gsi1pk", type=dynamodb.AttributeType.STRING),
+            sort_key=dynamodb.Attribute(name="gsi1sk", type=dynamodb.AttributeType.STRING),
         )
 
         # Admin config: departments, users, refund-type labels (super-admin managed)
@@ -662,6 +673,11 @@ class NovaSonicConnectStack(Stack):
         )
         upload_api.root.add_resource("delete-submission").add_method(
             "POST", apigw.LambdaIntegration(upload_fn), authorizer=authorizer,
+            authorization_type=apigw.AuthorizationType.COGNITO,
+        )
+        audit_resource = upload_api.root.add_resource("audit").add_resource("{submissionId}")
+        audit_resource.add_method(
+            "GET", apigw.LambdaIntegration(upload_fn), authorizer=authorizer,
             authorization_type=apigw.AuthorizationType.COGNITO,
         )
 
