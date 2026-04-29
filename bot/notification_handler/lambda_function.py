@@ -144,6 +144,11 @@ def lambda_handler(event: dict[str, Any], context: Any) -> None:
         new_image = _unwrap_image(dynamo.get("NewImage") or {})
         old_image = _unwrap_image(dynamo.get("OldImage") or {})
 
+        # Only notify on META rows (the submission record itself), not on
+        # audit or other sort-key partitions.
+        if new_image.get("sk") != "META" and old_image.get("sk") != "META":
+            continue
+
         kind = None
         if event_name == "INSERT":
             kind = "new"
