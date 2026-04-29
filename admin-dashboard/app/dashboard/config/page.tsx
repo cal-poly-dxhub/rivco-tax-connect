@@ -17,7 +17,7 @@ import {
 import { currentSession, signOut } from "@/lib/cognito"
 import { api } from "@/lib/api"
 import { ThemeToggle } from "@/components/theme-toggle"
-import { AdminConfig, Department, AdminUser, REFUND_TYPES } from "@/lib/types"
+import { AdminConfig, Department, AdminUser, REFUND_TYPES, DocReq, DocReqsResponse } from "@/lib/types"
 
 export default function AdminConfigPage() {
   const router = useRouter()
@@ -73,6 +73,7 @@ export default function AdminConfigPage() {
               <TabsTrigger value="departments">Departments</TabsTrigger>
               <TabsTrigger value="users">Users</TabsTrigger>
               <TabsTrigger value="labels">Refund-type labels</TabsTrigger>
+              <TabsTrigger value="docs">Document requirements</TabsTrigger>
             </TabsList>
             <TabsContent value="departments">
               <DepartmentsTab cfg={cfg} reload={reload} />
@@ -82,6 +83,9 @@ export default function AdminConfigPage() {
             </TabsContent>
             <TabsContent value="labels">
               <LabelsTab cfg={cfg} reload={reload} />
+            </TabsContent>
+            <TabsContent value="docs">
+              <DocsTab />
             </TabsContent>
           </Tabs>
         )}
@@ -349,6 +353,146 @@ function LabelsTab({ cfg, reload }: { cfg: AdminConfig; reload: () => void }) {
           <Button size="sm" onClick={() => save(t)} disabled={busy === t}>Save</Button>
         </div>
       ))}
+    </div>
+  )
+}
+
+
+/* ─── Document requirements ─── */
+
+function DocsTab() {
+  const [data, setData] = useState<DocReqsResponse | null>(null)
+  const [err, setErr] = useState("")
+
+  useEffect(() => { load() }, [])
+
+  async function load() {
+    try {
+      const res = await api("/admin/doc-requirements")
+      if (!res.ok) throw new Error(`${res.status}`)
+      setData(await res.json())
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  if (err) return <p className="text-destructive text-sm pt-4">{err}</p>
+  if (!data) return <p className="text-muted-foreground text-sm pt-4">Loading…</p>
+
+  return (
+    <div className="flex flex-col gap-6 pt-4">
+      <p className="text-sm text-muted-foreground">
+        Each refund type has a list of required documents. Mark a document <strong>internal</strong> to hide it from department admins (visible only to super-admin).
+      </p>
+      {REFUND_TYPES.map((rt) => (
+        <DocTypeEditor key={rt} refundType={rt} initial={data[rt]} onSaved={load} />
+      ))}
+    </div>
+  )
+}
+
+function DocTypeEditor({
+  refundType, initial, onSaved,
+}: { refundType: string; initial: { docs: DocReq[]; either_of: string[][] }; onSaved: () => void }) {
+  const [docs, setDocs] = useState<DocReq[]>(initial.docs)
+  const [eitherOf, setEitherOf] = useState<string[][]>(initial.either_of || [])
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState("")
+
+  function update(i: number, patch: Partial<DocReq>) {
+    setDocs((d) => d.map((doc, idx) => idx === i ? { ...doc, ...patch } : doc))
+  }
+  function remove(i: number) {
+    setDocs((d) => d.filter((_, idx) => idx !== i))
+  }
+  function add() {
+    setDocs((d) => [...d, { id: "", label: "", required: true, internal: false }])
+  }
+  function updateGroup(gi: number, value: string) {
+    const items = value.split(",").map((s) => s.trim()).filter(Boolean)
+    setEitherOf((g) => g.map((group, idx) => idx === gi ? items : group))
+  }
+  function removeGroup(gi: number) {
+    setEitherOf((g) => g.filter((_, idx) => idx !== gi))
+  }
+  function addGroup() {
+    setEitherOf((g) => [...g, []])
+  }
+
+  async function save() {
+    setBusy(true); setErr("")
+    const cleanDocs = docs.filter((d) => d.id.trim())
+    const res = await api(`/admin/doc-requirements/${encodeURIComponent(refundType)}`, {
+      method: "PUT",
+      body: JSON.stringify({ docs: cleanDocs, either_of: eitherOf.filter((g) => g.length) }),
+    })
+    setBusy(false)
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      setErr(data.error || `Save failed: ${res.status}`)
+      return
+    }
+    onSaved()
+  }
+
+  return (
+    <div className="border rounded-md p-4 flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <h3 className="font-medium">{refundType}</h3>
+        <Button size="sm" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save"}</Button>
+      </div>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-left text-xs text-muted-foreground">
+            <th className="py-1 pr-2">ID</th>
+            <th className="py-1 pr-2">Label</th>
+            <th className="py-1 pr-2 w-20">Required</th>
+            <th className="py-1 pr-2 w-20">Internal</th>
+            <th className="py-1 w-8"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {docs.map((d, i) => (
+            <tr key={i} className="border-t">
+              <td className="py-1 pr-2">
+                <Input value={d.id} onChange={(e) => update(i, { id: e.target.value })} placeholder="photo-id" />
+              </td>
+              <td className="py-1 pr-2">
+                <Input value={d.label} onChange={(e) => update(i, { label: e.target.value })} placeholder="Government photo ID" />
+              </td>
+              <td className="py-1 pr-2 text-center">
+                <input type="checkbox" checked={d.required} onChange={(e) => update(i, { required: e.target.checked })} />
+              </td>
+              <td className="py-1 pr-2 text-center">
+                <input type="checkbox" checked={d.internal} onChange={(e) => update(i, { internal: e.target.checked })} />
+              </td>
+              <td className="py-1">
+                <Button variant="ghost" size="sm" onClick={() => remove(i)}>✕</Button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <Button variant="outline" size="sm" onClick={add} className="self-start">+ Add document</Button>
+
+      <div className="flex flex-col gap-2 mt-2">
+        <p className="text-xs text-muted-foreground">
+          Either-of groups: claimant must supply at least one id from each list. Comma-separated ids.
+        </p>
+        {eitherOf.map((group, gi) => (
+          <div key={gi} className="flex items-center gap-2">
+            <Input
+              value={group.join(", ")}
+              onChange={(e) => updateGroup(gi, e.target.value)}
+              placeholder="proof-of-payment, proof-of-ownership"
+            />
+            <Button variant="ghost" size="sm" onClick={() => removeGroup(gi)}>✕</Button>
+          </div>
+        ))}
+        <Button variant="outline" size="sm" onClick={addGroup} className="self-start">+ Add group</Button>
+      </div>
+
+      {err && <p className="text-destructive text-sm">{err}</p>}
     </div>
   )
 }
