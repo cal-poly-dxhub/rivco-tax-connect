@@ -1,15 +1,20 @@
 # Riverside County Tax Refund Lookup
 
 | Index                                   | Description                                                      |
-| :-------------------------------------- | :--------------------------------------------------------------- |
+|:----------------------------------------|:-----------------------------------------------------------------|
 | [Overview](#overview)                   | See the motivation behind this project                           |
 | [Description](#description)             | Learn more about the problem, and how we approached the solution |
 | [Deployment](#deployment)               | How to install and deploy the solution                           |
+| [Environment Variables](#environment-variables) | Configuration options for Lambda functions |
+| [Data Format](#data-format)             | Schema and examples for refund data                              |
 | [Usage](#usage)                         | How to use the Tax Refund Lookup bot                             |
 | [Troubleshooting](#troubleshooting)     | Common issues and solutions                                      |
+| [Post-Deploy Troubleshooting](#post-deploy-troubleshooting) | Deployment script issues and recovery |
+| [SMS Setup](#sms-setup)                 | Enable SMS channel for text-based refund lookups                 |
+| [Admin Dashboard](#admin-dashboard)     | Staff-facing dashboard for reviewing submissions                 |
 | [Lessons Learned](#lessons-learned)     | Key takeaways and insights from the project, and next steps      |
 | [Bill of Materials](#bill-of-materials) | Cost of deployment and resources used                            |
-| [Credits](#credits)                     | Meet the team behind this project                                |
+| [Support](#support)                     | The team behind this project                                     |
 | [License](#license)                     | See the project's license information                            |
 | [Disclaimers](#disclaimers)             | Disclaimers information                                          |
 
@@ -25,10 +30,6 @@ By deploying an AI agent, the county can consolidate all unclaimed fund sources 
 
 **_While built for Riverside County, the solution is designed to be adaptable for any government agency or organization that needs to provide secure, AI-assisted record lookups over voice, chat, and SMS channels. The AI agent's behavior, data sources, and verification logic can be customized through configuration to match different use cases._**
 
-## Demo
-
-<!-- Add demo video link here -->
-
 # Description
 
 ## Problem Statement
@@ -38,7 +39,6 @@ The Riverside County Auditor-Controller's office holds a significant volume of u
 Today, constituents must navigate separate web pages to search for their name, then download the correct PDF form (a property tax claim form or an AP-13 affidavit, depending on the refund type), fill it out by hand, and mail or email it back along with supporting documentation such as a photo ID and proof of address. There is no unified lookup, no automated assistance, and no secure digital portal for document submission. The process is entirely manual and only accessible during business hours.
 
 This creates several compounding problems:
-
 - **Discoverability**: Many residents don't know they have unclaimed funds, and those who do must search multiple databases independently.
 - **Identity verification**: Common names produce multiple matches. The county must verify claimants through address confirmation and documentation, but the current process provides no automated way to do this before a user starts filling out paperwork.
 - **Deadline management**: Once a claim deadline passes, funds revert to the general fund by government code. The county needs to surface active refunds with their deadlines to create urgency, while completely hiding expired records to avoid generating exception requests that create additional work for staff.
@@ -55,7 +55,9 @@ The Riverside County Tax Refund Lookup addresses these challenges through an int
 
 **Secure Document Upload Portal**: The county's existing claims process requires mailing or emailing sensitive documents (driver's license, signed affidavits, proof of address). To modernize this, the bot directs users to a web-based Claims Portal where they can upload supporting documents securely. The portal generates presigned S3 URLs for encrypted uploads with file type validation, password protection, and a 90-day retention lifecycle. This addresses the county's vision of a streamlined digital workflow where claimants can "click and upload" rather than printing, scanning, and emailing.
 
-**Website Knowledge Base**: County staff expressed interest in the bot answering general questions beyond refund lookups — such as fraud reporting, office hours, and other services offered by the Auditor-Controller. A Q in Connect Knowledge Base with a web crawler indexes the Riverside County Auditor-Controller website to support these broader inquiries.
+**Website Knowledge Base**: County staff expressed interest in the bot answering general questions beyond refund lookups — such as fraud reporting, office hours, and other services offered by the Auditor-Controller. A Q in Connect Knowledge Base with a web crawler indexes the Riverside County Auditor-Controller website to support these broader inquiries. The AI agent automatically searches the knowledge base for any question that is not a name-based refund lookup, ensuring answers are grounded in official county content rather than model-generated responses. This covers topics like W-2 forms, payroll, property tax FAQs, stale-dated warrant procedures, claim requirements, and office information.
+
+**Multilingual Support**: The solution supports both English and Spanish through Amazon Connect and Amazon Lex dual-locale configuration (en_US and es_US). The AI agent detects the caller's language and responds entirely in that language — including translating knowledge base results, refund details, address verification prompts, and claim instructions. Language routing is handled natively by Connect's contact flow, with the locale injected into the Q in Connect session so the orchestration agent can adapt its responses accordingly.
 
 ## Architecture Diagram
 
@@ -87,22 +89,22 @@ flowchart TD
 
 ## Tech Stack
 
-| Category                      | Technology                                                      | Purpose                                                                            |
-| :---------------------------- | :-------------------------------------------------------------- | :--------------------------------------------------------------------------------- |
-| **Amazon Web Services (AWS)** | [AWS CDK](https://docs.aws.amazon.com/cdk/)                     | Infrastructure as code (Python) for deployment and resource provisioning           |
-|                               | [Amazon Connect](https://aws.amazon.com/connect/)               | Omnichannel contact center for voice, chat, and SMS                                |
-|                               | [Amazon Lex](https://aws.amazon.com/lex/)                       | NLU bot with English and Spanish locales                                           |
-|                               | [Q in Connect](https://aws.amazon.com/connect/q/)               | Orchestration AI Agent with tool use and knowledge base                            |
-|                               | [Bedrock AgentCore](https://aws.amazon.com/bedrock/agentcore/)  | MCP Gateway exposing `tax_lookup` and `send_sms` tools to the AI agent             |
-|                               | [AWS Lambda](https://aws.amazon.com/lambda/)                    | Serverless compute for refund lookup, SMS sending, and document upload handling    |
-|                               | [Amazon S3](https://aws.amazon.com/s3/)                         | Storage for refund data, upload portal static site, and encrypted document uploads |
-|                               | [Amazon SNS](https://aws.amazon.com/sns/)                       | SMS delivery for sending claim links to voice callers                              |
-|                               | [Amazon API Gateway](https://aws.amazon.com/api-gateway/)       | REST API for the document upload handler                                           |
-|                               | [Amazon CloudWatch](https://aws.amazon.com/cloudwatch/)         | Logging and monitoring for Lambda, Lex, and Connect                                |
-| **Backend**                   | [Python 3.12](https://www.python.org/)                          | Lambda runtime for refund lookup, fuzzy matching, and SMS                          |
-|                               | [Jellyfish](https://github.com/jamesturk/jellyfish)             | Jaro-Winkler fuzzy string matching for name lookups                                |
-|                               | [BeautifulSoup](https://www.crummy.com/software/BeautifulSoup/) | HTML parsing for web crawler knowledge base                                        |
-| **Frontend**                  | Static HTML/JS                                                  | Claims Portal for document upload with pre-populated form fields                   |
+| Category                      | Technology                                                                    | Purpose                                                                          |
+|:------------------------------|:------------------------------------------------------------------------------|:---------------------------------------------------------------------------------|
+| **Amazon Web Services (AWS)** | [AWS CDK](https://docs.aws.amazon.com/cdk/)                                  | Infrastructure as code (Python) for deployment and resource provisioning         |
+|                               | [Amazon Connect](https://aws.amazon.com/connect/)                            | Omnichannel contact center for voice, chat, and SMS                              |
+|                               | [Amazon Lex](https://aws.amazon.com/lex/)                                    | NLU bot with English and Spanish locales                                         |
+|                               | [Q in Connect](https://aws.amazon.com/connect/q/)                            | Orchestration AI Agent with tool use and knowledge base                          |
+|                               | [Bedrock AgentCore](https://aws.amazon.com/bedrock/agentcore/)               | MCP Gateway exposing `tax_lookup` and `send_sms` tools to the AI agent           |
+|                               | [AWS Lambda](https://aws.amazon.com/lambda/)                                 | Serverless compute for refund lookup, SMS sending, and document upload handling   |
+|                               | [Amazon S3](https://aws.amazon.com/s3/)                                      | Storage for refund data, upload portal static site, and encrypted document uploads|
+|                               | [Amazon SNS](https://aws.amazon.com/sns/)                                    | SMS delivery for sending claim links to voice callers                            |
+|                               | [Amazon API Gateway](https://aws.amazon.com/api-gateway/)                    | REST API for the document upload handler                                         |
+|                               | [Amazon CloudWatch](https://aws.amazon.com/cloudwatch/)                      | Logging and monitoring for Lambda, Lex, and Connect                              |
+| **Backend**                   | [Python 3.12](https://www.python.org/)                                       | Lambda runtime for refund lookup, fuzzy matching, and SMS                         |
+|                               | [Jellyfish](https://github.com/jamesturk/jellyfish)                          | Jaro-Winkler fuzzy string matching for name lookups                              |
+|                               | [BeautifulSoup](https://www.crummy.com/software/BeautifulSoup/)              | HTML parsing for web crawler knowledge base                                      |
+| **Frontend**                  | Static HTML/JS                                                                | Claims Portal for document upload with pre-populated form fields                 |
 
 # Deployment
 
@@ -117,17 +119,15 @@ Before deploying the solution, ensure you have the following:
    npm install -g aws-cdk
    ```
 4. **AWS CLI** — [Installation Guide](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
-5. **Finch or Docker** — Required for Lambda bundling. [Finch](https://github.com/runfinch/finch) or [Docker](https://www.docker.com/get-started/)
+5. **Docker** — Required for Lambda bundling. [Docker](https://www.docker.com/get-started/)
 6. **Git** — [Download here](https://git-scm.com/)
 
 ## AWS Configuration
 
 1. **Configure AWS CLI with your credentials**:
-
    ```bash
    aws configure
    ```
-
    Provide your AWS Access Key ID, Secret Access Key, region (`us-west-2`), and `json` as the output format.
 
 2. **Bootstrap your AWS environment for CDK** _(required only once per account/region)_:
@@ -138,21 +138,18 @@ Before deploying the solution, ensure you have the following:
 ## Infrastructure Deployment
 
 1. **Clone the repository and navigate to the project directory**:
-
    ```bash
    git clone <repository-url>
    cd nova-sonic-tax
    ```
 
 2. **Create a virtual environment and install dependencies**:
-
    ```bash
    python3 -m venv .venv && source .venv/bin/activate
    pip install -r requirements.txt
    ```
 
 3. **Deploy the CDK stack**:
-
    ```bash
    cdk deploy --require-approval never
    ```
@@ -212,7 +209,6 @@ python3 post_deploy.py
 ```
 
 This script:
-
 - Uploads refund data to S3
 - Creates/updates the AI orchestration prompt from `config.yaml`
 - Updates the AI agent to use the latest prompt version, then versions it
@@ -221,10 +217,95 @@ This script:
 - Sets up SMS channel (if a registered toll-free number exists)
 
 **First-time deployment order:**
-
 1. Run `python3 post_deploy.py` → creates the prompt (agent step will skip — that's OK)
 2. Complete the console setup steps above
 3. Run `python3 post_deploy.py` again → updates agent prompt, versions it, and wires it into the flow
+
+For detailed deployment troubleshooting and recovery procedures, see [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md).
+
+## Environment Variables
+
+The Lambda functions use the following environment variables, configured in `config.yaml`:
+
+| Variable | Purpose | Example |
+|----------|---------|---------|
+| `PROPERTY_TAX_URL` | URL for property tax claim form | `https://apps.auditorcontroller.org/unclaimedrefund/refundform.aspx` |
+| `AP13_PDF_URL` | URL for AP-13 stale warrant affidavit form | `https://auditorcontroller.org/.../AP13Affidavit...pdf` |
+| `FUZZY_THRESHOLD` | Jaro-Winkler similarity threshold for name matching (0.0-1.0) | `0.8` |
+| `S3_BUCKET` | S3 bucket containing refund data | Auto-set by CDK |
+| `DATA_FILE` | JSONL file name in S3 | `refunds_demo_balanced.jsonl` |
+| `UPLOAD_PORTAL_URL` | URL to the claims document upload portal | Auto-set by CDK |
+
+**Adjusting the fuzzy threshold:**
+- Lower values (e.g., 0.7) match more loosely, catching more misspellings but risking false positives
+- Higher values (e.g., 0.9) require closer matches, reducing false positives but missing some legitimate variations
+- Default 0.8 balances accuracy and recall for common name variations
+
+## Data Format
+
+The refund data is stored as JSONL (JSON Lines) in S3. Each line is a complete JSON object representing one refund record.
+
+### Schema
+
+```json
+{
+  "name": "John A Smith",
+  "address": "123 Main St, Anytown, CA 92241",
+  "city": "Anytown",
+  "state": "CA",
+  "zip": "92241",
+  "refund_type": "PROPERTY_TAX",
+  "amount": 1234.56,
+  "claim_deadline": "12/31/2025",
+  "index": "12345",
+  "assessment": "67890",
+  "taxyear": "2023"
+}
+```
+
+### Field Descriptions
+
+| Field | Type | Description | Example |
+|-------|------|-------------|---------|
+| `name` | string | Full name of the refund claimant | "John A Smith" |
+| `address` | string | Full street address (used for identity verification) | "123 Main St, Anytown, CA 92241" |
+| `city` | string | City name | "Anytown" |
+| `state` | string | State abbreviation | "CA" |
+| `zip` | string | ZIP code | "92241" |
+| `refund_type` | string | Type of refund: `PROPERTY_TAX`, `STALE_WARRANT`, or `PAYROLL` | "PROPERTY_TAX" |
+| `amount` | number | Refund amount in dollars | 1234.56 |
+| `claim_deadline` | string | Deadline to claim refund (MM/DD/YYYY format) | "12/31/2025" |
+| `index` | string | Property tax index number (for PROPERTY_TAX only) | "12345" |
+| `assessment` | string | Property assessment number (for PROPERTY_TAX only) | "67890" |
+| `taxyear` | string | Tax year (for PROPERTY_TAX only) | "2023" |
+
+### Example Records
+
+**Property Tax Refund:**
+```json
+{"name": "Jane Doe", "address": "456 Oak Ave, Sampleville, CA 92345", "city": "Sampleville", "state": "CA", "zip": "92345", "refund_type": "PROPERTY_TAX", "amount": 879.59, "claim_deadline": "06/30/2026", "index": "54321", "assessment": "98765", "taxyear": "2024"}
+```
+
+**Stale Warrant Refund:**
+```json
+{"name": "Robert Johnson", "address": "789 Pine Rd, Riverside, CA 92501", "city": "Riverside", "state": "CA", "zip": "92501", "refund_type": "STALE_WARRANT", "amount": 1959.14, "claim_deadline": "03/15/2027"}
+```
+
+**Payroll Refund:**
+```json
+{"name": "Maria Garcia", "address": "321 Elm St, Corona, CA 92879", "city": "Corona", "state": "CA", "zip": "92879", "refund_type": "PAYROLL", "amount": 2076.70, "claim_deadline": "12/31/2099"}
+```
+
+### Preparing Your Own Data
+
+To use your own refund data:
+
+1. Create a JSONL file with one record per line
+2. Ensure all required fields are present
+3. Use MM/DD/YYYY format for `claim_deadline`
+4. Upload to S3: `aws s3 cp your_data.jsonl s3://<bucket>/your_data.jsonl`
+5. Update `config.yaml` with the new filename: `data_file: your_data.jsonl`
+6. Lambda will use the new data on the next invocation (cache expires automatically)
 
 ## Configure Nova Sonic (Optional, for Voice)
 
@@ -241,7 +322,6 @@ This script:
 1. **Voice**: Call the phone number claimed by `post_deploy.py`. Say your name when prompted and the bot will look up any unclaimed refunds.
 
 2. **Web Chat**: Open `test-widget.html` in a browser (ensure `http://localhost:8000` is an accepted domain in Connect):
-
    ```bash
    python3 -m http.server 8000
    # Visit http://localhost:8000/test-widget.html
@@ -266,17 +346,130 @@ This script:
 
 # Troubleshooting
 
-| Symptom                                                    | Cause                                                | Fix                                                                                   |
-| ---------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `CreateWisdomSession` errors in contact flow               | Wrong agent type in `AgentAssistanceAgentVersionArn` | Use an ORCHESTRATION agent ARN, not SELF_SERVICE                                      |
-| Bot says "I don't have an answer"                          | MCP tool not configured on the agent                 | Add tool in Q in Connect console, create new version, re-run `python3 post_deploy.py` |
-| Bot says "I'll look up..." but returns no results          | Agent hallucinating — tool not actually invoked      | Check Lambda logs for MCP invocations; ensure agent version has tool configured       |
-| No welcome message                                         | `CreateWisdomSession` block failing                  | Check flow logs in CloudWatch                                                         |
-| `post_deploy.py` exits with "No ORCHESTRATION agent found" | Agent not yet created in console                     | Complete the console setup steps first                                                |
-| SMS not sending                                            | Toll-free registration not approved                  | Check status in End User Messaging console; SMS won't work until carrier approval     |
-| CDK deploy fails on Lambda bundling                        | Docker/Finch not running                             | Start Docker/Finch and retry with `CDK_DOCKER=finch cdk deploy`                       |
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `CreateWisdomSession` errors in contact flow | Wrong agent type in `AgentAssistanceAgentVersionArn` | Use an ORCHESTRATION agent ARN, not SELF_SERVICE |
+| Bot says "I don't have an answer" | MCP tool not configured on the agent | Add tool in Q in Connect console, create new version, re-run `python3 post_deploy.py` |
+| Bot says "I'll look up..." but returns no results | Agent hallucinating — tool not actually invoked | Check Lambda logs for MCP invocations; ensure agent version has tool configured |
+| No welcome message | `CreateWisdomSession` block failing | Check flow logs in CloudWatch |
+| `post_deploy.py` exits with "No ORCHESTRATION agent found" | Agent not yet created in console | Complete the console setup steps first |
+| SMS not sending | Toll-free registration not approved | Check status in End User Messaging console; SMS won't work until carrier approval |
+| CDK deploy fails on Lambda bundling | Docker not running | Start Docker and retry |
 
-See [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md) for detailed deployment learnings and additional troubleshooting.
+## Post-Deploy Troubleshooting
+
+### Script Fails at "Uploading Refund Data"
+
+**Symptom**: `refunds_demo_balanced.jsonl not found`
+
+**Solutions**:
+1. Verify file exists in the project root: `ls -la refunds_demo_balanced.jsonl`
+2. If missing, create demo data using the [Data Format](#data-format) schema
+3. Ensure the file is in the same directory as `post_deploy.py`
+
+### Script Fails at "Creating AI Prompt"
+
+**Symptom**: Q in Connect API error or timeout
+
+**Solutions**:
+1. Verify Q in Connect is enabled in your region (us-west-2)
+2. Check IAM permissions: `aws iam get-user` and verify `qconnect:*` actions are allowed
+3. Validate `config.yaml` syntax: `python3 -c "import yaml; yaml.safe_load(open('config.yaml'))"`
+4. Check CloudWatch logs: `aws logs tail /aws/lambda/post-deploy --follow`
+
+### Script Fails at "Syncing Knowledge Base"
+
+**Symptom**: Playwright timeout or URL fetch error
+
+**Solutions**:
+1. Verify seed URLs are accessible: `curl -I https://auditorcontroller.org/`
+2. Check network connectivity from Lambda environment
+3. Reduce the number of seed URLs in `config.yaml` to test with fewer pages
+4. Check CloudWatch logs for detailed error: `aws logs tail /aws/lambda/post-deploy --follow`
+
+### Lambda Returns "No Refunds Found"
+
+**Symptom**: Tax lookup always returns no matches
+
+**Solutions**:
+1. Verify refund data was uploaded: `aws s3 ls s3://<bucket>/refunds_demo_balanced.jsonl`
+2. Check data file format: `aws s3 cp s3://<bucket>/refunds_demo_balanced.jsonl - | head -1 | jq .`
+3. Verify claim deadlines in data are in the future: `aws s3 cp s3://<bucket>/refunds_demo_balanced.jsonl - | jq '.claim_deadline' | head -5`
+4. Check Lambda logs: `aws logs tail /aws/lambda/riverside-tax-lookup --follow`
+
+For additional troubleshooting and recovery procedures, see [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md).
+
+## SMS Setup
+
+SMS support allows callers to receive claim links via text message. This requires registering a toll-free number with AWS and your carrier.
+
+### Prerequisites
+
+- An active Amazon Connect instance
+- A toll-free number (or existing number to repurpose)
+- Carrier approval (typically 1-2 business days)
+
+### Registration Steps
+
+1. **Request Toll-Free Number**:
+   - Go to **Amazon Connect** → **Channels** → **Phone Numbers**
+   - Click **Request phone number**
+   - Select **Toll-free** and choose a number
+   - Fill out the use case form (explain this is for government refund notifications)
+   - Submit for carrier approval
+
+2. **Wait for Approval**:
+   - AWS will notify you via email when the number is approved
+   - This typically takes 1-2 business days
+   - Check status in **End User Messaging** console
+
+3. **Enable SMS in Contact Flow**:
+   - Once approved, the number will appear in your phone number list
+   - The `post_deploy.py` script will automatically configure it for SMS
+   - Run: `python3 post_deploy.py`
+
+4. **Test SMS**:
+   - Text the toll-free number with a name
+   - Bot should respond with refund information or "no refunds found"
+
+### SMS Message Format
+
+When a voice caller requests to receive a claim link via SMS, the bot sends:
+
+```
+Riverside County Claims Portal: https://s3.amazonaws.com/...?submission_id=...
+```
+
+The link is a presigned S3 URL valid for 24 hours. After expiration, the caller must call back to request a new link.
+
+### Troubleshooting SMS
+
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| SMS not sending | Toll-free not approved | Check status in End User Messaging console |
+| SMS sending but no response | Contact flow not configured for SMS | Verify SMS channel is enabled in Connect |
+| SMS response is generic error | Lambda permission issue | Check Lambda execution role has SNS permissions |
+| SMS link expires too quickly | Presigned URL expiry too short | Adjust `PACKAGE_EXPIRY` in `bot/upload_handler/lambda_function.py` |
+
+## Admin Dashboard
+
+The `admin-dashboard/` directory contains a Next.js app that staff use to review and manage submitted claims. It's served from CloudFront and signed in with Cognito; builds happen in CodeBuild and get published to an S3 website bucket automatically on every `cdk deploy`.
+
+**Features**:
+- Cognito-backed sign-in with forced-new-password + forgot-password flows
+- Super-admin manages departments, admin users, refund-type labels, and per-refund-type document requirements from the dashboard (no redeploy required)
+- Department admins see only the submissions in their queue, with their department's status + tasks
+- Super-admin sees every department side-by-side
+- Inline document viewer (PDF, image, JSON) for each submission
+- Per-submission activity log (who changed what, when)
+- SES email notifications to the relevant department admins on new submissions and partial→uploaded transitions
+
+**Config**:
+- `config.yaml` under `admin_dashboard:` selects which GitHub repo + branch CodeBuild pulls from.
+- `config.yaml` under `super_admin:` bootstraps the initial super-admin Cognito user on `cdk deploy` (first time only).
+- Everything else (departments, admin users, doc requirements, refund-type labels) is managed live from the Admin Config page by the super-admin.
+
+**Deploy**: `cdk deploy` triggers CodeBuild which runs `yarn install && yarn build` in `admin-dashboard/` and syncs the output to the dashboard's S3 bucket. The dashboard URL is `AdminDashboardUrl` in stack outputs.
 
 # Lessons Learned
 
@@ -304,16 +497,16 @@ See [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md) for detailed deployment learnin
 
 ### AWS Service Pricing
 
-| Service                | Pricing Model                                 | Notes                                |
-| ---------------------- | --------------------------------------------- | ------------------------------------ |
-| **Amazon Connect**     | \$0.018/min voice, \$0.004/msg chat           | Omnichannel contact center           |
-| **Amazon Lex**         | \$0.004/voice request, \$0.00075/text request | NLU processing                       |
-| **Q in Connect**       | \$0.05/conversation                           | AI agent orchestration               |
-| **AWS Lambda**         | \$0.20/1M requests + \$0.0000166667/GB-second | Serverless compute                   |
-| **Amazon S3**          | \$0.023/GB storage + \$0.0004/1K GET requests | Data and document storage            |
-| **Amazon SNS (SMS)**   | \$0.00645/outbound SMS                        | Sending claim links to voice callers |
-| **Amazon API Gateway** | \$3.50/1M requests                            | Upload handler endpoint              |
-| **Amazon CloudWatch**  | \$0.50/GB ingested + \$0.03/GB stored         | Logging and monitoring               |
+| Service                         | Pricing Model                                                 | Notes                                    |
+|---------------------------------|---------------------------------------------------------------|------------------------------------------|
+| **Amazon Connect**              | \$0.018/min voice, \$0.004/msg chat                          | Omnichannel contact center               |
+| **Amazon Lex**                  | \$0.004/voice request, \$0.00075/text request                 | NLU processing                           |
+| **Q in Connect**                | \$0.05/conversation                                           | AI agent orchestration                   |
+| **AWS Lambda**                  | \$0.20/1M requests + \$0.0000166667/GB-second                 | Serverless compute                       |
+| **Amazon S3**                   | \$0.023/GB storage + \$0.0004/1K GET requests                 | Data and document storage                |
+| **Amazon SNS (SMS)**            | \$0.00645/outbound SMS                                        | Sending claim links to voice callers     |
+| **Amazon API Gateway**          | \$3.50/1M requests                                            | Upload handler endpoint                  |
+| **Amazon CloudWatch**           | \$0.50/GB ingested + \$0.03/GB stored                         | Logging and monitoring                   |
 
 ### Scaling Considerations
 
@@ -325,31 +518,74 @@ See [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md) for detailed deployment learnin
 
 For current AWS pricing information, visit the [AWS Pricing Calculator](https://calculator.aws).
 
-# Credits
+# Support
 
 **Riverside County Tax Refund Lookup** is a project developed for the Riverside County Auditor-Controller's office.
 
-> To be updated with team members and project leadership.
+- Darren Kraker, Sr. Solutions Architect - dkraker@amazon.com
+- Nick Riley, Student Developer - njriley@calpoly.edu
 
 # License
 
-> To be updated with license information.
+This project is licensed under the [MIT License](./LICENSE).
+
+```plaintext
+MIT License
+
+Copyright (c) 2025 University of Pittsburgh Health Sciences and Sports Analytics Cloud Innovation Center
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
 
 ---
 
-## Disclaimers
+# Collaboration
+
+Thanks for your interest in our solution. Having specific examples of replication and usage allows us to continue to grow and scale our work. If you clone or use this repository, kindly shoot us a quick email to let us know you are interested in this work!
+
+<wwps-cic@amazon.com>
+
+# Disclaimers
 
 **Customers are responsible for making their own independent assessment of the information in this document.**
 
 **This document:**
-(a) is for informational purposes only,
-(b) references AWS product offerings and practices, which are subject to change without notice,
-(c) does not create any commitments or assurances from AWS and its affiliates, suppliers or licensors. AWS products or services are provided "as is" without warranties, representations, or conditions of any kind, whether express or implied. The responsibilities and liabilities of AWS to its customers are controlled by AWS agreements, and this document is not part of, nor does it modify, any agreement between AWS and its customers, and
-(d) is not to be considered a recommendation or viewpoint of AWS.
 
-**Additionally, you are solely responsible for testing, security and optimizing all code and assets on GitHub repo, and all such code and assets should be considered:**
-(a) as-is and without warranties or representations of any kind,
-(b) not suitable for production environments, or on production or other critical data, and
-(c) to include shortcuts in order to support rapid prototyping such as, but not limited to, relaxed authentication and authorization and a lack of strict adherence to security best practices.
 
-**All work produced is open source. More information can be found in the GitHub repo.**
+Customers are responsible for making their own independent assessment of the information in this document. 
+
+This document: 
+
+(a) is for informational purposes only, 
+
+(b) references AWS product offerings and practices, which are subject to change without notice, 
+
+(c) does not create any commitments or assurances from AWS and its affiliates, suppliers or licensors. AWS products or services are provided "as is" without warranties, representations, or conditions of any kind, whether express or implied. The responsibilities and liabilities of AWS to its customers are controlled by AWS agreements, and this document is not part of, nor does it modify, any agreement between AWS and its customers, and 
+
+(d) is not to be considered a recommendation or viewpoint of AWS. 
+
+Additionally, you are solely responsible for testing, security and optimizing all code and assets on GitHub repo, and all such code and assets should be considered: 
+
+(a) as-is and without warranties or representations of any kind, 
+
+(b) not suitable for production environments, or on production or other critical data, and 
+
+(c) to include shortcuts in order to support rapid prototyping such as, but not limited to, relaxed authentication and authorization and a lack of strict adherence to security best practices. 
+
+All work produced is open source. More information can be found in the GitHub repo.
