@@ -27,14 +27,83 @@ MAX_SIZE = 10 * 1024 * 1024  # 10 MB
 _SAFE_FILENAME = re.compile(r'[^\w.\-]')
 PACKAGE_EXPIRY = 7 * 24 * 3600  # 7 days
 
-# Expected document types per refund category
-_EXPECTED_DOCS = {
-    "STALE_WARRANT": {"photo-id", "proof-of-address", "ap13-affidavit"},
-    "PAYROLL": {"photo-id", "proof-of-address", "ap13-affidavit"},
-    "PROPERTY_TAX": {"photo-id", "property-tax-claim"},
+# Default document requirements per refund type. Used as the seed when the
+# admin-config table has no DOCREQ#<type> entry yet. Super-admin can override
+# via the dashboard.
+#   required  — counts toward `complete` status
+#   internal  — hidden from non-super-admins (e.g. signed affidavit JSON)
+#   either_of — at least one of the listed doc ids must be present (OR group)
+_DEFAULT_DOC_REQS: dict[str, dict[str, Any]] = {
+    "STALE_WARRANT": {
+        "docs": [
+            {"id": "photo-id", "label": "Government-issued photo ID", "required": True},
+            {"id": "proof-of-address", "label": "Proof of current address", "required": True},
+            {"id": "ap13-affidavit", "label": "Signed AP13 affidavit", "required": True, "internal": True},
+        ],
+    },
+    "PAYROLL": {
+        "docs": [
+            {"id": "photo-id", "label": "Government-issued photo ID", "required": True},
+            {"id": "proof-of-address", "label": "Proof of current address", "required": True},
+            {"id": "ap13-affidavit", "label": "Signed AP13 affidavit", "required": True, "internal": True},
+        ],
+    },
+    "PROPERTY_TAX": {
+        "docs": [
+            {"id": "photo-id", "label": "Government-issued photo ID", "required": True},
+            {"id": "property-tax-claim", "label": "Signed property tax claim", "required": True, "internal": True},
+        ],
+        "either_of": [["proof-of-payment", "proof-of-ownership"]],
+    },
 }
-# Property tax also requires proof-of-payment OR proof-of-ownership (either satisfies)
-_PT_EITHER = {"proof-of-payment", "proof-of-ownership"}
+
+
+def _get_doc_req(refund_type: str) -> dict[str, Any]:
+    """Return the doc requirement spec for a refund type, seeding from defaults if absent."""
+    default = _DEFAULT_DOC_REQS.get(refund_type, {"docs": [], "either_of": []})
+    if not admin_table:
+        return default
+    try:
+        resp = admin_table.get_item(Key={"pk": f"DOCREQ#{refund_type}"})
+    except Exception:  # noqa: BLE001
+        return default
+    item = resp.get("Item")
+    if not item:
+        return default
+    return {
+        "docs": item.get("docs") or default.get("docs") or [],
+        "either_of": item.get("either_of") or default.get("either_of") or [],
+    }
+
+
+def _required_doc_ids(refund_types: list[str]) -> set[str]:
+    ids = set()
+    for rt in refund_types:
+        for d in _get_doc_req(rt).get("docs", []):
+            if d.get("required"):
+                ids.add(d["id"])
+    return ids
+
+
+def _either_of_groups(refund_types: list[str]) -> list[list[str]]:
+    groups = []
+    for rt in refund_types:
+        groups.extend(_get_doc_req(rt).get("either_of", []) or [])
+    return groups
+
+
+def _internal_doc_ids(refund_types: list[str]) -> set[str]:
+    ids = set()
+    for rt in refund_types:
+        for d in _get_doc_req(rt).get("docs", []):
+            if d.get("internal"):
+                ids.add(d["id"])
+    return ids
+
+
+def _doc_prefix(filename: str) -> str:
+    """Map 'photo-id_passport.pdf' → 'photo-id' and 'ap13-affidavit.json' → 'ap13-affidavit'."""
+    return filename.split("_", 1)[0].rsplit(".", 1)[0]
 
 
 def _sanitize_filename(name: str) -> str:
@@ -91,15 +160,26 @@ def _derive_departments(refund_types: list[str]) -> list[str]:
 def _derive_tasks(status: str, refund_types: list[str], documents: list[str]) -> list[dict[str, str]]:
     """Build a list of task dicts {label, done} for a submission based on its state."""
     tasks: list[dict[str, str]] = []
-    expected = set()
+    uploaded_prefixes = {_doc_prefix(f) for f in documents}
+
+    # Per-refund-type required docs. Use a dict keyed by id so we dedupe across
+    # overlapping refund types.
+    seen: dict[str, str] = {}
     for rt in refund_types:
-        expected |= _EXPECTED_DOCS.get(rt, set())
-    uploaded_prefixes = {f.split("_", 1)[0].rsplit(".", 1)[0] for f in documents}
-    for doc in sorted(expected):
-        tasks.append({"label": f"Claimant uploads {doc.replace('-', ' ')}", "done": doc in uploaded_prefixes})
-    if "PROPERTY_TAX" in refund_types:
-        pt_ok = bool(_PT_EITHER & uploaded_prefixes)
-        tasks.append({"label": "Claimant uploads proof of payment or ownership", "done": pt_ok})
+        for d in _get_doc_req(rt).get("docs", []):
+            if d.get("required"):
+                seen.setdefault(d["id"], d.get("label") or d["id"].replace("-", " "))
+    for doc_id, label in sorted(seen.items()):
+        tasks.append({"label": f"Claimant uploads {label}", "done": doc_id in uploaded_prefixes})
+
+    # Either-of groups (e.g. proof-of-payment OR proof-of-ownership for property tax)
+    for group in _either_of_groups(refund_types):
+        if not group:
+            continue
+        done = any(doc_id in uploaded_prefixes for doc_id in group)
+        pretty = " or ".join(doc_id.replace("-", " ") for doc_id in group)
+        tasks.append({"label": f"Claimant uploads {pretty}", "done": done})
+
     tasks.append({"label": "Admin reviews documents", "done": status in {"under-review", "approved", "denied"}})
     tasks.append({"label": "Admin approves or denies claim", "done": status in {"approved", "denied"}})
     return tasks
@@ -257,12 +337,17 @@ def _handle_package(event: dict[str, Any], headers: dict[str, str]) -> dict[str,
     if not is_super and not (dept_keys & submission_depts):
         return _err(403, "Not authorized for this submission", headers)
 
+    internal_ids = _internal_doc_ids(refund_types) if not is_super else set()
+
     resp = s3.list_objects_v2(Bucket=BUCKET, Prefix=f"{submission_id}/")
     files = []
     for obj in resp.get("Contents", []):
         key = obj["Key"]
         filename = key.split("/", 1)[1]
         if filename.startswith("_"):
+            continue
+        if _doc_prefix(filename) in internal_ids:
+            # Hide super-admin-only docs from regular admins.
             continue
         download_url = s3.generate_presigned_url(
             "get_object",
@@ -285,14 +370,13 @@ def _handle_package(event: dict[str, Any], headers: dict[str, str]) -> dict[str,
 
 def _classify_status(refund_types: list[str], filenames: list[str]) -> str:
     """Return 'complete' or 'partial' based on expected vs actual docs."""
-    expected = set()
-    for rt in refund_types:
-        expected |= _EXPECTED_DOCS.get(rt, set())
-    uploaded_prefixes = {f.split("_", 1)[0].rsplit(".", 1)[0] for f in filenames}
+    expected = _required_doc_ids(refund_types)
+    uploaded_prefixes = {_doc_prefix(f) for f in filenames}
     if not expected <= uploaded_prefixes:
         return "partial"
-    if "PROPERTY_TAX" in refund_types and not (_PT_EITHER & uploaded_prefixes):
-        return "partial"
+    for group in _either_of_groups(refund_types):
+        if not (set(group) & uploaded_prefixes):
+            return "partial"
     return "complete"
 
 
@@ -640,6 +724,12 @@ def _handle_admin(event: dict[str, Any], headers: dict[str, str]) -> dict[str, A
     # /admin/refund-types/<TYPE> (PUT to set label)
     if parts[:1] == ["refund-types"] and len(parts) == 2 and method == "PUT":
         return _admin_set_refund_type_label(event, parts[1], headers)
+    # /admin/doc-requirements
+    if parts[:1] == ["doc-requirements"]:
+        if len(parts) == 1 and method == "GET":
+            return _admin_list_doc_requirements(headers)
+        if len(parts) == 2 and method == "PUT":
+            return _admin_put_doc_requirements(event, parts[1], headers)
 
     return _err(404, f"Unknown admin route: {method} {path}", headers)
 
@@ -905,3 +995,49 @@ def _admin_set_refund_type_label(event: dict[str, Any], refund_type: str, header
     })
     return {"statusCode": 200, "headers": headers,
             "body": json.dumps({"refund_type": refund_type, "label": label})}
+
+
+def _admin_list_doc_requirements(headers: dict[str, str]) -> dict[str, Any]:
+    """Return doc requirements for each known refund type, seeded from defaults."""
+    out = {}
+    for rt in ("STALE_WARRANT", "PAYROLL", "PROPERTY_TAX"):
+        out[rt] = _get_doc_req(rt)
+    return {"statusCode": 200, "headers": headers, "body": json.dumps(out)}
+
+
+def _admin_put_doc_requirements(event: dict[str, Any], refund_type: str, headers: dict[str, str]) -> dict[str, Any]:
+    refund_type = refund_type.upper()
+    if refund_type not in {"STALE_WARRANT", "PAYROLL", "PROPERTY_TAX"}:
+        return _err(400, "Unknown refund type", headers)
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except json.JSONDecodeError:
+        return _err(400, "Invalid JSON", headers)
+
+    docs = body.get("docs")
+    if not isinstance(docs, list):
+        return _err(400, "docs must be a list", headers)
+    normalized_docs = []
+    for d in docs:
+        if not isinstance(d, dict) or "id" not in d or not d["id"]:
+            return _err(400, "each doc requires an id", headers)
+        normalized_docs.append({
+            "id": str(d["id"]),
+            "label": str(d.get("label") or d["id"]),
+            "required": bool(d.get("required", True)),
+            "internal": bool(d.get("internal", False)),
+        })
+
+    either_of = body.get("either_of") or []
+    if not isinstance(either_of, list) or any(not isinstance(g, list) for g in either_of):
+        return _err(400, "either_of must be a list of lists", headers)
+
+    admin_table.put_item(Item={
+        "pk": f"DOCREQ#{refund_type}",
+        "refund_type": refund_type,
+        "docs": normalized_docs,
+        "either_of": either_of,
+        "updatedAt": _now_iso(),
+    })
+    return {"statusCode": 200, "headers": headers,
+            "body": json.dumps({"refund_type": refund_type, "docs": normalized_docs, "either_of": either_of})}
