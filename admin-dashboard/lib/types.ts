@@ -1,3 +1,16 @@
+export type AuditEntry = {
+  submissionId: string
+  timestamp: string
+  actor: string
+  action: string
+  details: Record<string, unknown>
+}
+
+export type AuditResponse = {
+  submissionId: string
+  entries: AuditEntry[]
+}
+
 export type PackageFile = { filename: string; downloadUrl: string; size: number }
 
 export type Package = {
