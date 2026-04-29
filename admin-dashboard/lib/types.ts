@@ -1,3 +1,17 @@
+export type DocReq = {
+  id: string
+  label: string
+  required: boolean
+  internal: boolean
+}
+
+export type RefundTypeDocReqs = {
+  docs: DocReq[]
+  either_of: string[][]
+}
+
+export type DocReqsResponse = Record<string, RefundTypeDocReqs>
+
 export type AuditEntry = {
   submissionId: string
   timestamp: string
