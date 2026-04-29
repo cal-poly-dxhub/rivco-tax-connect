@@ -158,7 +158,11 @@ def _derive_departments(refund_types: list[str]) -> list[str]:
 
 
 def _derive_tasks(status: str, refund_types: list[str], documents: list[str]) -> list[dict[str, str]]:
-    """Build a list of task dicts {label, done} for a submission based on its state."""
+    """Build a list of task dicts {label, done} for a submission's refund type subset.
+
+    Callers typically pass the refund types relevant to ONE department and that
+    dept's status; the returned task list then represents that dept's checklist.
+    """
     tasks: list[dict[str, str]] = []
     uploaded_prefixes = {_doc_prefix(f) for f in documents}
 
@@ -183,6 +187,20 @@ def _derive_tasks(status: str, refund_types: list[str], documents: list[str]) ->
     tasks.append({"label": "Admin reviews documents", "done": status in {"under-review", "approved", "denied"}})
     tasks.append({"label": "Admin approves or denies claim", "done": status in {"approved", "denied"}})
     return tasks
+
+
+def _tasks_by_department(
+    statuses: dict[str, str], departments: list[str],
+    all_refund_types: list[str], documents: list[str],
+) -> dict[str, list[dict[str, str]]]:
+    """Return {dept_key: tasks[]} — one task list per department."""
+    out: dict[str, list[dict[str, str]]] = {}
+    for dept in departments:
+        sub_types = _refund_types_for_department(dept, all_refund_types)
+        if not sub_types:
+            continue
+        out[dept] = _derive_tasks(statuses.get(dept, "partial"), sub_types, documents)
+    return out
 
 
 def _auth(event: dict[str, Any]) -> tuple[set[str], bool]:
@@ -369,7 +387,7 @@ def _handle_package(event: dict[str, Any], headers: dict[str, str]) -> dict[str,
 
 
 def _classify_status(refund_types: list[str], filenames: list[str]) -> str:
-    """Return 'complete' or 'partial' based on expected vs actual docs."""
+    """Return 'uploaded' or 'partial' based on expected vs actual docs for the given refund types."""
     expected = _required_doc_ids(refund_types)
     uploaded_prefixes = {_doc_prefix(f) for f in filenames}
     if not expected <= uploaded_prefixes:
@@ -377,7 +395,30 @@ def _classify_status(refund_types: list[str], filenames: list[str]) -> str:
     for group in _either_of_groups(refund_types):
         if not (set(group) & uploaded_prefixes):
             return "partial"
-    return "complete"
+    return "uploaded"
+
+
+def _refund_types_for_department(dept_key: str, all_refund_types: list[str]) -> list[str]:
+    """Return the subset of a submission's refund types that belong to this dept."""
+    if not admin_table:
+        return []
+    resp = admin_table.get_item(Key={"pk": f"DEPT#{dept_key}"}).get("Item")
+    if not resp:
+        return []
+    dept_types = set(resp.get("refund_types") or [])
+    return [rt for rt in all_refund_types if rt in dept_types]
+
+
+def _compute_statuses(departments: list[str], refund_type_csv: str, filenames: list[str]) -> dict[str, str]:
+    """Build the per-department statuses map by classifying each dept's required docs."""
+    all_types = [t.strip() for t in refund_type_csv.split(",") if t.strip()]
+    statuses: dict[str, str] = {}
+    for dept in departments:
+        sub_types = _refund_types_for_department(dept, all_types)
+        if not sub_types:
+            continue
+        statuses[dept] = _classify_status(sub_types, filenames)
+    return statuses
 
 
 def _handle_status(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
@@ -391,18 +432,42 @@ def _handle_status(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
             if not is_super and not (dept_keys & set(depts)):
                 continue
             docs = item.get("documents", [])
-            status = item.get("status", "partial")
+
+            # Build or recover per-dept statuses. Legacy rows may still have a
+            # single `status` — if `statuses` isn't present, compute from docs.
+            statuses = item.get("statuses")
+            if not isinstance(statuses, dict):
+                statuses = _compute_statuses(depts, item.get("refundType", ""), docs)
+
+            tasks_by_dept = _tasks_by_department(statuses, depts, refund_types, docs)
+
+            # Filter the statuses/tasks maps to the caller's visible scope.
+            if not is_super:
+                visible_depts = [d for d in depts if d in dept_keys]
+                statuses = {d: statuses.get(d, "partial") for d in visible_depts if d in statuses}
+                tasks_by_dept = {d: tasks_by_dept[d] for d in visible_depts if d in tasks_by_dept}
+                depts_out = visible_depts
+            else:
+                depts_out = depts
+
             submissions.append({
                 "submissionId": item["submissionId"],
                 "name": item.get("name", ""),
                 "refundType": item.get("refundType", ""),
-                "status": status,
+                "statuses": statuses,
                 "documents": docs,
                 "submittedAt": item.get("submittedAt", ""),
-                "departments": depts,
-                "tasks": _derive_tasks(status, refund_types, docs),
+                "departments": depts_out,
+                "tasksByDepartment": tasks_by_dept,
             })
-        submissions.sort(key=lambda s: (0 if s["status"] == "complete" else 1, s["submittedAt"]))
+
+        def sort_key(s: dict[str, Any]) -> tuple[int, str]:
+            # Any non-terminal status (partial/uploaded/under-review) = high priority
+            terminal = {"approved", "denied"}
+            any_pending = any(v not in terminal for v in s["statuses"].values())
+            return (0 if any_pending else 1, s["submittedAt"])
+        submissions.sort(key=sort_key)
+
         permissions = {
             "isSuperAdmin": is_super,
             "canDelete": is_super,
@@ -477,20 +542,34 @@ def _handle_upload_complete(event: dict[str, Any], headers: dict[str, str]) -> d
     if not table:
         return _err(500, "DynamoDB not configured", headers)
 
-    # Get the item to read refundType
+    # Get the item to read refundType + departments
     item = _get_submission(submission_id)
     if not item:
         return _err(404, "Submission not found", headers)
 
-    refund_types = [t.strip() for t in item.get("refundType", "").split(",") if t.strip()]
-    status = _classify_status(refund_types, filenames)
+    refund_type_csv = item.get("refundType", "")
+    departments = item.get("departments") or _derive_departments(
+        [t.strip() for t in refund_type_csv.split(",") if t.strip()])
+
+    # Compute only partial→uploaded transitions. Don't stomp on a dept that's
+    # already moved past `uploaded` (e.g. an admin already approved).
+    new_statuses = _compute_statuses(departments, refund_type_csv, filenames)
+    existing = item.get("statuses") or {}
+    merged: dict[str, str] = {}
+    for dept in departments:
+        prev = existing.get(dept, "partial")
+        # Only let the doc-driven classifier set partial/uploaded. If the dept
+        # is already under-review/approved/denied, preserve it.
+        if prev in {"partial", "uploaded"}:
+            merged[dept] = new_statuses.get(dept, "partial")
+        else:
+            merged[dept] = prev
 
     table.update_item(
         Key=_sub_key(submission_id),
-        UpdateExpression="SET #s = :s, documents = :d, updatedAt = :u",
-        ExpressionAttributeNames={"#s": "status"},
+        UpdateExpression="SET statuses = :s, documents = :d, updatedAt = :u",
         ExpressionAttributeValues={
-            ":s": status,
+            ":s": merged,
             ":d": filenames,
             ":u": _now_iso(),
         },
@@ -499,11 +578,11 @@ def _handle_upload_complete(event: dict[str, Any], headers: dict[str, str]) -> d
     return {
         "statusCode": 200,
         "headers": headers,
-        "body": json.dumps({"submissionId": submission_id, "status": status}),
+        "body": json.dumps({"submissionId": submission_id, "statuses": merged}),
     }
 
 
-_VALID_STATUSES = {"partial", "complete", "under-review", "approved", "denied"}
+_VALID_STATUSES = {"partial", "uploaded", "under-review", "approved", "denied"}
 
 
 def _handle_update_status(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
@@ -515,9 +594,10 @@ def _handle_update_status(event: dict[str, Any], headers: dict[str, str]) -> dic
 
     submission_id = (body.get("submissionId") or "").strip()
     new_status = (body.get("status") or "").strip()
+    department = (body.get("department") or "").strip()
 
-    if not submission_id or not new_status:
-        return _err(400, "submissionId and status are required", headers)
+    if not submission_id or not new_status or not department:
+        return _err(400, "submissionId, status, and department are required", headers)
     if not re.fullmatch(r'[0-9a-f]{12}', submission_id):
         return _err(400, "Invalid submission id", headers)
     if new_status not in _VALID_STATUSES:
@@ -525,31 +605,34 @@ def _handle_update_status(event: dict[str, Any], headers: dict[str, str]) -> dic
     if not table:
         return _err(500, "DynamoDB not configured", headers)
 
-    resp_item = _get_submission(submission_id)
-    if not resp_item:
+    item = _get_submission(submission_id)
+    if not item:
         return _err(404, "Submission not found", headers)
-    item = resp_item
 
     dept_keys, is_super = _auth(event)
     submission_depts = set(item.get("departments") or _derive_departments(
         [t.strip() for t in item.get("refundType", "").split(",") if t.strip()]))
-    if not is_super and not (dept_keys & submission_depts):
-        return _err(403, "Not authorized for this submission", headers)
+    if department not in submission_depts:
+        return _err(400, f"Submission is not tagged for department '{department}'", headers)
+    if not is_super and department not in dept_keys:
+        return _err(403, "Not authorized for this department", headers)
 
-    prev_status = item.get("status", "")
+    statuses = dict(item.get("statuses") or {})
+    prev_status = statuses.get(department, "")
+    statuses[department] = new_status
+
     table.update_item(
         Key=_sub_key(submission_id),
-        UpdateExpression="SET #s = :s, updatedAt = :u",
-        ExpressionAttributeNames={"#s": "status"},
-        ExpressionAttributeValues={":s": new_status, ":u": _now_iso()},
+        UpdateExpression="SET statuses = :s, updatedAt = :u",
+        ExpressionAttributeValues={":s": statuses, ":u": _now_iso()},
     )
     _audit(submission_id, _actor(event), "status_change",
-           {"from": prev_status, "to": new_status})
+           {"department": department, "from": prev_status, "to": new_status})
 
     return {
         "statusCode": 200,
         "headers": headers,
-        "body": json.dumps({"submissionId": submission_id, "status": new_status}),
+        "body": json.dumps({"submissionId": submission_id, "department": department, "status": new_status}),
     }
 
 
@@ -661,12 +744,13 @@ def _handle_upload(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
     # Write initial record to DynamoDB
     if table:
         refund_types = [t.strip() for t in refund_type.split(",") if t.strip()]
+        departments = _derive_departments(refund_types)
         _put_submission({
             "submissionId": submission_id,
             "name": name,
             "refundType": refund_type,
-            "departments": _derive_departments(refund_types),
-            "status": "partial",
+            "departments": departments,
+            "statuses": {d: "partial" for d in departments},
             "documents": [],
             "submittedAt": now,
             "updatedAt": now,
