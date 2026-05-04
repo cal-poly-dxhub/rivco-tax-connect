@@ -23,7 +23,6 @@ ALLOWED_TYPES = {
     "image/heic",
     "application/json",
 }
-MAX_SIZE = 10 * 1024 * 1024  # 10 MB
 _SAFE_FILENAME = re.compile(r'[^\w.\-]')
 PACKAGE_EXPIRY = 7 * 24 * 3600  # 7 days
 
@@ -82,14 +81,31 @@ def _scan_all(table_resource, **scan_kwargs) -> list[dict[str, Any]]:
 
 
 def _load_departments() -> list[dict[str, Any]]:
-    """Return all department records from the admin-config table."""
+    """Return all department records from the admin-config table.
+
+    Cached on the function object so repeat calls within one invocation (or
+    within a warm-reused Lambda container) don't re-scan DynamoDB. Bust the
+    cache by clearing ``_load_departments.cache`` if you write a department.
+    """
+    cache = getattr(_load_departments, "cache", None)
+    if cache is not None:
+        return cache
     if not admin_table:
-        return []
-    return _scan_all(
+        _load_departments.cache = []  # type: ignore[attr-defined]
+        return _load_departments.cache
+    items = _scan_all(
         admin_table,
         FilterExpression="begins_with(pk, :p)",
         ExpressionAttributeValues={":p": "DEPT#"},
     )
+    _load_departments.cache = items  # type: ignore[attr-defined]
+    return items
+
+
+def _bust_department_cache() -> None:
+    """Call after any write that changes department rows."""
+    if hasattr(_load_departments, "cache"):
+        delattr(_load_departments, "cache")
 
 
 def _derive_departments(refund_types: list[str]) -> list[str]:
@@ -140,20 +156,23 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return {"statusCode": 200, "headers": headers, "body": ""}
 
     resource = event.get("resource", "")
+    method = event.get("httpMethod", "")
     if resource.startswith("/admin/"):
         return _handle_admin(event, headers)
-    if resource == "/package" and event.get("httpMethod") == "GET":
+    if resource == "/package" and method == "GET":
         return _handle_package(event, headers)
-    if resource == "/status" and event.get("httpMethod") == "GET":
+    if resource == "/status" and method == "GET":
         return _handle_status(event, headers)
-    if resource == "/upload-complete" and event.get("httpMethod") == "POST":
+    if resource == "/upload" and method == "POST":
+        return _handle_upload(event, headers)
+    if resource == "/upload-complete" and method == "POST":
         return _handle_upload_complete(event, headers)
-    if resource == "/update-status" and event.get("httpMethod") == "POST":
+    if resource == "/update-status" and method == "POST":
         return _handle_update_status(event, headers)
-    if resource == "/delete-submission" and event.get("httpMethod") == "POST":
+    if resource == "/delete-submission" and method == "POST":
         return _handle_delete_submission(event, headers)
 
-    return _handle_upload(event, headers)
+    return _err(404, f"No handler for {method} {resource}", headers)
 
 
 def _handle_package(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
@@ -177,19 +196,20 @@ def _handle_package(event: dict[str, Any], headers: dict[str, str]) -> dict[str,
     if not is_super and not (dept_keys & submission_depts):
         return _err(403, "Not authorized for this submission", headers)
 
-    resp = s3.list_objects_v2(Bucket=BUCKET, Prefix=f"{submission_id}/")
+    paginator = s3.get_paginator("list_objects_v2")
     files = []
-    for obj in resp.get("Contents", []):
-        key = obj["Key"]
-        filename = key.split("/", 1)[1]
-        if filename.startswith("_"):
-            continue
-        download_url = s3.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": BUCKET, "Key": key},
-            ExpiresIn=PACKAGE_EXPIRY,
-        )
-        files.append({"filename": filename, "downloadUrl": download_url, "size": obj["Size"]})
+    for page in paginator.paginate(Bucket=BUCKET, Prefix=f"{submission_id}/"):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            filename = key.split("/", 1)[1]
+            if filename.startswith("_"):
+                continue
+            download_url = s3.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": BUCKET, "Key": key},
+                ExpiresIn=PACKAGE_EXPIRY,
+            )
+            files.append({"filename": filename, "downloadUrl": download_url, "size": obj["Size"]})
 
     return {
         "statusCode": 200,
@@ -247,52 +267,7 @@ def _handle_status(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
         return {"statusCode": 200, "headers": headers,
                 "body": json.dumps({"submissions": submissions, "permissions": permissions})}
 
-    # Fallback: S3 scan (unauthenticated legacy, kept for local dev)
-    return _handle_status_s3(headers)
-
-
-def _handle_status_s3(headers: dict[str, str]) -> dict[str, Any]:
-    """Original S3-based status listing."""
-    paginator = s3.get_paginator("list_objects_v2")
-    manifests = []
-    for page in paginator.paginate(Bucket=BUCKET, Delimiter="/"):
-        for prefix in page.get("CommonPrefixes", []):
-            manifests.append(prefix["Prefix"])
-
-    submissions = []
-    for prefix in manifests:
-        sid = prefix.rstrip("/")
-        try:
-            obj = s3.get_object(Bucket=BUCKET, Key=f"{sid}/_manifest.json")
-            manifest = json.loads(obj["Body"].read())
-        except Exception:
-            continue
-
-        resp = s3.list_objects_v2(Bucket=BUCKET, Prefix=f"{sid}/")
-        docs = []
-        latest = ""
-        for o in resp.get("Contents", []):
-            fname = o["Key"].split("/", 1)[1]
-            if fname.startswith("_"):
-                continue
-            docs.append(fname)
-            ts = o["LastModified"].isoformat()
-            if ts > latest:
-                latest = ts
-
-        refund_types = [t.strip() for t in manifest.get("refundType", "").split(",") if t.strip()]
-        status = _classify_status(refund_types, docs)
-        submissions.append({
-            "submissionId": sid,
-            "name": manifest.get("name", ""),
-            "refundType": manifest.get("refundType", ""),
-            "status": status,
-            "documents": docs,
-            "submittedAt": latest,
-        })
-
-    submissions.sort(key=lambda s: (0 if s["status"] == "complete" else 1, s["submittedAt"]))
-    return {"statusCode": 200, "headers": headers, "body": json.dumps(submissions)}
+    return _err(500, "DynamoDB table not configured", headers)
 
 
 def _handle_upload_complete(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
@@ -612,6 +587,7 @@ def _admin_create_department(event: dict[str, Any], headers: dict[str, str]) -> 
         "pk": f"DEPT#{key}", "key": key, "label": label,
         "refund_types": refund_types, "createdAt": _now_iso(),
     })
+    _bust_department_cache()
     return {"statusCode": 201, "headers": headers,
             "body": json.dumps({"key": key, "label": label, "refund_types": refund_types})}
 
@@ -640,6 +616,7 @@ def _admin_update_department(event: dict[str, Any], key: str, headers: dict[str,
         ExpressionAttributeNames={f"#{k}": k for k in updates},
         ExpressionAttributeValues={**{f":{k}": v for k, v in updates.items()}, ":u": _now_iso()},
     )
+    _bust_department_cache()
     return {"statusCode": 200, "headers": headers, "body": json.dumps({"key": key, **updates})}
 
 
@@ -654,6 +631,7 @@ def _admin_delete_department(key: str, headers: dict[str, str]) -> dict[str, Any
     except cognito.exceptions.ResourceNotFoundException:
         pass
     admin_table.delete_item(Key={"pk": f"DEPT#{key}"})
+    _bust_department_cache()
     return {"statusCode": 200, "headers": headers, "body": json.dumps({"key": key, "deleted": True})}
 
 
@@ -672,6 +650,14 @@ def _admin_create_user(event: dict[str, Any], headers: dict[str, str]) -> dict[s
     # Collision check
     if admin_table.get_item(Key={"pk": f"USER#{username}"}).get("Item"):
         return _err(409, f"Username '{username}' already exists (email prefix collision)", headers)
+    # Validate every requested group exists *before* creating the user, so we
+    # don't leave an orphaned Cognito user if a group name is wrong.
+    for group in groups:
+        try:
+            cognito.get_group(UserPoolId=USER_POOL_ID, GroupName=group)
+        except cognito.exceptions.ResourceNotFoundException:
+            return _err(400, f"Group not found: {group}", headers)
+
     try:
         cognito.admin_create_user(
             UserPoolId=USER_POOL_ID,
@@ -685,12 +671,9 @@ def _admin_create_user(event: dict[str, Any], headers: dict[str, str]) -> dict[s
     except cognito.exceptions.UsernameExistsException:
         return _err(409, "Username already exists in Cognito", headers)
     for group in groups:
-        try:
-            cognito.admin_add_user_to_group(
-                UserPoolId=USER_POOL_ID, Username=username, GroupName=group,
-            )
-        except cognito.exceptions.ResourceNotFoundException:
-            return _err(400, f"Group not found: {group}", headers)
+        cognito.admin_add_user_to_group(
+            UserPoolId=USER_POOL_ID, Username=username, GroupName=group,
+        )
     admin_table.put_item(Item={
         "pk": f"USER#{username}", "username": username, "email": email,
         "groups": groups, "createdAt": _now_iso(),
@@ -734,13 +717,16 @@ def _admin_update_user(event: dict[str, Any], username: str, headers: dict[str, 
     # Email update
     new_email = (body.get("email") or "").strip().lower()
     if new_email and new_email != existing.get("email"):
-        cognito.admin_update_user_attributes(
-            UserPoolId=USER_POOL_ID, Username=username,
-            UserAttributes=[
-                {"Name": "email", "Value": new_email},
-                {"Name": "email_verified", "Value": "true"},
-            ],
-        )
+        try:
+            cognito.admin_update_user_attributes(
+                UserPoolId=USER_POOL_ID, Username=username,
+                UserAttributes=[
+                    {"Name": "email", "Value": new_email},
+                    {"Name": "email_verified", "Value": "true"},
+                ],
+            )
+        except cognito.exceptions.UserNotFoundException:
+            return _err(404, "Cognito user no longer exists", headers)
 
     # Groups update (diff add/remove)
     if "groups" in body:
