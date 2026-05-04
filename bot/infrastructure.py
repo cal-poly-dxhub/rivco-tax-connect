@@ -628,7 +628,7 @@ class NovaSonicConnectStack(Stack):
             rest_api_name=f"{proj}-upload-api",
             default_cors_preflight_options=apigw.CorsOptions(
                 allow_origins=apigw.Cors.ALL_ORIGINS,
-                allow_methods=["POST", "GET", "OPTIONS"],
+                allow_methods=apigw.Cors.ALL_METHODS,
                 allow_headers=["Content-Type", "Authorization"],
             ),
             deploy_options=apigw.StageOptions(

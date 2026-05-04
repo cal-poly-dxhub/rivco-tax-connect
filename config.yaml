@@ -21,12 +21,18 @@ s3:
 # Super-admin bootstrap. Created by CDK custom resource on first deploy.
 # Additional super-admins and all other admin users/departments are managed
 # at runtime from the dashboard.
+# REQUIRED: set to an email you control before running `cdk deploy`. The CDK
+# stack creates a Cognito user with this email and a temporary password (see
+# `SuperAdminBootstrapPassword` in stack outputs).
 super_admin:
-  email: gflusser+super@amazon.com
+  email: CHANGEME@example.com
 
 notifications:
   mode: log         # "log" (CloudWatch only) or "ses"
-  sender: gflusser+super@amazon.com
+  # REQUIRED if mode is "ses". This is the "From" address on notification
+  # emails. CDK creates an SES identity; you must click the verification
+  # link AWS sends before notifications can actually deliver.
+  sender: CHANGEME@example.com
 
 # Admin dashboard (Next.js) build config. CodeBuild pulls from this repo/branch.
 admin_dashboard:

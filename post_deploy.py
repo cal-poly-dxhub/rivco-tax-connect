@@ -71,8 +71,12 @@ def associate_mcp_gateway(instance_id, gateway_id):
     appint = boto3.client("appintegrations", region_name=REGION)
     connect = boto3.client("connect", region_name=REGION)
 
-    # Find the AppIntegrations application whose Namespace matches the gateway ID
-    apps = appint.list_applications()["Applications"]
+    # Find the AppIntegrations application whose Namespace matches the gateway ID.
+    # Paginate through all applications so we don't miss it in large accounts.
+    apps = []
+    paginator = appint.get_paginator("list_applications")
+    for page in paginator.paginate():
+        apps.extend(page.get("Applications", []))
     app = next((a for a in apps if a.get("Namespace") == gateway_id), None)
     if not app:
         log("⚠️", f"No AppIntegrations application found with Namespace={gateway_id}")

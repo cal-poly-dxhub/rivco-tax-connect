@@ -122,6 +122,23 @@ Before deploying the solution, ensure you have the following:
 5. **Docker** — Required for Lambda bundling. [Docker](https://www.docker.com/get-started/)
 6. **Git** — [Download here](https://git-scm.com/)
 
+### Required config.yaml values
+
+Before running `cdk deploy`, edit `config.yaml` and replace the `CHANGEME@example.com`
+placeholders:
+
+- `super_admin.email` — an email you control. CDK creates a Cognito user for this
+  address on first deploy; the temporary password is emitted in stack outputs
+  (`SuperAdminBootstrapPassword`) and Cognito forces a password change on first
+  login.
+- `notifications.sender` — the "From" address on admin-notification emails.
+  CDK creates an SES identity for this address; click the verification link AWS
+  sends before notifications can deliver. In SES sandbox, every recipient must
+  also be verified (subaddresses inherit from the base identity).
+
+Also set `admin_dashboard.github_branch` to the branch CodeBuild should build
+from (typically `main` in production, or a feature branch while iterating).
+
 ## AWS Configuration
 
 1. **Configure AWS CLI with your credentials**:

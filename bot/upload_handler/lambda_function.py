@@ -68,15 +68,28 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _scan_all(table_resource, **scan_kwargs) -> list[dict[str, Any]]:
+    """Scan a DynamoDB table with pagination, returning all items."""
+    items: list[dict[str, Any]] = []
+    resp = table_resource.scan(**scan_kwargs)
+    items.extend(resp.get("Items", []))
+    while "LastEvaluatedKey" in resp:
+        resp = table_resource.scan(
+            **scan_kwargs, ExclusiveStartKey=resp["LastEvaluatedKey"],
+        )
+        items.extend(resp.get("Items", []))
+    return items
+
+
 def _load_departments() -> list[dict[str, Any]]:
     """Return all department records from the admin-config table."""
     if not admin_table:
         return []
-    resp = admin_table.scan(
+    return _scan_all(
+        admin_table,
         FilterExpression="begins_with(pk, :p)",
         ExpressionAttributeValues={":p": "DEPT#"},
     )
-    return resp.get("Items", [])
 
 
 def _derive_departments(refund_types: list[str]) -> list[str]:
@@ -88,9 +101,9 @@ def _derive_departments(refund_types: list[str]) -> list[str]:
     return sorted(depts)
 
 
-def _derive_tasks(status: str, refund_types: list[str], documents: list[str]) -> list[dict[str, str]]:
+def _derive_tasks(status: str, refund_types: list[str], documents: list[str]) -> list[dict[str, Any]]:
     """Build a list of task dicts {label, done} for a submission based on its state."""
-    tasks: list[dict[str, str]] = []
+    tasks: list[dict[str, Any]] = []
     expected = set()
     for rt in refund_types:
         expected |= _EXPECTED_DOCS.get(rt, set())
@@ -207,9 +220,8 @@ def _handle_status(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
     """List submissions the caller is allowed to see."""
     dept_keys, is_super = _auth(event)
     if table:
-        resp = table.scan()
         submissions = []
-        for item in resp.get("Items", []):
+        for item in _scan_all(table):
             refund_types = [t.strip() for t in item.get("refundType", "").split(",") if t.strip()]
             depts = item.get("departments") or _derive_departments(refund_types)
             if not is_super and not (dept_keys & set(depts)):
@@ -525,11 +537,11 @@ def _handle_admin(event: dict[str, Any], headers: dict[str, str]) -> dict[str, A
 
 
 def _admin_get_config(headers: dict[str, str]) -> dict[str, Any]:
-    resp = admin_table.scan()
+    items = _scan_all(admin_table)
     departments = []
     users = []
     refund_type_labels = {}
-    for item in resp.get("Items", []):
+    for item in items:
         pk = item.get("pk", "")
         if pk.startswith("DEPT#"):
             departments.append({
@@ -547,7 +559,17 @@ def _admin_get_config(headers: dict[str, str]) -> dict[str, Any]:
 
     # Merge in Cognito users that aren't in admin-config yet (e.g. bootstrap super-admin)
     known = {u["username"] for u in users}
-    cognito_users = cognito.list_users(UserPoolId=USER_POOL_ID).get("Users", [])
+    cognito_users: list[dict[str, Any]] = []
+    pagination_token: str | None = None
+    while True:
+        kwargs: dict[str, Any] = {"UserPoolId": USER_POOL_ID, "Limit": 60}
+        if pagination_token:
+            kwargs["PaginationToken"] = pagination_token
+        resp = cognito.list_users(**kwargs)
+        cognito_users.extend(resp.get("Users", []))
+        pagination_token = resp.get("PaginationToken")
+        if not pagination_token:
+            break
     for cu in cognito_users:
         uname = cu.get("Username")
         if not uname or uname in known:
