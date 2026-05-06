@@ -1,5 +1,5 @@
 project:
-  name: riverside-tax-refund
+  name: riverside-tax-refund-v2
   description: Riverside County Tax Refund Lookup
 
 aws:
@@ -17,6 +17,28 @@ lambda:
 s3:
   bucket_suffix: data
   data_file: refunds_demo_balanced.jsonl
+
+# Super-admin bootstrap. Created by CDK custom resource on first deploy.
+# Additional super-admins and all other admin users/departments are managed
+# at runtime from the dashboard.
+# REQUIRED: set to an email you control before running `cdk deploy`. The CDK
+# stack creates a Cognito user with this email and a temporary password (see
+# `SuperAdminBootstrapPassword` in stack outputs).
+super_admin:
+  email: CHANGEME@example.com
+
+notifications:
+  mode: log         # "log" (CloudWatch only) or "ses"
+  # REQUIRED if mode is "ses". This is the "From" address on notification
+  # emails. CDK creates an SES identity; you must click the verification
+  # link AWS sends before notifications can actually deliver.
+  sender: CHANGEME@example.com
+
+# Admin dashboard (Next.js) build config. CodeBuild pulls from this repo/branch.
+admin_dashboard:
+  github_owner: cal-poly-dxhub
+  github_repo: rivco-tax-connect
+  github_branch: feat/accurate-dashboard-status
 
 lex:
   bot_name: TaxRefundBot

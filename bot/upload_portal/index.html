@@ -252,7 +252,6 @@
             }
 
             input[type="text"],
-            input[type="password"],
             select {
                 width: 100%;
                 padding: 0.65rem 0.9rem;
@@ -270,14 +269,12 @@
             }
 
             input[type="text"]:focus,
-            input[type="password"]:focus,
             select:focus {
                 border-color: var(--blue);
                 box-shadow: 0 0 0 3px rgba(12, 113, 202, 0.12);
             }
 
-            input[type="text"]::placeholder,
-            input[type="password"]::placeholder {
+            input[type="text"]::placeholder {
                 color: #aab4be;
             }
 
@@ -543,8 +540,8 @@
                 </div>
                 <p class="subtitle">
                     Fill out the required form(s) below. Pre-filled fields are
-                    highlighted. For the AP13 affidavit, sign and click "Submit
-                    Digitally" when done.
+                    highlighted. For the AP13 affidavit, sign and click "Sign
+                    &amp; Confirm" when done.
                 </p>
                 <div id="formTabs" class="tabs"></div>
                 <div id="formTabContent" class="tab-content"></div>
@@ -598,16 +595,6 @@
                             Property Tax</label
                         >
                     </div>
-
-                    <label for="password" class="required"
-                        >Upload Password</label
-                    >
-                    <input
-                        type="password"
-                        id="password"
-                        required
-                        placeholder="Provided by the refund lookup assistant"
-                    />
 
                     <div id="ap13Status" class="ap13-status pending hidden">
                         AP13 Affidavit not yet submitted — please complete and
@@ -1077,9 +1064,6 @@
                                     .getElementById("name")
                                     .value.trim(),
                                 refundType: selected.join(","),
-                                password: document
-                                    .getElementById("password")
-                                    .value.trim(),
                                 files: files.map(function (f) {
                                     return {
                                         filename: f.filename,
@@ -1103,8 +1087,17 @@
                             });
                         }
 
-                        var packageUrl = API_URL + "/package?id=" + data.submissionId
-                            + "&password=" + encodeURIComponent(document.getElementById("password").value.trim());
+                        // Notify backend that all files are uploaded
+                        await fetch(API_URL + "/upload-complete", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                submissionId: data.submissionId,
+                                filenames: data.uploads.map(function (u) { return u.filename; }),
+                            }),
+                        });
+
+                        var packageUrl = API_URL + "/package?id=" + data.submissionId;
 
                         setStatus(
                             "ok",

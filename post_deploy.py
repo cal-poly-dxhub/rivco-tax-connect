@@ -27,8 +27,8 @@ import boto3
 import yaml
 
 REGION = "us-west-2"
-STACK_NAME = "riverside-tax-refund"
-AGENT_NAME = "tax-refund-agent"
+STACK_NAME = "riverside-tax-refund-v2"
+AGENT_NAME = "tax-service-agent"
 PROMPT_NAME = "tax-refund-orchestration-prompt"
 PROMPT_MODEL = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -46,6 +46,62 @@ def log(icon, msg):
 
 def log_step(msg):
     print(f"\n▶ {msg}")
+
+
+# ── Step 0: Associate MCP gateway with Connect instance ─────
+
+def associate_mcp_gateway(instance_id, gateway_id):
+    """Link the MCP gateway app-integration to the Connect instance.
+
+    The Connect console creates this via the 'Instance association' dropdown,
+    but for MCP servers it requires the gateway's Discovery URL to be configured
+    on the gateway — which we skip by calling the API directly.
+
+    How it works:
+      1. The CDK stack creates the gateway and registers it as an AppIntegrations
+         application with Namespace = gateway ID.
+      2. This function finds that application and calls
+         `connect.create_integration_association` to bind it to the instance.
+      3. After association, the MCP tools appear in the Connect security profile
+         under 'Agent Applications' (may take up to 10 min).
+      4. An admin must then enable the app in the relevant security profile(s)
+         and ensure CCP Access is also enabled.
+    """
+    log_step("Associating MCP gateway with Connect instance...")
+    appint = boto3.client("appintegrations", region_name=REGION)
+    connect = boto3.client("connect", region_name=REGION)
+
+    # Find the AppIntegrations application whose Namespace matches the gateway ID.
+    # Paginate through all applications so we don't miss it in large accounts.
+    apps = []
+    paginator = appint.get_paginator("list_applications")
+    for page in paginator.paginate():
+        apps.extend(page.get("Applications", []))
+    app = next((a for a in apps if a.get("Namespace") == gateway_id), None)
+    if not app:
+        log("⚠️", f"No AppIntegrations application found with Namespace={gateway_id}")
+        log("", "Create the MCP server integration in the Connect console first.")
+        return
+
+    app_arn = app["Arn"]
+
+    # Check if already associated
+    existing = connect.list_integration_associations(
+        InstanceId=instance_id, IntegrationType="APPLICATION",
+    )["IntegrationAssociationSummaryList"]
+    already = any(a["IntegrationArn"] == app_arn for a in existing)
+
+    if already:
+        log("✓", f"Already associated: {app['Name']}")
+        return
+
+    connect.create_integration_association(
+        InstanceId=instance_id,
+        IntegrationType="APPLICATION",
+        IntegrationArn=app_arn,
+    )
+    log("✅", f"Associated '{app['Name']}' with instance {instance_id}")
+    log("ℹ️", "Enable the app in Security Profiles → Agent Applications (may take ~10 min to appear)")
 
 
 # ── Step 1: Upload refund data ──────────────────────────────
@@ -558,6 +614,9 @@ def main():
     log("ℹ️", f"Instance:  {instance_id}")
     log("ℹ️", f"Assistant: {assistant_id}")
     log("ℹ️", f"Gateway:   {gateway_id}")
+
+    # Step 0 — Associate MCP gateway app with Connect instance
+    associate_mcp_gateway(instance_id, gateway_id)
 
     # Step 1
     upload_refund_data(bucket)

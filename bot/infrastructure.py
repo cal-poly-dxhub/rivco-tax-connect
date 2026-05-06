@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import yaml
 from aws_cdk import (
     Stack, Duration, RemovalPolicy, CfnOutput, BundlingOptions, BundlingFileAccess,
@@ -13,6 +14,11 @@ from aws_cdk import (
     aws_logs as logs,
     aws_bedrockagentcore as agentcore,
     aws_apigateway as apigw,
+    aws_dynamodb as dynamodb,
+    aws_cognito as cognito,
+    aws_codebuild as codebuild,
+    aws_cloudfront as cloudfront,
+    aws_cloudfront_origins as cloudfront_origins,
     custom_resources as cr,
 )
 from constructs import Construct
@@ -444,12 +450,38 @@ class NovaSonicConnectStack(Stack):
             removal_policy=RemovalPolicy.DESTROY,
             auto_delete_objects=True,
             lifecycle_rules=[s3.LifecycleRule(expiration=Duration.days(90))],
-            cors=[s3.CorsRule(
-                allowed_methods=[s3.HttpMethods.PUT],
-                allowed_origins=[portal_origin],
-                allowed_headers=["*"],
-                max_age=3600,
-            )],
+            cors=[
+                s3.CorsRule(  # Claimant upload
+                    allowed_methods=[s3.HttpMethods.PUT],
+                    allowed_origins=[portal_origin],
+                    allowed_headers=["*"],
+                    max_age=3600,
+                ),
+                s3.CorsRule(  # Admin dashboard inline previews (e.g. JSON fetch)
+                    allowed_methods=[s3.HttpMethods.GET],
+                    allowed_origins=["*"],
+                    allowed_headers=["*"],
+                    max_age=3600,
+                ),
+            ],
+        )
+
+        # DynamoDB table for claim submissions
+        submissions_table = dynamodb.Table(
+            self, "ClaimSubmissions",
+            table_name=f"{proj}-claim-submissions",
+            partition_key=dynamodb.Attribute(name="submissionId", type=dynamodb.AttributeType.STRING),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+
+        # Admin config: departments, users, refund-type labels (super-admin managed)
+        admin_config_table = dynamodb.Table(
+            self, "AdminConfig",
+            table_name=f"{proj}-admin-config",
+            partition_key=dynamodb.Attribute(name="pk", type=dynamodb.AttributeType.STRING),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.DESTROY,
         )
 
         # Lambda for presigned URL generation
@@ -459,38 +491,186 @@ class NovaSonicConnectStack(Stack):
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="lambda_function.lambda_handler",
             code=_lambda.Code.from_asset("bot/upload_handler"),
-            timeout=Duration.seconds(10),
+            timeout=Duration.seconds(30),
             memory_size=128,
             environment={
                 "UPLOAD_BUCKET": uploads_bucket.bucket_name,
-                "UPLOAD_PASSWORD": os.environ.get("UPLOAD_PASSWORD", ""),
                 "ALLOWED_ORIGIN": portal_origin,
+                "TABLE_NAME": submissions_table.table_name,
+                "ADMIN_CONFIG_TABLE": admin_config_table.table_name,
             },
         )
+        submissions_table.grant_read_write_data(upload_fn)
+        admin_config_table.grant_read_write_data(upload_fn)
         uploads_bucket.grant_put(upload_fn)
         uploads_bucket.grant_write(upload_fn)
         uploads_bucket.grant_read(upload_fn)
+
+        # --- Cognito User Pool for admin dashboard ---
+        user_pool = cognito.UserPool(
+            self, "AdminUserPool",
+            user_pool_name=f"{proj}-admin-pool",
+            self_sign_up_enabled=False,
+            sign_in_aliases=cognito.SignInAliases(email=True, username=True),
+            auto_verify=cognito.AutoVerifiedAttrs(email=True),
+            password_policy=cognito.PasswordPolicy(
+                min_length=8, require_lowercase=True, require_uppercase=True,
+                require_digits=True, require_symbols=False,
+            ),
+            user_invitation=cognito.UserInvitationConfig(
+                email_subject="Your Riverside County admin account",
+                email_body=(
+                    "An admin account has been created for you.\n\n"
+                    "Username: {username}\n"
+                    "Temporary password: {####}\n\n"
+                    "Sign in and set a permanent password to finish setup."
+                ),
+            ),
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+        user_pool_client = cognito.UserPoolClient(
+            self, "AdminUserPoolClient",
+            user_pool=user_pool,
+            auth_flows=cognito.AuthFlow(user_password=True, user_srp=True),
+            generate_secret=False,
+        )
+        cognito.CfnUserPoolGroup(
+            self, "GroupSuperAdmin",
+            user_pool_id=user_pool.user_pool_id,
+            group_name="super-admin",
+            description="Full access, all departments",
+        )
+
+        # Bootstrap: create the initial super-admin user from config.yaml.
+        # Idempotent via AwsSdkCall — if the user already exists the call errors
+        # out, which we swallow by using ignore_error_codes_matching.
+        super_admin_email = (cfg.get("super_admin") or {}).get("email")
+        if super_admin_email:
+            # Username cannot be email format when email is a sign-in alias.
+            # Sanitize to a deterministic non-email string.
+            super_admin_username = "sa-" + re.sub(r'[^a-z0-9]', '-', super_admin_email.lower())[:64]
+            bootstrap_pw = "Kiro!Temp" + self.account[-4:]  # deterministic but unique per account
+            create_super_admin = cr.AwsCustomResource(
+                self, "BootstrapSuperAdmin",
+                on_create=cr.AwsSdkCall(
+                    service="CognitoIdentityServiceProvider",
+                    action="adminCreateUser",
+                    parameters={
+                        "UserPoolId": user_pool.user_pool_id,
+                        "Username": super_admin_username,
+                        "UserAttributes": [
+                            {"Name": "email", "Value": super_admin_email},
+                            {"Name": "email_verified", "Value": "true"},
+                        ],
+                        "TemporaryPassword": bootstrap_pw,
+                        "MessageAction": "SUPPRESS",
+                    },
+                    physical_resource_id=cr.PhysicalResourceId.of(f"bootstrap-{super_admin_username}"),
+                    ignore_error_codes_matching="UsernameExistsException",
+                ),
+                policy=cr.AwsCustomResourcePolicy.from_statements([
+                    iam.PolicyStatement(
+                        actions=["cognito-idp:AdminCreateUser", "cognito-idp:AdminAddUserToGroup"],
+                        resources=[user_pool.user_pool_arn],
+                    ),
+                ]),
+            )
+            add_to_group = cr.AwsCustomResource(
+                self, "BootstrapSuperAdminGroup",
+                on_create=cr.AwsSdkCall(
+                    service="CognitoIdentityServiceProvider",
+                    action="adminAddUserToGroup",
+                    parameters={
+                        "UserPoolId": user_pool.user_pool_id,
+                        "Username": super_admin_username,
+                        "GroupName": "super-admin",
+                    },
+                    physical_resource_id=cr.PhysicalResourceId.of(f"bootstrap-group-{super_admin_username}"),
+                ),
+                policy=cr.AwsCustomResourcePolicy.from_statements([
+                    iam.PolicyStatement(
+                        actions=["cognito-idp:AdminAddUserToGroup"],
+                        resources=[user_pool.user_pool_arn],
+                    ),
+                ]),
+            )
+            add_to_group.node.add_dependency(create_super_admin)
+            CfnOutput(self, "SuperAdminUsername", value=super_admin_username)
+            CfnOutput(self, "SuperAdminBootstrapPassword", value=bootstrap_pw,
+                      description="Temp password for initial super-admin (forced change on first login)")
+
+        upload_fn.add_environment("USER_POOL_ID", user_pool.user_pool_id)
+        upload_fn.add_to_role_policy(iam.PolicyStatement(
+            actions=[
+                "cognito-idp:AdminCreateUser",
+                "cognito-idp:AdminDeleteUser",
+                "cognito-idp:AdminUpdateUserAttributes",
+                "cognito-idp:AdminAddUserToGroup",
+                "cognito-idp:AdminRemoveUserFromGroup",
+                "cognito-idp:AdminListGroupsForUser",
+                "cognito-idp:AdminGetUser",
+                "cognito-idp:ListUsers",
+                "cognito-idp:ListUsersInGroup",
+                "cognito-idp:CreateGroup",
+                "cognito-idp:DeleteGroup",
+            ],
+            resources=[user_pool.user_pool_arn],
+        ))
+
+        authorizer = apigw.CognitoUserPoolsAuthorizer(
+            self, "AdminAuthorizer",
+            cognito_user_pools=[user_pool],
+        )
 
         # API Gateway REST API
         upload_api = apigw.RestApi(
             self, "UploadApi",
             rest_api_name=f"{proj}-upload-api",
             default_cors_preflight_options=apigw.CorsOptions(
-                allow_origins=[portal_origin],
-                allow_methods=["POST", "GET", "OPTIONS"],
-                allow_headers=["Content-Type"],
+                allow_origins=apigw.Cors.ALL_ORIGINS,
+                allow_methods=apigw.Cors.ALL_METHODS,
+                allow_headers=["Content-Type", "Authorization"],
             ),
             deploy_options=apigw.StageOptions(
                 throttling_rate_limit=2,
                 throttling_burst_limit=5,
             ),
         )
+        # Public: claimants and bot use these
         upload_api.root.add_resource("upload").add_method(
             "POST", apigw.LambdaIntegration(upload_fn),
         )
-        upload_api.root.add_resource("package").add_method(
-            "GET", apigw.LambdaIntegration(upload_fn),
+        upload_api.root.add_resource("upload-complete").add_method(
+            "POST", apigw.LambdaIntegration(upload_fn),
         )
+
+        # Admin-only: require Cognito JWT
+        upload_api.root.add_resource("package").add_method(
+            "GET", apigw.LambdaIntegration(upload_fn), authorizer=authorizer,
+            authorization_type=apigw.AuthorizationType.COGNITO,
+        )
+        upload_api.root.add_resource("status").add_method(
+            "GET", apigw.LambdaIntegration(upload_fn), authorizer=authorizer,
+            authorization_type=apigw.AuthorizationType.COGNITO,
+        )
+        upload_api.root.add_resource("update-status").add_method(
+            "POST", apigw.LambdaIntegration(upload_fn), authorizer=authorizer,
+            authorization_type=apigw.AuthorizationType.COGNITO,
+        )
+        upload_api.root.add_resource("delete-submission").add_method(
+            "POST", apigw.LambdaIntegration(upload_fn), authorizer=authorizer,
+            authorization_type=apigw.AuthorizationType.COGNITO,
+        )
+
+        # Super-admin config CRUD — catch-all under /admin/*
+        admin_resource = upload_api.root.add_resource("admin")
+        admin_resource.add_resource("{proxy+}").add_method(
+            "ANY", apigw.LambdaIntegration(upload_fn), authorizer=authorizer,
+            authorization_type=apigw.AuthorizationType.COGNITO,
+        )
+
+        CfnOutput(self, "UserPoolId", value=user_pool.user_pool_id)
+        CfnOutput(self, "UserPoolClientId", value=user_pool_client.user_pool_client_id)
 
         # S3 bucket for static portal site (public website hosting)
         portal_bucket = s3.Bucket(
@@ -508,20 +688,15 @@ class NovaSonicConnectStack(Stack):
             ),
         )
 
-        portal_deploy = s3deploy.BucketDeployment(
-            self, "PortalDeployment",
-            sources=[s3deploy.Source.asset("bot/upload_portal")],
-            destination_bucket=portal_bucket,
-        )
-
         config_js = f'window.API_URL = "{upload_api.url.rstrip("/")}";\n'
-        portal_config = s3deploy.BucketDeployment(
-            self, "PortalConfig",
-            sources=[s3deploy.Source.data("config.js", config_js)],
+        s3deploy.BucketDeployment(
+            self, "PortalDeployment",
+            sources=[
+                s3deploy.Source.asset("bot/upload_portal"),
+                s3deploy.Source.data("config.js", config_js),
+            ],
             destination_bucket=portal_bucket,
-            prune=False,
         )
-        portal_config.node.add_dependency(portal_deploy)
 
         # Wire upload portal URL into main Lambda so the bot can reference it
         fn.add_environment("UPLOAD_PORTAL_URL", portal_bucket.bucket_website_url)
@@ -530,3 +705,145 @@ class NovaSonicConnectStack(Stack):
         CfnOutput(self, "UploadPortalUrl", value=portal_bucket.bucket_website_url)
         CfnOutput(self, "UploadApiUrl", value=upload_api.url)
         CfnOutput(self, "UploadsBucketName", value=uploads_bucket.bucket_name)
+        CfnOutput(self, "SubmissionsTableName", value=submissions_table.table_name)
+
+        # --- Admin dashboard (Next.js) ---
+        # CodeBuild pulls from GitHub, builds `yarn build`, publishes `out/` to
+        # a private S3 bucket served via CloudFront. Triggered on every
+        # `cdk deploy` via a custom resource.
+        dash_cfg = cfg.get("admin_dashboard") or {}
+        gh_owner = dash_cfg.get("github_owner", "cal-poly-dxhub")
+        gh_repo = dash_cfg.get("github_repo", "rivco-tax-connect")
+        gh_branch = dash_cfg.get("github_branch", "main")
+
+        admin_bucket = s3.Bucket(
+            self, "AdminBucket",
+            bucket_name=f"{proj}-admin-{self.account}",
+            removal_policy=RemovalPolicy.DESTROY,
+            auto_delete_objects=True,
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            encryption=s3.BucketEncryption.S3_MANAGED,
+        )
+
+        admin_oac = cloudfront.S3OriginAccessControl(
+            self, "AdminBucketOAC", description="OAC for admin dashboard bucket",
+        )
+        admin_distribution = cloudfront.Distribution(
+            self, "AdminDistribution",
+            default_behavior=cloudfront.BehaviorOptions(
+                origin=cloudfront_origins.S3BucketOrigin.with_origin_access_control(
+                    admin_bucket, origin_access_control=admin_oac,
+                ),
+                viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
+                function_associations=[cloudfront.FunctionAssociation(
+                    function=cloudfront.Function(
+                        self, "AdminRewriteFunction",
+                        code=cloudfront.FunctionCode.from_inline(
+                            # Append index.html to directory-like requests so Next's
+                            # static export routes (e.g. /dashboard/) resolve correctly.
+                            "function handler(event) {\n"
+                            "  var req = event.request;\n"
+                            "  var uri = req.uri;\n"
+                            "  if (uri.endsWith('/')) { req.uri = uri + 'index.html'; }\n"
+                            "  else if (!uri.split('/').pop().includes('.')) { req.uri = uri + '/index.html'; }\n"
+                            "  return req;\n"
+                            "}\n"
+                        ),
+                    ),
+                    event_type=cloudfront.FunctionEventType.VIEWER_REQUEST,
+                )],
+            ),
+            default_root_object="index.html",
+        )
+
+        # Now that the CloudFront domain is known, allow the dashboard origin in CORS.
+        upload_fn.add_environment(
+            "ALLOWED_ORIGINS",
+            f"{portal_origin},https://{admin_distribution.distribution_domain_name}",
+        )
+
+        admin_build = codebuild.Project(
+            self, "AdminBuild",
+            source=codebuild.Source.git_hub(
+                owner=gh_owner, repo=gh_repo, branch_or_ref=gh_branch, clone_depth=1,
+            ),
+            environment=codebuild.BuildEnvironment(
+                build_image=codebuild.LinuxBuildImage.STANDARD_7_0,
+                compute_type=codebuild.ComputeType.SMALL,
+            ),
+            artifacts=codebuild.Artifacts.s3(
+                bucket=admin_bucket, include_build_id=False, package_zip=False,
+                name="/", encryption=False,
+            ),
+            environment_variables={
+                "API_URL": codebuild.BuildEnvironmentVariable(value=upload_api.url.rstrip("/")),
+                "USER_POOL_ID": codebuild.BuildEnvironmentVariable(value=user_pool.user_pool_id),
+                "USER_POOL_CLIENT_ID": codebuild.BuildEnvironmentVariable(value=user_pool_client.user_pool_client_id),
+            },
+            build_spec=codebuild.BuildSpec.from_object({
+                "version": "0.2",
+                "phases": {
+                    "install": {
+                        "runtime-versions": {"nodejs": "20"},
+                        "commands": [
+                            "cd admin-dashboard",
+                            "corepack enable",
+                            "yarn install --immutable",
+                        ],
+                    },
+                    "build": {
+                        "commands": [
+                            # Inject runtime config so the static bundle can read API URL + Cognito IDs.
+                            # Single-line printf avoids YAML/heredoc quoting hazards.
+                            'printf \'window.__APP_CONFIG__ = {"API_URL":"%s","USER_POOL_ID":"%s","USER_POOL_CLIENT_ID":"%s"};\\n\' "$API_URL" "$USER_POOL_ID" "$USER_POOL_CLIENT_ID" > public/config.js',
+                            "yarn build",
+                        ],
+                    },
+                },
+                "artifacts": {
+                    "base-directory": "admin-dashboard/out",
+                    "files": ["**/*"],
+                },
+            }),
+            logging=codebuild.LoggingOptions(
+                cloud_watch=codebuild.CloudWatchLoggingOptions(
+                    log_group=logs.LogGroup(
+                        self, "AdminBuildLogGroup",
+                        removal_policy=RemovalPolicy.DESTROY,
+                        retention=logs.RetentionDays.ONE_WEEK,
+                    ),
+                ),
+            ),
+        )
+        admin_distribution.grant(admin_build.role, "cloudfront:CreateInvalidation")
+        admin_bucket.grant_write(admin_build)
+
+        # Trigger the build on every stack create/update. Date.now()-style nonce
+        # forces the custom resource to run every deploy.
+        import time as _time
+        trigger = cr.AwsCustomResource(
+            self, "TriggerAdminBuild",
+            on_create=cr.AwsSdkCall(
+                service="CodeBuild", action="startBuild",
+                parameters={"projectName": admin_build.project_name},
+                physical_resource_id=cr.PhysicalResourceId.of(f"admin-build-{int(_time.time())}"),
+                output_paths=["build.id"],
+            ),
+            on_update=cr.AwsSdkCall(
+                service="CodeBuild", action="startBuild",
+                parameters={"projectName": admin_build.project_name},
+                physical_resource_id=cr.PhysicalResourceId.of(f"admin-build-{int(_time.time())}"),
+                output_paths=["build.id"],
+            ),
+            policy=cr.AwsCustomResourcePolicy.from_statements([
+                iam.PolicyStatement(
+                    actions=["codebuild:StartBuild"],
+                    resources=[admin_build.project_arn],
+                ),
+            ]),
+        )
+        trigger.node.add_dependency(admin_build)
+
+        CfnOutput(self, "AdminDashboardUrl", value=f"https://{admin_distribution.distribution_domain_name}")
+        CfnOutput(self, "AdminBuildProjectName", value=admin_build.project_name)

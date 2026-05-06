@@ -11,6 +11,7 @@
 | [Troubleshooting](#troubleshooting)     | Common issues and solutions                                      |
 | [Post-Deploy Troubleshooting](#post-deploy-troubleshooting) | Deployment script issues and recovery |
 | [SMS Setup](#sms-setup)                 | Enable SMS channel for text-based refund lookups                 |
+| [Admin Dashboard](#admin-dashboard)     | Staff-facing dashboard for reviewing submissions                 |
 | [Lessons Learned](#lessons-learned)     | Key takeaways and insights from the project, and next steps      |
 | [Bill of Materials](#bill-of-materials) | Cost of deployment and resources used                            |
 | [Support](#support)                     | The team behind this project                                     |
@@ -120,6 +121,23 @@ Before deploying the solution, ensure you have the following:
 4. **AWS CLI** — [Installation Guide](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
 5. **Docker** — Required for Lambda bundling. [Docker](https://www.docker.com/get-started/)
 6. **Git** — [Download here](https://git-scm.com/)
+
+### Required config.yaml values
+
+Before running `cdk deploy`, edit `config.yaml` and replace the `CHANGEME@example.com`
+placeholders:
+
+- `super_admin.email` — an email you control. CDK creates a Cognito user for this
+  address on first deploy; the temporary password is emitted in stack outputs
+  (`SuperAdminBootstrapPassword`) and Cognito forces a password change on first
+  login.
+- `notifications.sender` — the "From" address on admin-notification emails.
+  CDK creates an SES identity for this address; click the verification link AWS
+  sends before notifications can deliver. In SES sandbox, every recipient must
+  also be verified (subaddresses inherit from the base identity).
+
+Also set `admin_dashboard.github_branch` to the branch CodeBuild should build
+from (typically `main` in production, or a feature branch while iterating).
 
 ## AWS Configuration
 
@@ -449,6 +467,26 @@ The link is a presigned S3 URL valid for 24 hours. After expiration, the caller 
 | SMS sending but no response | Contact flow not configured for SMS | Verify SMS channel is enabled in Connect |
 | SMS response is generic error | Lambda permission issue | Check Lambda execution role has SNS permissions |
 | SMS link expires too quickly | Presigned URL expiry too short | Adjust `PACKAGE_EXPIRY` in `bot/upload_handler/lambda_function.py` |
+
+## Admin Dashboard
+
+The `admin-dashboard/` directory contains a Next.js app that staff use to review and manage submitted claims. It's served from CloudFront and signed in with Cognito; builds happen in CodeBuild and get published to an S3 website bucket automatically on every `cdk deploy`.
+
+**Features**:
+- Cognito-backed sign-in with forced-new-password + forgot-password flows
+- Super-admin manages departments, admin users, refund-type labels, and per-refund-type document requirements from the dashboard (no redeploy required)
+- Department admins see only the submissions in their queue, with their department's status + tasks
+- Super-admin sees every department side-by-side
+- Inline document viewer (PDF, image, JSON) for each submission
+- Per-submission activity log (who changed what, when)
+- SES email notifications to the relevant department admins on new submissions and partial→uploaded transitions
+
+**Config**:
+- `config.yaml` under `admin_dashboard:` selects which GitHub repo + branch CodeBuild pulls from.
+- `config.yaml` under `super_admin:` bootstraps the initial super-admin Cognito user on `cdk deploy` (first time only).
+- Everything else (departments, admin users, doc requirements, refund-type labels) is managed live from the Admin Config page by the super-admin.
+
+**Deploy**: `cdk deploy` triggers CodeBuild which runs `yarn install && yarn build` in `admin-dashboard/` and syncs the output to the dashboard's S3 bucket. The dashboard URL is `AdminDashboardUrl` in stack outputs.
 
 # Lessons Learned
 

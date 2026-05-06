@@ -27,7 +27,37 @@ bot/runtime/typing_extensions.py
 # Data (keep sample, ignore large files)
 *.xls
 *.xlsx
+*.jsonl
 
 # Secrets
 .env
 test-widget.html
+
+# Scratch / temp files
+tail-logs.sh
+demo_flows.md
+
+# Saved webpages
+auditor-controller-webpage.html
+auditor-controller-webpage_files/
+
+# Demo assets
+demo_assets/
+nova-demos/
+
+# Scraped knowledge base content
+knowledge/
+
+# Exported flow fragments
+flow-module-tax-lookup.json
+
+# Images
+RCAC-Logo-Final.png
+
+# Planning / tracking docs
+FEATURE_STATUS.md
+IMPLEMENTATION_TASKS.md
+TODO.md
+UPLOAD_PORTAL_DEMO_GUIDE.md
+
+chat

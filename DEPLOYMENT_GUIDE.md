@@ -24,6 +24,10 @@ Before running the deployment scripts, ensure:
    - Lambda function creation and updates
    - Amazon Connect instance access
    - Q in Connect knowledge base management
+   - Cognito user pool creation
+   - CodeBuild project creation
+   - CloudFront distribution creation
+   - SES identity verification
 
 4. **Configuration**: Update `config.yaml` with your environment-specific values:
    - AWS region
@@ -31,6 +35,8 @@ Before running the deployment scripts, ensure:
    - Environment variables (URLs, thresholds)
    - Connect flow name and voice IDs
    - Wisdom assistant name and seed URLs
+   - `super_admin.email` for the bootstrap Cognito user
+   - `admin_dashboard.github_owner`, `github_repo`, `github_branch` for CodeBuild
 
 ## Deployment Steps
 
@@ -41,13 +47,25 @@ cdk deploy --require-approval=never
 ```
 
 This creates:
-- S3 buckets (data, uploads, portal)
-- Lambda functions (main lookup, upload handler)
+- S3 buckets (data, uploads, portal, admin-dashboard)
+- Lambda functions (tax lookup, upload handler, notification handler)
+- DynamoDB tables (app-data single-table, admin-config)
+- Cognito user pool + super-admin group + bootstrap super-admin user
+- CodeBuild project for the admin dashboard (pulls from GitHub)
+- CloudFront distribution serving the admin dashboard
+- SES email identity for notifications
 - IAM roles and policies
 - Amazon Connect integration
 - Q in Connect knowledge base
 
-**Expected output**: CloudFormation stack name and resource ARNs
+On first deploy, CodeBuild runs `yarn install && yarn build` for the admin
+dashboard and publishes the static output to its S3 bucket. SES sends a
+verification email to the configured `super_admin.email`; click the link to
+complete verification before notifications can send.
+
+**Expected output**: CloudFormation stack name and resource ARNs, including
+`AdminDashboardUrl` (CloudFront URL), `UserPoolId`, `SuperAdminUsername`, and
+`SuperAdminBootstrapPassword` (temp password for first sign-in).
 
 ### Step 2: Run Post-Deploy Script
 
@@ -99,6 +117,23 @@ To enable SMS:
 3. Create a routing profile for agents
 4. Add agents to the queue
 5. Update the contact flow to route to this queue
+
+### 5. First Super-Admin Sign-In
+
+1. Open `AdminDashboardUrl` from stack outputs.
+2. Sign in with `SuperAdminUsername` + `SuperAdminBootstrapPassword` (both in stack outputs).
+3. Cognito will force a password change on first login.
+4. Once in, create departments and add admin users from the Admin Config page.
+5. Admin users you create receive a Cognito invitation email with their temp
+   password; they sign in and set their own password on first login.
+
+### 6. SES Identity Verification
+
+On first deploy, SES is in sandbox mode and the sender + every recipient must
+be verified. CDK creates the sender identity (`notifications.sender` from
+`config.yaml`). Click the verification link in the email AWS sends. If
+recipients are on a different domain, verify their base identity once per
+account — subaddresses (`user+tag@domain.com`) inherit the base verification.
 
 ## Troubleshooting
 
@@ -173,6 +208,26 @@ To enable SMS:
 4. Check CloudWatch logs: `aws logs tail /aws/lambda/riverside-tax-lookup --follow`
 5. Verify toll-free number is registered and active in Amazon Connect
 
+### Issue: Admin Dashboard Won't Load
+
+**Symptom**: CloudFront URL shows 403 or "Access Denied"
+
+**Solutions**:
+1. Check the latest CodeBuild run finished successfully in the AWS CodeBuild console
+2. Confirm the S3 admin bucket is non-empty: `aws s3 ls s3://<admin-bucket>/`
+3. Verify CloudFront is done propagating (up to 10 min on first create)
+4. Check browser console for CORS errors — the Lambda's `ALLOWED_ORIGINS` env var must include the CloudFront domain
+
+### Issue: Notification Emails Don't Arrive
+
+**Symptom**: Submissions come in but no email to the admin inbox
+
+**Solutions**:
+1. Confirm `notifications.mode: ses` in `config.yaml` (default is `ses`)
+2. Check the notification Lambda logs: `aws logs tail /aws/lambda/riverside-tax-refund-v2-notification-handler --follow`
+3. If logs show `SES rejected (MessageRejected)`, verify the sender identity and all recipient identities in the SES console. In sandbox mode both sender and recipients must be verified.
+4. Check spam — Cognito's default email provider (used for admin invitations) often lands in spam.
+
 ## Recovery Procedures
 
 ### Rollback to Previous Version
@@ -218,6 +273,17 @@ To update the AI orchestration prompt without redeploying:
 2. Run: `python3 post_deploy.py`
 3. The script will update the prompt in Q in Connect
 
+### Rebuild the Admin Dashboard
+
+`cdk deploy` auto-triggers a CodeBuild run on every deploy. To manually rebuild
+without a code change:
+
+```bash
+aws codebuild start-build --project-name <AdminBuildProjectName>
+```
+
+`AdminBuildProjectName` is in the CDK stack outputs.
+
 ## Monitoring
 
 ### CloudWatch Logs
@@ -233,6 +299,9 @@ aws logs tail /aws/lambda/upload-handler --follow
 
 # Post-deploy script
 aws logs tail /aws/lambda/post-deploy --follow
+
+# Notification handler
+aws logs tail /aws/lambda/riverside-tax-refund-v2-notification-handler --follow
 ```
 
 ### CloudWatch Metrics
@@ -259,6 +328,77 @@ Monitor contact center performance:
 2. Select your instance
 3. Go to **Metrics and quality** → **Real-time metrics**
 4. Monitor: Contacts in queue, Average handle time, Abandonment rate
+
+## Key Learnings from Q in Connect + MCP Integration
+
+These were discovered during initial integration work and are worth knowing
+before extending the bot side of the system.
+
+### AI Agent Type Must Be ORCHESTRATION
+
+The AI agent **must** be `ORCHESTRATION` type to use MCP tools. `SELF_SERVICE`
+agents do not support MCP tool configuration. The AWS CLI `create-ai-agent`
+command does **not** support creating ORCHESTRATION agents — the agent must be
+created in the Q in Connect console. boto3 **can** read and update an
+existing ORCHESTRATION agent's configuration (including the prompt reference)
+and version it via `create-ai-agent-version`; `post_deploy.py` uses boto3.
+
+### MCP Gateway Registration Is Manual
+
+The AgentCore MCP Gateway must be registered as a third-party application in
+the Connect console. There is no API or CloudFormation resource for this. The
+CDK stack creates the gateway, but the Connect registration is a manual step.
+
+### Agent Prompt Updates Are Automated
+
+`post_deploy.py` uses boto3 to update the agent's `orchestrationAIAgentConfiguration`
+with the latest prompt version. The AWS CLI cannot do this — it shows the
+orchestration config as `SDK_UNKNOWN_MEMBER` — but boto3 handles it natively.
+
+### CreateWisdomSession Block Configuration
+
+The contact flow's `CreateWisdomSession` block must include:
+
+```json
+{
+  "Parameters": {
+    "WisdomAssistantArn": "<assistant-arn>",
+    "OrchestrationAIAgentConfiguration": {
+      "AgentAssistanceAgentVersionArn": "<agent-version-arn>"
+    }
+  },
+  "Type": "CreateWisdomSession"
+}
+```
+
+Using a `SELF_SERVICE` agent ARN in `AgentAssistanceAgentVersionArn` causes an
+error. Only `ORCHESTRATION` agent ARNs work here.
+
+### Lex Session Attribute
+
+The Lex bot block must also pass the agent ARN via session attribute:
+
+```json
+"LexSessionAttributes": {
+  "x-amz-lex:q-in-connect:ai-agent-arn": "<agent-version-arn>"
+}
+```
+
+Both the CreateWisdomSession config AND the Lex session attribute are required
+for the ORCHESTRATION agent to invoke MCP tools.
+
+### Agent Versioning Matters
+
+After configuring tools on the agent in the console, you must create a new
+version. `post_deploy.py` handles this automatically — it updates the prompt
+reference and creates a new version each run.
+
+### MCP Gateway Tool Naming
+
+The gateway exposes tools with a prefixed name:
+`<target-name>___<tool-name>` (e.g., `tax-lookup-target___tax_lookup`). Q in
+Connect handles this mapping automatically when the tool is added to the
+agent via the console.
 
 ## Support
 
