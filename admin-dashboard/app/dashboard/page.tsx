@@ -21,6 +21,7 @@ import { ThemeToggle } from "@/components/theme-toggle"
 import {
   Submission, StatusResponse, Permissions, STATUSES, labelFor, Package, PackageFile, AuditEntry, AuditResponse, StatusValue,
 } from "@/lib/types"
+import { FilledFormViewer } from "@/components/filled-form-viewer"
 
 const STATUS_STYLES: Record<StatusValue, string> = {
   partial: "bg-orange-100 text-orange-800 border-orange-300",
@@ -338,23 +339,25 @@ function SubmissionDetail({ submission }: { submission: Submission }) {
           </div>
         </aside>
         <section className="border rounded-md bg-muted/20 overflow-hidden flex flex-col">
-          {active ? <FileViewer file={active} /> : <p className="p-4 text-muted-foreground">Select a file to preview.</p>}
+          {active ? <FileViewer file={active} submission={submission} /> : <p className="p-4 text-muted-foreground">Select a file to preview.</p>}
         </section>
       </div>
     </>
   )
 }
 
-function FileViewer({ file }: { file: PackageFile }) {
+function FileViewer({ file, submission }: { file: PackageFile; submission: Submission }) {
   const [jsonText, setJsonText] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [showRaw, setShowRaw] = useState(false)
   const ext = file.filename.split(".").pop()?.toLowerCase() || ""
   const isPdf = ext === "pdf"
   const isImage = ["jpg", "jpeg", "png", "heic", "gif", "webp"].includes(ext)
   const isJson = ext === "json"
+  const isUnifiedForm = file.filename === "unified-form.json"
 
   useEffect(() => {
-    if (!isJson) return
+    if (!isJson || (isUnifiedForm && !showRaw)) return
     setLoading(true); setJsonText(null)
     fetch(file.downloadUrl)
       .then((r) => r.text())
@@ -364,12 +367,22 @@ function FileViewer({ file }: { file: PackageFile }) {
       })
       .catch((e) => setJsonText(`Failed to load: ${e.message}`))
       .finally(() => setLoading(false))
-  }, [file.downloadUrl, isJson])
+  }, [file.downloadUrl, isJson, isUnifiedForm, showRaw])
 
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between border-b p-2 bg-background">
-        <span className="text-xs truncate">{file.filename}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs truncate">{file.filename}</span>
+          {isUnifiedForm && (
+            <button
+              onClick={() => setShowRaw(!showRaw)}
+              className="text-xs px-2 py-0.5 rounded border bg-muted text-muted-foreground hover:bg-muted/80"
+            >
+              {showRaw ? "Form view" : "Raw JSON"}
+            </button>
+          )}
+        </div>
         <a
           href={file.downloadUrl}
           download={file.filename}
@@ -379,17 +392,26 @@ function FileViewer({ file }: { file: PackageFile }) {
         </a>
       </div>
       <div className="flex-1 overflow-auto">
-        {isPdf && <iframe src={file.downloadUrl} className="w-full h-full min-h-[500px]" title={file.filename} />}
-        {isImage && <img src={file.downloadUrl} alt={file.filename} className="max-w-full h-auto p-4 mx-auto" />}
-        {isJson && (
-          loading
-            ? <p className="p-4 text-muted-foreground text-xs">Loading…</p>
-            : <pre className="p-4 text-xs whitespace-pre-wrap break-all">{jsonText}</pre>
-        )}
-        {!isPdf && !isImage && !isJson && (
-          <div className="p-4 text-sm text-muted-foreground">
-            Preview not supported for .{ext}. Use Download.
-          </div>
+        {isUnifiedForm && !showRaw ? (
+          <FilledFormViewer
+            formDataUrl={file.downloadUrl}
+            refundTypes={submission.refundType.split(",")}
+          />
+        ) : (
+          <>
+            {isPdf && <iframe src={file.downloadUrl} className="w-full h-full min-h-[500px]" title={file.filename} />}
+            {isImage && <img src={file.downloadUrl} alt={file.filename} className="max-w-full h-auto p-4 mx-auto" />}
+            {isJson && (
+              loading
+                ? <p className="p-4 text-muted-foreground text-xs">Loading…</p>
+                : <pre className="p-4 text-xs whitespace-pre-wrap break-all">{jsonText}</pre>
+            )}
+            {!isPdf && !isImage && !isJson && (
+              <div className="p-4 text-sm text-muted-foreground">
+                Preview not supported for .{ext}. Use Download.
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
