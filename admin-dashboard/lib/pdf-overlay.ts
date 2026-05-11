@@ -25,22 +25,22 @@ const AP13_CONFIG: FormOverlayConfig = {
   pdfPath: "/forms/ap13-affidavit.pdf",
   fields: [
     // Page 1 — Warrant Information section
-    { fieldId: "warrant_date", page: 0, x: 72, y: 478, maxWidth: 120, fontSize: 10 },
-    { fieldId: "warrant_amount", page: 0, x: 198, y: 478, maxWidth: 120, fontSize: 10 },
-    { fieldId: "warrant_number", page: 0, x: 330, y: 478, maxWidth: 110, fontSize: 10 },
-    { fieldId: "business_unit", page: 0, x: 460, y: 478, maxWidth: 100, fontSize: 10 },
+    { fieldId: "warrant_date", page: 0, x: 72, y: 528, maxWidth: 120, fontSize: 10 },
+    { fieldId: "warrant_amount", page: 0, x: 198, y: 528, maxWidth: 120, fontSize: 10 },
+    { fieldId: "warrant_number", page: 0, x: 330, y: 528, maxWidth: 110, fontSize: 10 },
+    { fieldId: "business_unit", page: 0, x: 460, y: 528, maxWidth: 100, fontSize: 10 },
 
     // Page 1 — Checkboxes (is_owner / warrant_included) — rendered as text
-    { fieldId: "is_owner", page: 0, x: 467, y: 435, maxWidth: 50, fontSize: 10 },
-    { fieldId: "warrant_included", page: 0, x: 467, y: 403, maxWidth: 50, fontSize: 10 },
+    { fieldId: "is_owner", page: 0, x: 467, y: 460, maxWidth: 50, fontSize: 10 },
+    { fieldId: "warrant_included", page: 0, x: 467, y: 418, maxWidth: 50, fontSize: 10 },
 
     // Page 1 — Signature block
-    { fieldId: "phone", page: 0, x: 380, y: 222, maxWidth: 180, fontSize: 10 },
-    { fieldId: "name", page: 0, x: 72, y: 185, maxWidth: 270, fontSize: 11 },
-    { fieldId: "business_name", page: 0, x: 380, y: 185, maxWidth: 180, fontSize: 10 },
-    { fieldId: "address", page: 0, x: 72, y: 152, maxWidth: 470, fontSize: 10 },
-    { fieldId: "email", page: 0, x: 72, y: 120, maxWidth: 300, fontSize: 10 },
-    { fieldId: "date_signed", page: 0, x: 460, y: 100, maxWidth: 100, fontSize: 10 },
+    { fieldId: "phone", page: 0, x: 380, y: 198, maxWidth: 180, fontSize: 10 },
+    { fieldId: "name", page: 0, x: 72, y: 163, maxWidth: 270, fontSize: 11 },
+    { fieldId: "business_name", page: 0, x: 380, y: 163, maxWidth: 180, fontSize: 10 },
+    { fieldId: "address", page: 0, x: 72, y: 131, maxWidth: 470, fontSize: 10 },
+    { fieldId: "email", page: 0, x: 72, y: 100, maxWidth: 300, fontSize: 10 },
+    { fieldId: "date_signed", page: 0, x: 460, y: 80, maxWidth: 100, fontSize: 10 },
 
     // Page 2 — Declaration (for warrants >= $1000)
     { fieldId: "name", page: 1, x: 95, y: 565, maxWidth: 230, fontSize: 10 },
