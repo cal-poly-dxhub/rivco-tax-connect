@@ -19,7 +19,7 @@ import { currentSession, signOut } from "@/lib/cognito"
 import { api } from "@/lib/api"
 import { ThemeToggle } from "@/components/theme-toggle"
 import {
-  Submission, StatusResponse, Permissions, STATUSES, labelFor, Package, PackageFile,
+  Submission, StatusResponse, Permissions, STATUSES, labelFor, Package, PackageFile, AuditEntry, AuditResponse,
 } from "@/lib/types"
 
 const STATUS_STYLES: Record<Submission["status"], string> = {
@@ -28,6 +28,17 @@ const STATUS_STYLES: Record<Submission["status"], string> = {
   "under-review": "bg-blue-100 text-blue-800 border-blue-300",
   approved: "bg-emerald-100 text-emerald-900 border-emerald-300",
   denied: "bg-red-100 text-red-800 border-red-300",
+}
+
+function formatAudit(e: AuditEntry): string {
+  const d = e.details || {}
+  if (e.action === "status_change") {
+    return `Status: ${(d.from as string) || "—"} → ${(d.to as string) || "—"}`
+  }
+  if (e.action === "delete") {
+    return `Deleted (${(d.filesDeleted as number) ?? 0} files)`
+  }
+  return e.action
 }
 
 export default function DashboardPage() {
@@ -217,6 +228,7 @@ function SubmissionDetail({ submission }: { submission: Submission }) {
   const [pkg, setPkg] = useState<Package | null>(null)
   const [active, setActive] = useState<PackageFile | null>(null)
   const [err, setErr] = useState("")
+  const [audit, setAudit] = useState<AuditEntry[] | null>(null)
 
   useEffect(() => {
     (async () => {
@@ -228,6 +240,19 @@ function SubmissionDetail({ submission }: { submission: Submission }) {
         if (data.files.length) setActive(data.files[0])
       } catch (e) {
         setErr(e instanceof Error ? e.message : String(e))
+      }
+    })()
+  }, [submission.submissionId])
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await api(`/audit/${encodeURIComponent(submission.submissionId)}`)
+        if (!res.ok) return
+        const data: AuditResponse = await res.json()
+        setAudit(data.entries)
+      } catch {
+        // audit is best-effort in the UI too
       }
     })()
   }, [submission.submissionId])
@@ -266,6 +291,21 @@ function SubmissionDetail({ submission }: { submission: Submission }) {
                   >
                     📄 {f.filename}
                   </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div>
+            <p className="font-medium">Activity</p>
+            {audit === null && <p className="text-muted-foreground text-xs mt-1">Loading…</p>}
+            {audit && audit.length === 0 && <p className="text-muted-foreground text-xs mt-1">No changes logged.</p>}
+            <ul className="mt-1 space-y-2">
+              {audit?.map((e, i) => (
+                <li key={i} className="text-xs">
+                  <div className="text-foreground">{formatAudit(e)}</div>
+                  <div className="text-muted-foreground">
+                    {e.actor} · {new Date(e.timestamp).toLocaleString()}
+                  </div>
                 </li>
               ))}
             </ul>
