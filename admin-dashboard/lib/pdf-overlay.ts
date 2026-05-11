@@ -1,74 +1,35 @@
-import { PDFDocument, rgb, StandardFonts } from "pdf-lib"
+import { PDFDocument } from "pdf-lib"
 
-export type FieldPosition = {
-  fieldId: string
-  page: number
-  x: number
-  y: number
-  maxWidth?: number
-  fontSize?: number
+// Maps our form field IDs to the PDF's AcroForm field names
+const AP13_FIELD_MAP: Record<string, string | string[]> = {
+  // Page 1 — Warrant Information
+  warrant_date: "Date26_af_date",
+  warrant_amount: "Text2",
+  warrant_number: "Text3",
+  business_unit: "Text4",
+
+  // Page 1 — Signature block
+  phone: "Text9",
+  name: ["Text10", "Print Name", "Text14", "NAME PayeeBusiness Name", "Text21"],
+  business_name: "Text11",
+  address: ["Text12", "Street Address", "Text15", "MAILING ADDRESS", "Text24"],
+  email: "Text13",
+
+  // Page 2 — Declaration
+  city: ["City", "Text16"],
+  state_zip: ["State and ZIP code", "Text17"],
+  warrant_number_p2: ["Text22"],
+  warrant_amount_p2: ["Text23"],
 }
 
-export type FormOverlayConfig = {
-  pdfPath: string
-  fields: FieldPosition[]
-  signaturePage?: number
-  signatureX?: number
-  signatureY?: number
-  signatureWidth?: number
-  signatureHeight?: number
-}
-
-// AP-13 page dimensions: 612 x 792 (US Letter)
-// Coordinates are from bottom-left origin (PDF standard)
-const AP13_CONFIG: FormOverlayConfig = {
-  pdfPath: "/forms/ap13-affidavit.pdf",
-  fields: [
-    // Page 1 — Warrant Information section
-    { fieldId: "warrant_date", page: 0, x: 72, y: 528, maxWidth: 120, fontSize: 10 },
-    { fieldId: "warrant_amount", page: 0, x: 198, y: 528, maxWidth: 120, fontSize: 10 },
-    { fieldId: "warrant_number", page: 0, x: 330, y: 528, maxWidth: 110, fontSize: 10 },
-    { fieldId: "business_unit", page: 0, x: 460, y: 528, maxWidth: 100, fontSize: 10 },
-
-    // Page 1 — Checkboxes (is_owner / warrant_included) — rendered as text
-    { fieldId: "is_owner", page: 0, x: 467, y: 460, maxWidth: 50, fontSize: 10 },
-    { fieldId: "warrant_included", page: 0, x: 467, y: 418, maxWidth: 50, fontSize: 10 },
-
-    // Page 1 — Signature block
-    { fieldId: "phone", page: 0, x: 380, y: 198, maxWidth: 180, fontSize: 10 },
-    { fieldId: "name", page: 0, x: 72, y: 163, maxWidth: 270, fontSize: 11 },
-    { fieldId: "business_name", page: 0, x: 380, y: 163, maxWidth: 180, fontSize: 10 },
-    { fieldId: "address", page: 0, x: 72, y: 131, maxWidth: 470, fontSize: 10 },
-    { fieldId: "email", page: 0, x: 72, y: 100, maxWidth: 300, fontSize: 10 },
-    { fieldId: "date_signed", page: 0, x: 460, y: 80, maxWidth: 100, fontSize: 10 },
-
-    // Page 2 — Declaration (for warrants >= $1000)
-    { fieldId: "name", page: 1, x: 95, y: 565, maxWidth: 230, fontSize: 10 },
-    { fieldId: "address", page: 1, x: 355, y: 565, maxWidth: 200, fontSize: 10 },
-    { fieldId: "city", page: 1, x: 95, y: 538, maxWidth: 200, fontSize: 10 },
-    { fieldId: "state_zip", page: 1, x: 355, y: 538, maxWidth: 200, fontSize: 10 },
-    { fieldId: "name", page: 1, x: 72, y: 362, maxWidth: 250, fontSize: 10 },
-    { fieldId: "warrant_number", page: 1, x: 360, y: 362, maxWidth: 100, fontSize: 10 },
-    { fieldId: "warrant_amount", page: 1, x: 470, y: 362, maxWidth: 90, fontSize: 10 },
-    { fieldId: "address", page: 1, x: 72, y: 335, maxWidth: 400, fontSize: 10 },
-  ],
-  signaturePage: 0,
-  signatureX: 72,
-  signatureY: 210,
-  signatureWidth: 250,
-  signatureHeight: 35,
-}
-
-const OVERLAY_CONFIGS: Record<string, FormOverlayConfig> = {
-  STALE_WARRANT: AP13_CONFIG,
+// Checkbox field IDs → PDF checkbox field names
+const AP13_CHECKBOX_MAP: Record<string, { yes: string; no: string }> = {
+  is_owner: { yes: "Check Box5", no: "Check Box6" },
+  warrant_included: { yes: "Check Box7", no: "Check Box8" },
 }
 
 export function hasOverlayConfig(refundType: string): boolean {
-  return refundType in OVERLAY_CONFIGS
-}
-
-export function getOverlayConfig(refundType: string): FormOverlayConfig | null {
-  return OVERLAY_CONFIGS[refundType] || null
+  return refundType === "STALE_WARRANT"
 }
 
 export async function renderFilledPdf(
@@ -76,59 +37,76 @@ export async function renderFilledPdf(
   formData: Record<string, unknown>,
   signatureDataUrl?: string,
 ): Promise<Uint8Array | null> {
-  const config = OVERLAY_CONFIGS[refundType]
-  if (!config) return null
+  if (refundType !== "STALE_WARRANT") return null
 
-  const pdfBytes = await fetch(config.pdfPath).then((r) => r.arrayBuffer())
+  const pdfBytes = await fetch("/forms/ap13-affidavit.pdf").then((r) => r.arrayBuffer())
   const pdfDoc = await PDFDocument.load(pdfBytes)
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica)
-  const pages = pdfDoc.getPages()
+  const form = pdfDoc.getForm()
 
-  for (const field of config.fields) {
-    const value = formatFieldValue(field.fieldId, formData[field.fieldId])
+  // Fill text fields
+  for (const [formFieldId, pdfFieldNames] of Object.entries(AP13_FIELD_MAP)) {
+    const value = formatFieldValue(formFieldId, formData[formFieldId])
     if (!value) continue
 
-    const page = pages[field.page]
-    if (!page) continue
-
-    const size = field.fontSize || 10
-    let text = value
-    if (field.maxWidth) {
-      while (font.widthOfTextAtSize(text, size) > field.maxWidth && text.length > 1) {
-        text = text.slice(0, -1)
+    const names = Array.isArray(pdfFieldNames) ? pdfFieldNames : [pdfFieldNames]
+    for (const name of names) {
+      try {
+        const field = form.getTextField(name)
+        field.setText(value)
+      } catch {
+        // field not found — skip
       }
     }
-
-    page.drawText(text, {
-      x: field.x,
-      y: field.y,
-      size,
-      font,
-      color: rgb(0.05, 0.05, 0.2),
-    })
   }
 
-  if (signatureDataUrl && config.signaturePage != null) {
+  // Also fill warrant_number and warrant_amount into page 2 fields
+  const wn = formatFieldValue("warrant_number", formData["warrant_number"])
+  if (wn) {
+    for (const name of AP13_FIELD_MAP.warrant_number_p2 as string[]) {
+      try { form.getTextField(name).setText(wn) } catch {}
+    }
+  }
+  const wa = formatFieldValue("warrant_amount", formData["warrant_amount"])
+  if (wa) {
+    for (const name of AP13_FIELD_MAP.warrant_amount_p2 as string[]) {
+      try { form.getTextField(name).setText(wa) } catch {}
+    }
+  }
+
+  // Fill checkboxes
+  for (const [formFieldId, pdfNames] of Object.entries(AP13_CHECKBOX_MAP)) {
+    const val = formData[formFieldId]
+    const isYes = val === true || val === "true" || val === "Yes" || val === "yes"
+    try {
+      const checkbox = form.getCheckBox(isYes ? pdfNames.yes : pdfNames.no)
+      checkbox.check()
+    } catch {
+      // checkbox not found — skip
+    }
+  }
+
+  // Embed signature image into the signature field area
+  if (signatureDataUrl) {
     try {
       const sigBytes = dataUrlToBytes(signatureDataUrl)
       const sigImage = await pdfDoc.embedPng(sigBytes)
-      const page = pages[config.signaturePage]
-      if (page) {
-        const scaled = sigImage.scaleToFit(
-          config.signatureWidth || 200,
-          config.signatureHeight || 40,
-        )
-        page.drawImage(sigImage, {
-          x: config.signatureX || 72,
-          y: config.signatureY || 200,
-          width: scaled.width,
-          height: scaled.height,
-        })
-      }
+      const pages = pdfDoc.getPages()
+      const page = pages[0]
+      // Signature field rect: [61.8, 225.6, 339.9, 254.4]
+      const scaled = sigImage.scaleToFit(250, 28)
+      page.drawImage(sigImage, {
+        x: 65,
+        y: 227,
+        width: scaled.width,
+        height: scaled.height,
+      })
     } catch {
-      // signature embed failed — continue without it
+      // signature embed failed
     }
   }
+
+  // Flatten so the form renders as static content
+  form.flatten()
 
   return pdfDoc.save()
 }
