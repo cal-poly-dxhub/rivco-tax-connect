@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import random
 import re
 from datetime import datetime
 from typing import Any
@@ -105,6 +106,40 @@ def find_best_match(query: str) -> tuple[str | None, list[dict[str, Any]]]:
     return best_name, matching_records
 
 
+def extract_street(address: str) -> str:
+    """Extract just the street name/number portion (before the city comma)."""
+    parts = address.split(',')
+    return parts[0].strip() if parts else address.strip()
+
+
+def generate_decoy_streets(real_address: str, count: int = 3) -> list[str]:
+    """Pick decoy street names from other records, preferring same city/state."""
+    records = load_records()
+    real_street = extract_street(real_address)
+    real_city_state = ','.join(real_address.split(',')[1:]).strip()
+
+    all_addresses = set(r.get('address', '') for r in records if r.get('address'))
+    all_addresses.discard(real_address)
+
+    # Prefer addresses in the same city/state for realistic decoys
+    same_area = [a for a in all_addresses if ','.join(a.split(',')[1:]).strip() == real_city_state]
+    other_area = [a for a in all_addresses if a not in same_area]
+
+    pool = same_area + other_area
+    # Extract streets and deduplicate
+    candidate_streets = []
+    seen = {real_street.lower()}
+    for addr in pool:
+        street = extract_street(addr)
+        if street.lower() not in seen:
+            candidate_streets.append(street)
+            seen.add(street.lower())
+
+    decoys = candidate_streets[:count * 3]  # oversample then pick
+    random.shuffle(decoys)
+    return decoys[:count]
+
+
 def lookup(name: str, address: str = '') -> str:
     best_name, records = find_best_match(name)
     if not best_name:
@@ -117,27 +152,54 @@ def lookup(name: str, address: str = '') -> str:
     addresses = sorted(set(r.get('address', '') for r in records))
     if len(addresses) > 1:
         if not address:
+            # Present truncated street names only (no full address for privacy)
+            street_options = [extract_street(a) for a in addresses]
             return json.dumps({
                 'disambiguation_needed': True,
                 'name': best_name,
-                'addresses': addresses,
-                'message': f"We found multiple people named {best_name}. Which address is yours?",
+                'addresses': street_options,
+                'message': f"We found multiple people named {best_name}. Which street have you lived on?",
             })
-        # Fuzzy match caller's response against addresses
         addr_lower = address.lower().strip()
         selected = next((a for a in addresses if addr_lower in a.lower()), None)
         if not selected:
-            # Try reverse: any address word in the caller's response
             selected = next((a for a in addresses if any(w in addr_lower for w in a.lower().split() if len(w) >= 4)), None)
         if selected:
             records = [r for r in records if r.get('address', '') == selected]
         else:
+            street_options = [extract_street(a) for a in addresses]
             return json.dumps({
                 'disambiguation_needed': True,
                 'name': best_name,
-                'addresses': addresses,
-                'message': f"That didn't match our records for {best_name}. Which of these is yours?",
+                'addresses': street_options,
+                'message': f"That didn't match our records for {best_name}. Which of these streets is yours?",
             })
+
+    # Address quiz: present the real street + decoys, ask user to identify theirs
+    real_address = records[0].get('address', '')
+    if real_address and not address:
+        real_street = extract_street(real_address)
+        decoys = generate_decoy_streets(real_address, count=3)
+        options = [real_street] + decoys
+        random.shuffle(options)
+        return json.dumps({
+            'address_verification': True,
+            'name': best_name,
+            'street_options': options,
+            'message': f"To verify your identity, which of the following streets have you lived on?",
+        })
+
+    # If address was provided, verify it matches
+    if address and real_address:
+        real_street = extract_street(real_address).lower()
+        if real_street not in address.lower() and address.lower() not in real_street:
+            # Check if any word from the real street appears in their answer
+            real_words = [w for w in real_street.split() if len(w) >= 4 and not w.isdigit()]
+            if not any(w in address.lower() for w in real_words):
+                return json.dumps({
+                    'verification_failed': True,
+                    'message': "That doesn't match our records. For security, we cannot proceed. Please contact the Auditor-Controller's office at (951) 955-3800.",
+                })
 
     results = []
     for r in records:
