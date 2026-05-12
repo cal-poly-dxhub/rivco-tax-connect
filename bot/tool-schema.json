@@ -1,7 +1,7 @@
 [
   {
     "name": "tax_lookup",
-    "description": "Look up tax refunds for a customer by their name. Returns a JSON object with 'refunds' (array of records with name, refund_type, amount, claim_deadline, address) and 'portal_url' (a single Claims Portal link where the customer can fill out required forms and upload documents). Returns a no-match message string if no refunds are found.",
+    "description": "Look up tax refunds for a customer by their name. On first call, may return address_verification with street_options (a list of street names for the caller to identify). Call the tool again with customer_address set to their chosen street to verify. Returns verification_failed if wrong. On success, returns a JSON object with 'refunds' (array of records) and 'portal_url'. Returns disambiguation_needed if multiple people share the name. Returns a no-match message string if no refunds are found.",
     "inputSchema": {
       "type": "object",
       "properties": {
