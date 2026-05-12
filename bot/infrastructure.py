@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import yaml
 from aws_cdk import (
-    Stack, Duration, RemovalPolicy, CfnOutput, BundlingOptions, BundlingFileAccess, ILocalBundling,
+    Stack, Duration, RemovalPolicy, CfnOutput, BundlingOptions, ILocalBundling,
     aws_s3 as s3,
     aws_s3_deployment as s3deploy,
     aws_lambda as _lambda,
@@ -110,12 +110,6 @@ class NovaSonicConnectStack(Stack):
                 "bot/runtime",
                 bundling=BundlingOptions(
                     image=_lambda.Runtime.PYTHON_3_12.bundling_image,
-                    platform="linux/amd64",
-                    bundling_file_access=BundlingFileAccess.VOLUME_COPY,
-                    command=[
-                        "bash", "-c",
-                        "pip install -r requirements.txt -t /asset-output && cp -au . /asset-output"
-                    ],
                     local=_LocalBundling(),
                 ),
             ),
