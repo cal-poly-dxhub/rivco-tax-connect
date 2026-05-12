@@ -315,6 +315,36 @@
                 line-height: 1.6;
             }
 
+            /* ── File upload fields ── */
+            .doc-upload {
+                border: 1px solid var(--border-light);
+                padding: 0.75rem 1rem;
+                margin-bottom: 0.75rem;
+                display: flex;
+                align-items: center;
+                gap: 1rem;
+            }
+            .doc-upload .doc-label {
+                flex: 1;
+                font-size: 0.85rem;
+                font-weight: 600;
+            }
+            .doc-upload .doc-label .req-badge {
+                font-size: 0.7rem;
+                color: var(--red);
+                font-weight: 700;
+                margin-left: 0.3rem;
+            }
+            .doc-upload input[type="file"] {
+                font-size: 0.8rem;
+                max-width: 220px;
+            }
+            .doc-upload .doc-status {
+                font-size: 0.75rem;
+                color: var(--green);
+                min-width: 20px;
+            }
+
             /* ── Print ── */
             @media print {
                 body { background: #fff; }
@@ -365,6 +395,14 @@
                 </label>
             </div>
 
+            <div id="docsSection" style="display:none">
+                <div class="section-header">Supporting Documents</div>
+                <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;">
+                    Upload the following documents to support your claim. Accepted formats: PDF, JPG, PNG (max 10MB each).
+                </p>
+                <div id="docFields"></div>
+            </div>
+
             <div id="submitSection" style="display:none">
                 <button type="button" class="primary" id="submitBtn">Submit Claim</button>
                 <div id="status" class="status" role="alert" style="display:none; margin-top:0.75rem;"></div>
@@ -406,6 +444,8 @@
             var legalBlock = document.getElementById("legalBlock");
             var banner = document.getElementById("banner");
             var signSection = document.getElementById("signSection");
+            var docsSection = document.getElementById("docsSection");
+            var docFields = document.getElementById("docFields");
             var submitSection = document.getElementById("submitSection");
             var doneSection = document.getElementById("doneSection");
             var statusEl = document.getElementById("status");
@@ -572,6 +612,7 @@
                 signSection.style.display = "";
                 submitSection.style.display = "";
                 initSignature();
+                loadDocRequirements();
             }
 
             function escHtml(s) {
@@ -641,6 +682,36 @@
                 statusEl.textContent = msg;
             }
 
+            /* ── Doc requirements ── */
+            var requiredDocs = [];
+
+            function loadDocRequirements() {
+                var docUrl = API_URL + "/doc-requirements?types=" + encodeURIComponent(types.join(","));
+                // Pass amount for condition evaluation
+                var maxAmount = Math.max.apply(null, amounts.map(Number).filter(function(n) { return !isNaN(n); })) || 0;
+                if (maxAmount) docUrl += "&amount=" + maxAmount;
+
+                fetch(docUrl)
+                    .then(function(r) { return r.ok ? r.json() : null; })
+                    .then(function(data) {
+                        if (!data || !data.docs || data.docs.length === 0) return;
+                        requiredDocs = data.docs;
+                        docsSection.style.display = "";
+                        data.docs.forEach(function(doc) {
+                            var row = document.createElement("div");
+                            row.className = "doc-upload";
+                            row.innerHTML =
+                                '<div class="doc-label">' + escHtml(doc.label) +
+                                (doc.required ? '<span class="req-badge">Required</span>' : '') +
+                                '</div>' +
+                                '<input type="file" id="doc_' + doc.id + '" data-doc-id="' + doc.id + '" accept=".pdf,.jpg,.jpeg,.png,.heic">' +
+                                '<span class="doc-status" id="doc_status_' + doc.id + '"></span>';
+                            docFields.appendChild(row);
+                        });
+                    })
+                    .catch(function() { /* doc requirements optional */ });
+            }
+
             /* ── Submit ── */
             submitBtn.addEventListener("click", async function () {
                 if (!sigDrawn) {
@@ -665,6 +736,20 @@
                     return;
                 }
 
+                // Check required doc uploads
+                var missingDocs = [];
+                requiredDocs.forEach(function(doc) {
+                    if (!doc.required) return;
+                    var input = document.getElementById("doc_" + doc.id);
+                    if (input && (!input.files || input.files.length === 0)) {
+                        missingDocs.push(doc.label);
+                    }
+                });
+                if (missingDocs.length) {
+                    setStatus("err", "Please upload required documents: " + missingDocs.join(", "));
+                    return;
+                }
+
                 submitBtn.disabled = true;
                 setStatus("loading", "Submitting your claim…");
 
@@ -678,6 +763,20 @@
                     submittedAt: new Date().toISOString(),
                 })], { type: "application/json" });
 
+                // Collect all files to upload (form JSON + supporting docs)
+                var filesToUpload = [{ filename: "unified-form.json", contentType: "application/json" }];
+                var fileBlobs = [unifiedBlob];
+                var docInputs = document.querySelectorAll("[data-doc-id]");
+                docInputs.forEach(function(input) {
+                    if (input.files && input.files.length > 0) {
+                        var file = input.files[0];
+                        var ext = file.name.split(".").pop().toLowerCase();
+                        var safeName = input.dataset.docId + "." + ext;
+                        filesToUpload.push({ filename: safeName, contentType: file.type || "application/octet-stream" });
+                        fileBlobs.push(file);
+                    }
+                });
+
                 try {
                     var res = await fetch(API_URL + "/upload", {
                         method: "POST",
@@ -685,24 +784,27 @@
                         body: JSON.stringify({
                             name: name,
                             refundType: refundType,
-                            files: [{ filename: "unified-form.json", contentType: "application/json" }],
+                            files: filesToUpload,
                         }),
                     });
                     var data = await res.json();
                     if (!res.ok) throw new Error(data.error || "Request failed");
 
-                    await fetch(data.uploads[0].uploadUrl, {
-                        method: "PUT",
-                        headers: { "Content-Type": "application/json" },
-                        body: unifiedBlob,
-                    });
+                    // Upload each file to its presigned URL
+                    for (var i = 0; i < data.uploads.length; i++) {
+                        await fetch(data.uploads[i].uploadUrl, {
+                            method: "PUT",
+                            headers: { "Content-Type": filesToUpload[i].contentType },
+                            body: fileBlobs[i],
+                        });
+                    }
 
                     await fetch(API_URL + "/upload-complete", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({
                             submissionId: data.submissionId,
-                            filenames: ["unified-form.json"],
+                            filenames: filesToUpload.map(function(f) { return f.filename; }),
                         }),
                     });
 

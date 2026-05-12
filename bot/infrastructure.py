@@ -702,6 +702,9 @@ class NovaSonicConnectStack(Stack):
         upload_api.root.add_resource("form-schemas").add_method(
             "GET", apigw.LambdaIntegration(upload_fn),
         )
+        upload_api.root.add_resource("doc-requirements").add_method(
+            "GET", apigw.LambdaIntegration(upload_fn),
+        )
 
         # Admin-only: require Cognito JWT
         upload_api.root.add_resource("package").add_method(
