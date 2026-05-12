@@ -404,7 +404,8 @@
             </div>
 
             <div id="submitSection" style="display:none">
-                <button type="button" class="primary" id="submitBtn">Submit Claim</button>
+                <button type="button" class="secondary print-hide" id="printPdfBtn" style="width:100%; margin-bottom:0.75rem; display:none;">Print this claim as official form (PDF)</button>
+                <button type="button" class="primary" id="submitBtn">Submit Claim Digitally</button>
                 <div id="status" class="status" role="alert" style="display:none; margin-top:0.75rem;"></div>
             </div>
 
@@ -424,6 +425,7 @@
             </div>
         </div>
 
+        <script src="lib/pdf-lib.min.js" defer></script>
         <script src="config.js"></script>
         <script>
         (function () {
@@ -611,6 +613,9 @@
 
                 signSection.style.display = "";
                 submitSection.style.display = "";
+                if (hasStaleWarrant || hasPayroll) {
+                    document.getElementById("printPdfBtn").style.display = "";
+                }
                 initSignature();
                 loadDocRequirements();
             }
@@ -687,30 +692,156 @@
 
             function loadDocRequirements() {
                 var docUrl = API_URL + "/doc-requirements?types=" + encodeURIComponent(types.join(","));
-                // Pass amount for condition evaluation
                 var maxAmount = Math.max.apply(null, amounts.map(Number).filter(function(n) { return !isNaN(n); })) || 0;
                 if (maxAmount) docUrl += "&amount=" + maxAmount;
+
+                docsSection.style.display = "";
 
                 fetch(docUrl)
                     .then(function(r) { return r.ok ? r.json() : null; })
                     .then(function(data) {
-                        if (!data || !data.docs || data.docs.length === 0) return;
-                        requiredDocs = data.docs;
-                        docsSection.style.display = "";
-                        data.docs.forEach(function(doc) {
-                            var row = document.createElement("div");
-                            row.className = "doc-upload";
-                            row.innerHTML =
-                                '<div class="doc-label">' + escHtml(doc.label) +
-                                (doc.required ? '<span class="req-badge">Required</span>' : '') +
-                                '</div>' +
-                                '<input type="file" id="doc_' + doc.id + '" data-doc-id="' + doc.id + '" accept=".pdf,.jpg,.jpeg,.png,.heic">' +
-                                '<span class="doc-status" id="doc_status_' + doc.id + '"></span>';
-                            docFields.appendChild(row);
-                        });
+                        if (data && data.docs && data.docs.length > 0) {
+                            requiredDocs = data.docs;
+                            data.docs.forEach(function(doc) {
+                                var row = document.createElement("div");
+                                row.className = "doc-upload";
+                                row.innerHTML =
+                                    '<div class="doc-label">' + escHtml(doc.label) +
+                                    (doc.required ? '<span class="req-badge">Required</span>' : '') +
+                                    '</div>' +
+                                    '<input type="file" id="doc_' + doc.id + '" data-doc-id="' + doc.id + '" accept=".pdf,.jpg,.jpeg,.png,.heic">' +
+                                    '<span class="doc-status" id="doc_status_' + doc.id + '"></span>';
+                                docFields.appendChild(row);
+                            });
+                        }
+                        // Always show scanned form upload option
+                        var scannedRow = document.createElement("div");
+                        scannedRow.className = "doc-upload";
+                        scannedRow.style.borderStyle = "dashed";
+                        scannedRow.innerHTML =
+                            '<div class="doc-label">Completed form (scanned or photographed)' +
+                            '<br><span style="font-size:0.72rem; color:var(--text-muted); font-weight:400;">' +
+                            'If you printed and filled out the paper form, upload the signed copy here instead of signing digitally above.</span>' +
+                            '</div>' +
+                            '<input type="file" id="doc_scanned-form" data-doc-id="scanned-form" accept=".pdf,.jpg,.jpeg,.png,.heic">' +
+                            '<span class="doc-status" id="doc_status_scanned-form"></span>';
+                        docFields.appendChild(scannedRow);
                     })
-                    .catch(function() { /* doc requirements optional */ });
+                    .catch(function() {
+                        // Even if API fails, show scanned form upload
+                        var scannedRow = document.createElement("div");
+                        scannedRow.className = "doc-upload";
+                        scannedRow.style.borderStyle = "dashed";
+                        scannedRow.innerHTML =
+                            '<div class="doc-label">Completed form (scanned or photographed)' +
+                            '<br><span style="font-size:0.72rem; color:var(--text-muted); font-weight:400;">' +
+                            'If you printed and filled out the paper form, upload the signed copy here.</span>' +
+                            '</div>' +
+                            '<input type="file" id="doc_scanned-form" data-doc-id="scanned-form" accept=".pdf,.jpg,.jpeg,.png,.heic">' +
+                            '<span class="doc-status" id="doc_status_scanned-form"></span>';
+                        docFields.appendChild(scannedRow);
+                    });
             }
+
+            /* ── Print as filled PDF ── */
+            async function generateFilledPdf() {
+                var PDFDocument = PDFLib.PDFDocument;
+                var pdfBytes = await fetch("forms/ap13-affidavit.pdf").then(function(r) { return r.arrayBuffer(); });
+                var pdfDoc = await PDFDocument.load(pdfBytes);
+                var form = pdfDoc.getForm();
+
+                function val(fieldId) {
+                    var el = document.getElementById("f_" + fieldId);
+                    return el ? (el.value || "").trim() : "";
+                }
+                function setField(name, value) {
+                    if (!value) return;
+                    try { form.getTextField(name).setText(value); } catch(e) {}
+                }
+
+                // Page 1 — Warrant info
+                setField("Date26_af_date", val("warrant_date"));
+                setField("Text2", val("warrant_amount"));
+                setField("Text3", val("warrant_number"));
+                setField("Text4", val("business_unit"));
+                // Page 1 — Signature block
+                setField("Text9", val("phone"));
+                setField("Text10", val("name"));
+                setField("Text11", val("business_name"));
+                setField("Text12", val("address"));
+                setField("Text13", val("email"));
+                // Page 2 — Declaration
+                setField("Text14", val("name"));
+                setField("Text15", val("address"));
+                setField("Text16", val("city"));
+                setField("Text17", val("state_zip"));
+                setField("Text21", val("name"));
+                setField("Text22", val("warrant_number"));
+                setField("Text23", val("warrant_amount"));
+                setField("Text24", val("address"));
+
+                // Checkboxes
+                function setCheck(yesName, noName, fieldId) {
+                    var radios = document.querySelectorAll('[name="' + fieldId + '"]');
+                    var isYes = false;
+                    radios.forEach(function(r) { if (r.checked && r.value === "true") isYes = true; });
+                    try { form.getCheckBox(isYes ? yesName : noName).check(); } catch(e) {}
+                }
+                setCheck("Check Box5", "Check Box6", "is_owner");
+                setCheck("Check Box7", "Check Box8", "warrant_included");
+
+                // Embed signature
+                if (sigDrawn) {
+                    try {
+                        var sigDataUrl = sigCanvas.toDataURL("image/png");
+                        var base64 = sigDataUrl.split(",")[1];
+                        var binary = atob(base64);
+                        var sigBytes = new Uint8Array(binary.length);
+                        for (var i = 0; i < binary.length; i++) sigBytes[i] = binary.charCodeAt(i);
+                        var sigImage = await pdfDoc.embedPng(sigBytes);
+                        var pages = pdfDoc.getPages();
+                        var scaled = sigImage.scaleToFit(250, 28);
+                        pages[0].drawImage(sigImage, { x: 65, y: 227, width: scaled.width, height: scaled.height });
+                    } catch(e) {}
+                }
+
+                // Remove duplicate fields
+                var dupes = ["Print Name", "Street Address", "City", "State and ZIP code",
+                    "City_2", "State", "Date", "NAME PayeeBusiness Name", "MAILING ADDRESS",
+                    "Date25_af_date", "WARRANT INFORMATIONRow1_2", "WARRANT INFORMATIONRow1_3",
+                    "WARRANT INFORMATIONRow1_4", "WARRANT INFORMATIONRow1_5",
+                    "WARRANT INFORMATIONRow1_6", "WARRANT INFORMATIONRow1_7",
+                    "Yes", "No", "Provide all information An incomplete form will be returned",
+                    "PRINTED NAME Payee Business Name", "undefined",
+                    "AFFIDAVIT FOR THE REPLACEMENT OF STALE DATED WARRANT OFFICE OF THE AUDITORCONTROLLER",
+                    "AP  13 Policy  214 Page 2 of 4"];
+                dupes.forEach(function(n) { try { form.removeField(form.getField(n)); } catch(e) {} });
+
+                form.flatten();
+                var filledBytes = await pdfDoc.save();
+                var blob = new Blob([filledBytes], { type: "application/pdf" });
+                var url = URL.createObjectURL(blob);
+                var a = document.createElement("a");
+                a.href = url;
+                a.download = "AP-13-Claim.pdf";
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(function() { URL.revokeObjectURL(url); }, 5000);
+            }
+
+            document.getElementById("printPdfBtn").addEventListener("click", function() {
+                var btn = this;
+                btn.disabled = true;
+                btn.textContent = "Generating PDF…";
+                generateFilledPdf()
+                    .then(function() { btn.disabled = false; btn.textContent = "Print this claim as official form (PDF)"; })
+                    .catch(function(err) {
+                        setStatus("err", "PDF generation failed: " + err.message);
+                        btn.disabled = false;
+                        btn.textContent = "Print this claim as official form (PDF)";
+                    });
+            });
 
             /* ── Submit ── */
             submitBtn.addEventListener("click", async function () {
