@@ -463,7 +463,13 @@ class NovaSonicConnectStack(Stack):
 
         portal_origin = f"http://{proj}-portal-{self.account}.s3-website-{self.region}.amazonaws.com"
 
-        # S3 bucket for uploaded documents (encrypted, lifecycle, no public access)
+        # S3 bucket for uploaded documents (encrypted, tiered lifecycle, no public access)
+        ret = cfg.get('retention', {})
+        hot_days = ret.get('hot_days', 90)
+        warm_days = ret.get('warm_days', 365)
+        cold_days = ret.get('cold_days', 1825)
+        expire_days = ret.get('expire_days', 2555)
+
         uploads_bucket = s3.Bucket(
             self, "UploadsBucket",
             bucket_name=f"{proj}-uploads-{self.account}",
@@ -471,7 +477,23 @@ class NovaSonicConnectStack(Stack):
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
             removal_policy=RemovalPolicy.DESTROY,
             auto_delete_objects=True,
-            lifecycle_rules=[s3.LifecycleRule(expiration=Duration.days(90))],
+            lifecycle_rules=[s3.LifecycleRule(
+                transitions=[
+                    s3.Transition(
+                        storage_class=s3.StorageClass.GLACIER_INSTANT_RETRIEVAL,
+                        transition_after=Duration.days(hot_days),
+                    ),
+                    s3.Transition(
+                        storage_class=s3.StorageClass.GLACIER,
+                        transition_after=Duration.days(warm_days),
+                    ),
+                    s3.Transition(
+                        storage_class=s3.StorageClass.DEEP_ARCHIVE,
+                        transition_after=Duration.days(cold_days),
+                    ),
+                ],
+                expiration=Duration.days(expire_days),
+            )],
             cors=[
                 s3.CorsRule(  # Claimant upload
                     allowed_methods=[s3.HttpMethods.PUT],
