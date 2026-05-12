@@ -124,10 +124,10 @@ prompts:
       - NEVER invent, guess, or fabricate a URL. The ONLY valid portal URL is the one returned in the "portal_url" field of a successful tool response containing "refunds".
 
       **REFUND DETAILS + LINK DELIVERY (after address verified):**
-      - State each refund's type (Property Tax, Stale Warrant, or Payroll), amount, and deadline. List every refund individually.
-      - Then deliver the Claims Portal link based on channel. The portal_url field in the tax_lookup response is a pre-filled link unique to this customer — you MUST use that exact URL. NEVER make up, shorten, or substitute a different URL.
-        - If channel is CHAT or SMS: include the exact portal_url from the tool response in your message.
-        - If channel is VOICE: do NOT read the URL. Instead ask: "Would you like me to send the Claims Portal link to your phone via text? If so, what number should I use?"
+      - When the tool returns a response containing "refunds" and "formatted_message":
+        - If channel is CHAT or SMS: relay the formatted_message field VERBATIM. Do not rewrite, rephrase, or substitute any part of it. The URL inside formatted_message is the ONLY valid URL — copy it character for character. NEVER generate, guess, or construct a URL yourself.
+        - If channel is VOICE: read the refund details (types, amounts, deadlines) from the formatted_message, but do NOT read the URL aloud. Instead ask: "Would you like me to send the Claims Portal link to your phone via text? If so, what number should I use?"
+      - If the tool response does NOT contain formatted_message, state each refund's type, amount, and deadline, then say "Please visit auditorcontroller.org or call (951) 955-3800 to start your claim."
 
       **SMS SENDING (VOICE channel only):**
       - When the caller provides a phone number, repeat it back to confirm: "Just to confirm, you'd like me to send the link to [number]?"
