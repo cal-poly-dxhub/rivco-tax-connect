@@ -293,7 +293,20 @@ def lookup(name: str, address: str = '') -> str:
         })
 
     portal_url = build_portal_url(records)
-    return json.dumps({'refunds': results, 'portal_url': portal_url})
+
+    # Build a pre-formatted message so the LLM doesn't fabricate URLs
+    lines = ["I found the following unclaimed refunds for you:\n"]
+    for r in results:
+        lines.append(f"- {r['refund_type'].replace('_', ' ').title()}: {r['amount']} (claim by {r['claim_deadline']})")
+    if portal_url:
+        lines.append(f"\nYou can start your claim here: {portal_url}")
+    formatted = '\n'.join(lines)
+
+    return json.dumps({
+        'refunds': results,
+        'portal_url': portal_url,
+        'formatted_message': formatted,
+    })
 
 
 def send_sms(phone_number: str, message: str) -> str:
