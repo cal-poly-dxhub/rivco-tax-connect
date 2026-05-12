@@ -18,6 +18,12 @@ s3:
   bucket_suffix: data
   data_file: refunds_demo_balanced.jsonl
 
+retention:
+  hot_days: 90
+  warm_days: 365
+  cold_days: 1825
+  expire_days: 2555
+
 # Super-admin bootstrap. Created by CDK custom resource on first deploy.
 # Additional super-admins and all other admin users/departments are managed
 # at runtime from the dashboard.
