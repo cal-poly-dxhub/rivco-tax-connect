@@ -19,12 +19,12 @@ import { currentSession, signOut } from "@/lib/cognito"
 import { api } from "@/lib/api"
 import { ThemeToggle } from "@/components/theme-toggle"
 import {
-  Submission, StatusResponse, Permissions, STATUSES, labelFor, Package, PackageFile, AuditEntry, AuditResponse,
+  Submission, StatusResponse, Permissions, STATUSES, labelFor, Package, PackageFile, AuditEntry, AuditResponse, StatusValue,
 } from "@/lib/types"
 
-const STATUS_STYLES: Record<Submission["status"], string> = {
+const STATUS_STYLES: Record<StatusValue, string> = {
   partial: "bg-orange-100 text-orange-800 border-orange-300",
-  complete: "bg-green-100 text-green-800 border-green-300",
+  uploaded: "bg-green-100 text-green-800 border-green-300",
   "under-review": "bg-blue-100 text-blue-800 border-blue-300",
   approved: "bg-emerald-100 text-emerald-900 border-emerald-300",
   denied: "bg-red-100 text-red-800 border-red-300",
@@ -33,7 +33,10 @@ const STATUS_STYLES: Record<Submission["status"], string> = {
 function formatAudit(e: AuditEntry): string {
   const d = e.details || {}
   if (e.action === "status_change") {
-    return `Status: ${(d.from as string) || "—"} → ${(d.to as string) || "—"}`
+    const dept = d.department as string | undefined
+    const from = (d.from as string) || "—"
+    const to = (d.to as string) || "—"
+    return dept ? `${dept}: ${from} → ${to}` : `Status: ${from} → ${to}`
   }
   if (e.action === "delete") {
     return `Deleted (${(d.filesDeleted as number) ?? 0} files)`
@@ -81,17 +84,21 @@ export default function DashboardPage() {
   const filtered = useMemo(() => {
     return subs.filter((s) => {
       if (deptFilter !== "all" && !s.departments.includes(deptFilter)) return false
-      if (statusFilter !== "all" && s.status !== statusFilter) return false
+      if (statusFilter !== "all" && !Object.values(s.statuses).includes(statusFilter as StatusValue)) return false
       if (search && !s.name.toLowerCase().includes(search.toLowerCase())) return false
       return true
     })
   }, [subs, search, deptFilter, statusFilter])
 
-  async function changeStatus(id: string, status: string) {
-    setSubs((prev) => prev.map((s) => (s.submissionId === id ? { ...s, status: status as Submission["status"] } : s)))
+  async function changeStatus(id: string, department: string, status: string) {
+    setSubs((prev) => prev.map((s) => (
+      s.submissionId === id
+        ? { ...s, statuses: { ...s.statuses, [department]: status as StatusValue } }
+        : s
+    )))
     const res = await api("/update-status", {
       method: "POST",
-      body: JSON.stringify({ submissionId: id, status }),
+      body: JSON.stringify({ submissionId: id, department, status }),
     })
     if (!res.ok) setError(`Update failed: ${res.status}`)
   }
@@ -171,7 +178,11 @@ export default function DashboardPage() {
           </TableHeader>
           <TableBody>
             {filtered.map((s) => {
-              const taskDone = s.tasks.filter((t) => t.done).length
+              const visibleDepts = deptFilter === "all"
+                ? Object.keys(s.statuses)
+                : Object.keys(s.statuses).filter((d) => d === deptFilter)
+              const allTasks = visibleDepts.flatMap((d) => s.tasksByDepartment[d] || [])
+              const taskDone = allTasks.filter((t) => t.done).length
               return (
                 <TableRow key={s.submissionId} className="cursor-pointer" onClick={() => setSelected(s)}>
                   <TableCell className="font-medium">{s.name}</TableCell>
@@ -185,19 +196,27 @@ export default function DashboardPage() {
                       <Badge key={d} variant="outline" className="mr-1">{d}</Badge>
                     )) : <span className="text-muted-foreground">—</span>}
                   </TableCell>
-                  <TableCell onClick={(e) => e.stopPropagation()}>
-                    <Select value={s.status} onValueChange={(v) => v && changeStatus(s.submissionId, v)}>
-                      <SelectTrigger className={`w-[140px] h-8 ${STATUS_STYLES[s.status]}`}>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {STATUSES.map((st) => (
-                          <SelectItem key={st} value={st}>{st}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                  <TableCell onClick={(e) => e.stopPropagation()} className="space-y-1">
+                    {visibleDepts.map((dept) => (
+                      <div key={dept} className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground w-16 truncate">{dept}</span>
+                        <Select
+                          value={s.statuses[dept]}
+                          onValueChange={(v) => v && changeStatus(s.submissionId, dept, v)}
+                        >
+                          <SelectTrigger className={`h-7 text-xs w-[130px] ${STATUS_STYLES[s.statuses[dept]]}`}>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {STATUSES.map((st) => (
+                              <SelectItem key={st} value={st}>{st}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    ))}
                   </TableCell>
-                  <TableCell className="text-sm">{taskDone}/{s.tasks.length}</TableCell>
+                  <TableCell className="text-sm">{taskDone}/{allTasks.length}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     {s.submittedAt ? new Date(s.submittedAt).toLocaleDateString() : "—"}
                   </TableCell>
@@ -270,13 +289,20 @@ function SubmissionDetail({ submission }: { submission: Submission }) {
           </div>
           <div>
             <p className="font-medium">Tasks</p>
-            <ul className="mt-1 space-y-1">
-              {submission.tasks.map((t, i) => (
-                <li key={i} className={t.done ? "text-green-700" : "text-muted-foreground"}>
-                  {t.done ? "✓" : "○"} {t.label}
-                </li>
+            <div className="mt-1 space-y-3">
+              {Object.entries(submission.tasksByDepartment).map(([dept, tasks]) => (
+                <div key={dept}>
+                  <p className="text-xs text-muted-foreground uppercase tracking-wide">{dept}</p>
+                  <ul className="space-y-1">
+                    {tasks.map((t, i) => (
+                      <li key={i} className={t.done ? "text-green-700" : "text-muted-foreground"}>
+                        {t.done ? "✓" : "○"} {t.label}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               ))}
-            </ul>
+            </div>
           </div>
           <div>
             <p className="font-medium">Files {pkg && `(${pkg.files.length})`}</p>

@@ -149,26 +149,31 @@ def lambda_handler(event: dict[str, Any], context: Any) -> None:
         if new_image.get("sk") != "META" and old_image.get("sk") != "META":
             continue
 
-        kind = None
+        name = new_image.get("name") or old_image.get("name") or "(no name)"
+        sid = new_image.get("submissionId") or old_image.get("submissionId") or ""
+        refund_types_csv = new_image.get("refundType") or old_image.get("refundType") or ""
+
         if event_name == "INSERT":
-            kind = "new"
+            # New submission started — notify every dept it's tagged for.
+            depts = new_image.get("departments") or []
+            for dept in depts:
+                _notify_department(dept, "new", {
+                    "name": name, "submissionId": sid, "refundType": refund_types_csv,
+                })
+
         elif event_name == "MODIFY":
-            old_status = old_image.get("status")
-            new_status = new_image.get("status")
-            if old_status == "partial" and new_status == "complete":
-                kind = "ready"
+            # Per-department partial→uploaded transitions trigger a "ready for review" email.
+            old_statuses = old_image.get("statuses") or {}
+            new_statuses = new_image.get("statuses") or {}
+            for dept, new_status in new_statuses.items():
+                if new_status == "uploaded" and old_statuses.get(dept) == "partial":
+                    _notify_department(dept, "ready", {
+                        "name": name, "submissionId": sid, "refundType": refund_types_csv,
+                    })
 
-        if not kind or not new_image:
-            continue
 
-        refund_types = [
-            t.strip() for t in (new_image.get("refundType") or "").split(",") if t.strip()
-        ]
-        dept_keys = new_image.get("departments") or _departments_for_types(refund_types)
-        if not dept_keys:
-            logger.info("No departments map to %s; skipping notification.", refund_types)
-            continue
-
-        recipients = _recipients_for_departments(dept_keys)
-        subject, body = _format_email(new_image, kind)
-        _send(recipients, subject, body)
+def _notify_department(dept_key: str, kind: str, info: dict[str, Any]) -> None:
+    """Send an email to every user in the admin-<dept> Cognito group."""
+    recipients = _recipients_for_departments([dept_key])
+    subject, body = _format_email(info, kind)
+    _send(recipients, subject, body)
