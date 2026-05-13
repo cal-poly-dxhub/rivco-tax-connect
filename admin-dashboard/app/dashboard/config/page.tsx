@@ -364,7 +364,17 @@ function DocsTab() {
   const [data, setData] = useState<DocReqsResponse | null>(null)
   const [err, setErr] = useState("")
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await api("/admin/doc-requirements")
+        if (!res.ok) throw new Error(`${res.status}`)
+        setData(await res.json())
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : String(e))
+      }
+    })()
+  }, [])
 
   async function load() {
     try {
@@ -453,7 +463,7 @@ function DocTypeEditor({
         </thead>
         <tbody>
           {docs.map((d, i) => (
-            <tr key={i} className="border-t">
+            <tr key={d.id || `new-${i}`} className="border-t">
               <td className="py-1 pr-2">
                 <Input value={d.id} onChange={(e) => update(i, { id: e.target.value })} placeholder="photo-id" />
               </td>
