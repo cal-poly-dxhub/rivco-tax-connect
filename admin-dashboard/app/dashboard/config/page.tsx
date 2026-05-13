@@ -522,7 +522,17 @@ function SchemasTab() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState("")
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await api("/admin/form-schemas")
+        if (!res.ok) throw new Error(`/admin/form-schemas ${res.status}`)
+        setSchemas(await res.json())
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+      }
+    })()
+  }, [])
   useEffect(() => {
     if (schemas && schemas[selected]) {
       setEditing(deepClone(schemas[selected]))
@@ -635,7 +645,7 @@ function SchemasTab() {
           </TableHeader>
           <TableBody>
             {editing.fields.map((f, i) => (
-              <TableRow key={i}>
+              <TableRow key={f.id || `new-${i}`}>
                 <TableCell>
                   <div className="flex flex-col">
                     <button className="text-xs text-muted-foreground hover:text-foreground" onClick={() => moveField(i, -1)} disabled={i === 0}>↑</button>
