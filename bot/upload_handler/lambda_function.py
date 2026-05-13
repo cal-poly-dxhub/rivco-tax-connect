@@ -1157,7 +1157,6 @@ def _admin_put_doc_requirements(event: dict[str, Any], refund_type: str, headers
 #   type       — text | email | tel | date | number | address | textarea | checkbox
 #   required   — whether the unified form must collect it
 #   section    — "common" (always shown) or a refund-type-specific section key
-#   applies_to — which refund types use this field (affects output rendering)
 #
 # The unified form dedupes by `id`: if two refund types both define
 # {"id": "name", ...}, the claimant only fills it once.
@@ -1257,6 +1256,7 @@ def _admin_put_form_schema(event: dict[str, Any], refund_type: str, headers: dic
     fields = body.get("fields")
     if not isinstance(fields, list):
         return _err(400, "fields must be a list", headers)
+    valid_field_types = {"text", "email", "tel", "date", "number", "address", "textarea", "checkbox"}
     normalized = []
     seen_ids: set[str] = set()
     for f in fields:
@@ -1266,15 +1266,21 @@ def _admin_put_form_schema(event: dict[str, Any], refund_type: str, headers: dic
         if fid in seen_ids:
             return _err(400, f"duplicate field id: {fid}", headers)
         seen_ids.add(fid)
+        field_type = str(f.get("type") or "text")
+        if field_type not in valid_field_types:
+            return _err(400, f"invalid field type '{field_type}' for field '{fid}'. Must be one of: {', '.join(sorted(valid_field_types))}", headers)
         normalized.append({
             "id": fid,
             "label": str(f.get("label") or fid),
-            "type": str(f.get("type") or "text"),
+            "type": field_type,
             "required": bool(f.get("required", False)),
             "section": str(f.get("section") or "common"),
         })
 
-    title = (body.get("title") or _DEFAULT_FORM_SCHEMAS[refund_type]["title"]).strip()
+    raw_title = body.get("title")
+    if raw_title is not None and not isinstance(raw_title, str):
+        return _err(400, "title must be a string", headers)
+    title = (raw_title or _DEFAULT_FORM_SCHEMAS[refund_type]["title"]).strip()
 
     admin_table.put_item(Item={
         "pk": f"FORMSCHEMA#{refund_type}",
