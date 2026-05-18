@@ -90,6 +90,40 @@ export type FormSchema = {
 
 export type FormSchemasResponse = Record<string, FormSchema>
 
+export type ChatHandoffSummary = {
+  sessionId: string
+  refNumber: string
+  reason: string
+  requestedAt: string
+  resolved: boolean
+}
+
+export type ChatSessionsResponse = {
+  sessions: ChatHandoffSummary[]
+}
+
+export type ChatMessage = {
+  timestamp: string
+  role: "user" | "assistant"
+  content: string
+}
+
+export type ChatSessionDetail = {
+  meta: {
+    sessionId: string
+    startedAt: string
+    disconnectedAt: string
+    status: string
+  }
+  handoff: {
+    refNumber?: string
+    reason?: string
+    requestedAt?: string
+    resolved?: boolean
+  }
+  messages: ChatMessage[]
+}
+
 export function labelFor(type: string, labels: Record<string, string>) {
   return labels[type] || type.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())
 }

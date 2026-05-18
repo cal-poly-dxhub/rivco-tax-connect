@@ -156,7 +156,10 @@ export default function DashboardPage() {
           <div className="flex gap-2">
             <ThemeToggle />
             {perms?.isSuperAdmin && (
-              <Link href="/dashboard/config"><Button variant="outline">Admin config</Button></Link>
+              <>
+                <Link href="/dashboard/chat"><Button variant="outline">Chat handoffs</Button></Link>
+                <Link href="/dashboard/config"><Button variant="outline">Admin config</Button></Link>
+              </>
             )}
             <Button variant="outline" onClick={onSignOut}>Sign out</Button>
           </div>
