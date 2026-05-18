@@ -1,410 +1,140 @@
 # Deployment Guide
 
-This guide provides detailed deployment instructions, troubleshooting steps, and recovery procedures for the Riverside County Tax Refund Lookup system.
+End-to-end deploy is a single `cdk deploy`. No console clicks, no post-deploy script.
 
-## Pre-Deployment Checklist
+## Prerequisites
 
-Before running the deployment scripts, ensure:
+| Requirement | How to check / get |
+|---|---|
+| AWS profile with admin access to a sandbox/dev account | `aws sts get-caller-identity --profile <name>` should resolve to a role with `AdministratorAccess` |
+| CDK bootstrapped in your target region | `aws cloudformation describe-stacks --stack-name CDKToolkit` returns `CREATE_COMPLETE`. If not, run `cdk bootstrap aws://<account>/<region>` |
+| Bedrock model access enabled | Console → Bedrock → Model access (in your deploy region). Enable `anthropic.claude-haiku-4-5`. Approval is instant |
+| Python 3.12+ + Node 20+ + AWS CDK v2 | `python --version`, `node --version`, `cdk --version` |
+| `pip install -r requirements.txt` done | CDK + bundler dependencies |
+| Demo refund dataset present locally | `refunds_demo_balanced.jsonl` in repo root. It's `.gitignore`d, so on a fresh clone you'll need to copy it in |
+| Branch pushed to GitHub | The admin dashboard CodeBuild clones from GitHub. The branch named in `config.yaml`'s `admin_dashboard.github_branch` must exist on the remote |
 
-1. **AWS Credentials**: Configure AWS CLI with appropriate credentials
-   ```bash
-   aws configure
-   ```
+## Configure `config.yaml`
 
-2. **Python Environment**: Python 3.12+ with required dependencies
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt
-   ```
+Two values must change before the first deploy:
 
-3. **AWS Permissions**: Your IAM user/role has permissions for:
-   - CDK deployment (CloudFormation, IAM, S3, Lambda, Connect, Lex, Q in Connect, Bedrock)
-   - S3 bucket creation and management
-   - Lambda function creation and updates
-   - Amazon Connect instance access
-   - Q in Connect knowledge base management
-   - Cognito user pool creation
-   - CodeBuild project creation
-   - CloudFront distribution creation
-   - SES identity verification
+```yaml
+super_admin:
+  email: you@example.com         # Cognito user gets created with this email; you receive the temp password as a stack output
 
-4. **Configuration**: Update `config.yaml` with your environment-specific values:
-   - AWS region
-   - Lambda timeout and memory settings
-   - Environment variables (URLs, thresholds)
-   - Connect flow name and voice IDs
-   - Wisdom assistant name and seed URLs
-   - `super_admin.email` for the bootstrap Cognito user
-   - `admin_dashboard.github_owner`, `github_repo`, `github_branch` for CodeBuild
+notifications:
+  sender: you@example.com         # SES sender for notification emails. Click the verification link AWS sends after first deploy
 
-## Deployment Steps
-
-### Step 1: Deploy Infrastructure (CDK)
-
-```bash
-cdk deploy --require-approval=never
+admin_dashboard:
+  github_branch: feat/your-branch # The branch CodeBuild clones; must already exist on the remote
 ```
 
-This creates:
-- S3 buckets (data, uploads, portal, admin-dashboard)
-- Lambda functions (tax lookup, upload handler, notification handler)
-- DynamoDB tables (app-data single-table, admin-config)
-- Cognito user pool + super-admin group + bootstrap super-admin user
-- CodeBuild project for the admin dashboard (pulls from GitHub)
-- CloudFront distribution serving the admin dashboard
-- SES email identity for notifications
-- IAM roles and policies
-- Amazon Connect integration
-- Q in Connect knowledge base
+Optional knobs:
 
-On first deploy, CodeBuild runs `yarn install && yarn build` for the admin
-dashboard and publishes the static output to its S3 bucket. SES sends a
-verification email to the configured `super_admin.email`; click the link to
-complete verification before notifications can send.
+```yaml
+bedrock:
+  model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0   # cross-region inference profile
 
-**Expected output**: CloudFormation stack name and resource ARNs, including
-`AdminDashboardUrl` (CloudFront URL), `UserPoolId`, `SuperAdminUsername`, and
-`SuperAdminBootstrapPassword` (temp password for first sign-in).
-
-### Step 2: Run Post-Deploy Script
-
-```bash
-python3 post_deploy.py
+prompts:
+  ai_orchestration: |          # System prompt; lands in SSM (Advanced tier — up to 8KB)
+    You are a Riverside County ...
 ```
 
-This script:
-1. Uploads refund data (`refunds_demo_balanced.jsonl`) to S3
-2. Creates/updates the AI orchestration prompt in Q in Connect
-3. Syncs knowledge base content from seed URLs
-4. Configures Amazon Connect contact flow
-5. Registers MCP Gateway tools
+## Deploy
 
-**Expected output**: Success messages for each step
+```bash
+AWS_PROFILE=<your-profile> AWS_DEFAULT_REGION=us-west-2 cdk deploy --require-approval never
+```
 
-## Post-Deployment Configuration (Manual)
+First deploy takes ~10 min. Subsequent deploys without code changes are ~2 min.
 
-The following steps require AWS Console access and cannot be automated:
+What happens:
 
-### 1. Amazon Connect Instance Setup
+1. S3 buckets, DynamoDB tables, Cognito user pool, IAM roles
+2. Two Python Lambdas bundle locally — `bot/runtime` (the tax-lookup tool with jellyfish + decoy quiz) and `bot/chat_handler` (the WebSocket handler with `anthropic[bedrock]`). Local bundling means no Docker dependency
+3. WebSocket API Gateway + REST API Gateway routes get wired
+4. SSM parameter is created with the system prompt from `config.yaml`
+5. `BucketDeployment` uploads `refunds_demo_balanced.jsonl` to the data bucket
+6. `BucketDeployment` ships the upload portal (`bot/upload_portal/` including `index.html`, the chat widget, the unified-form JS) to the portal S3 site
+7. CodeBuild starts and builds the Next.js admin dashboard from your GitHub branch
+8. Stack outputs print: dashboard URL, chat WebSocket URL, super-admin temp password, etc.
 
-1. Navigate to Amazon Connect in AWS Console
-2. Select your instance
-3. Go to **Contact Flows** → **Manage phone numbers**
-4. Claim a phone number (or use existing)
-5. Set the contact flow to `TaxRefundFlow`
+## After the first deploy
 
-### 2. SMS Channel Setup (Optional)
+**Verify the SES sender email.** AWS sends a verification link to whatever address you put in `notifications.sender`. Click it. Until you do, notification emails won't deliver (CloudFormation won't fail; you'll just silently miss email).
 
-To enable SMS:
+**Sign in to the admin dashboard.** The stack output `SuperAdminBootstrapPassword` is your one-time password. Username is `sa-<sanitized-email>`. Cognito forces you to change the password on first login.
 
-1. Go to **Channels** → **Phone Numbers**
-2. Request a toll-free number for SMS
-3. AWS will verify your use case (typically 1-2 business days)
-4. Once approved, configure the number in the contact flow
+**Wait for CodeBuild.** Stack output `AdminDashboardUrl` works the moment the first build finishes. If `AdminBuildProjectName` shows `IN_PROGRESS`, give it 3-5 min. Watch builds at:
 
-### 3. Chat Channel Setup (Optional)
+```
+https://<region>.console.aws.amazon.com/codesuite/codebuild/projects/<AdminBuildProjectName>/history
+```
 
-1. Go to **Channels** → **Chat**
-2. Create a chat widget
-3. Embed the widget code in your website
-4. Configure the contact flow for chat
+**Embed the chat widget on a real page.** The stack outputs `UploadPortalUrl` (e.g., `http://riverside-tax-refund-v2-portal-<account>.s3-website-<region>.amazonaws.com`). Drop these tags into any HTML page that should host the chat:
 
-### 4. Live Agent Queue Setup (Optional)
+```html
+<link rel="stylesheet" href="<UploadPortalUrl>/chat-widget.css">
+<script src="<UploadPortalUrl>/config.js"></script>
+<script src="<UploadPortalUrl>/chat-widget.js" async></script>
+```
 
-1. Go to **Routing** → **Queues**
-2. Create a queue for live agents
-3. Create a routing profile for agents
-4. Add agents to the queue
-5. Update the contact flow to route to this queue
+`config.js` sets `window.WS_ENDPOINT` for the widget. The widget reads that, opens the WebSocket, renders the bottom-right chat bubble.
 
-### 5. First Super-Admin Sign-In
+## Smoke tests
 
-1. Open `AdminDashboardUrl` from stack outputs.
-2. Sign in with `SuperAdminUsername` + `SuperAdminBootstrapPassword` (both in stack outputs).
-3. Cognito will force a password change on first login.
-4. Once in, create departments and add admin users from the Admin Config page.
-5. Admin users you create receive a Cognito invitation email with their temp
-   password; they sign in and set their own password on first login.
+```bash
+# 1. WebSocket round-trip — should stream tokens back and end with {type:"done"}
+python3 - <<'PY'
+import json, ssl, threading, websocket
+URL = "wss://<from stack output ChatWebSocketUrl>?session=smoke12345abc"
+done = threading.Event()
+def on_msg(ws, m):
+    f = json.loads(m)
+    if f.get("type") == "delta": print(f["text"], end="", flush=True)
+    elif f.get("type") == "done": print("\n[done]"); done.set()
+def on_open(ws):
+    ws.send(json.dumps({"action":"sendMessage","session":"smoke12345abc","text":"What services do you offer?"}))
+ws = websocket.WebSocketApp(URL, on_message=on_msg, on_open=on_open)
+threading.Thread(target=lambda: ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE}), daemon=True).start()
+done.wait(timeout=60); ws.close()
+PY
 
-### 6. SES Identity Verification
+# 2. Tax lookup tool — should hit the decoy quiz
+# Send: "Do you have refunds for Carey Ministries?"
+# Expect: tool_use frame, then 4 streets in a numbered list
 
-On first deploy, SES is in sandbox mode and the sender + every recipient must
-be verified. CDK creates the sender identity (`notifications.sender` from
-`config.yaml`). Click the verification link in the email AWS sends. If
-recipients are on a different domain, verify their base identity once per
-account — subaddresses (`user+tag@domain.com`) inherit the base verification.
+# 3. Handoff queue
+# Send: "I want to talk to a person"
+# Expect: tool_use {request_agent}, handoff frame with REF-XXXXX, then verify in DynamoDB:
+aws dynamodb query \
+  --profile <your-profile> --region us-west-2 \
+  --table-name riverside-tax-refund-v2-chat-sessions \
+  --index-name handoffIx \
+  --key-condition-expression "gsi1pk = :p" \
+  --expression-attribute-values '{":p":{"S":"HANDOFF_PENDING"}}'
+```
 
 ## Troubleshooting
 
-### Issue: CDK Deployment Fails
+**`SSM PutParameter failed` during deploy.** The system prompt is over 4 KB and the parameter tier is set to `Standard`. Either trim the prompt below 4096 characters or change `bot/infrastructure.py`'s `prompt_param` tier to `ssm.ParameterTier.ADVANCED` (already the default).
 
-**Symptom**: CloudFormation stack creation fails
+**`pip install ... returned non-zero exit status 1` during synth.** A package in `bot/runtime/requirements.txt` or `bot/chat_handler/requirements.txt` doesn't have a manylinux wheel for the version pinned. Bump the package version. The `_LocalBundling` class enforces `--platform manylinux2014_x86_64 --only-binary=:all:` so the bundle works on Lambda.
 
-**Solutions**:
-1. Check IAM permissions: `aws iam get-user`
-2. Verify region is correct: `aws configure get region`
-3. Check for existing resources with same name: `aws s3 ls | grep riverside`
-4. Review CloudFormation events: `aws cloudformation describe-stack-events --stack-name <stack-name>`
+**`Bedrock 403 AccessDeniedException`.** Bedrock model access not enabled in your account/region. Console → Bedrock → Model access → request access to `anthropic.claude-haiku-4-5`. Approval is instant.
 
-### Issue: Post-Deploy Script Fails at "Uploading Refund Data"
+**WebSocket connects but `sendMessage` errors with `Sorry, something went wrong`.** Check `aws logs tail /aws/lambda/<project>-chat-handler --follow`. Most common cause: the Lambda IAM role lacks `bedrock:InvokeModel*` for the inference profile, or the SSM parameter is missing.
 
-**Symptom**: `refunds_demo_balanced.jsonl not found`
+**Admin dashboard 404s.** CodeBuild build failed. Check `https://<region>.console.aws.amazon.com/codesuite/codebuild/projects/<AdminBuildProjectName>`. Most common cause: `admin_dashboard.github_branch` in `config.yaml` doesn't exist on the remote, or the GitHub repo is private and CodeBuild lacks access.
 
-**Solutions**:
-1. Verify file exists: `ls -la refunds_demo_balanced.jsonl`
-2. If missing, create demo data: See [Data Format Documentation](README.md#data-format)
-3. Ensure file is in the same directory as `post_deploy.py`
+**Stack stuck in `UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS`.** A `BucketDeployment` resource can't delete its bucket contents on rollback (typically because the source-asset includes large directories like `.venv`). Manually empty the bucket via the console, then retry `cdk deploy`.
 
-### Issue: Post-Deploy Script Fails at "Creating AI Prompt"
-
-**Symptom**: Q in Connect API error
-
-**Solutions**:
-1. Verify Q in Connect is enabled in your region
-2. Check IAM permissions for `qconnect:*` actions
-3. Verify `config.yaml` has valid YAML syntax: `python3 -c "import yaml; yaml.safe_load(open('config.yaml'))"`
-4. Check CloudWatch logs: `aws logs tail /aws/lambda/post-deploy --follow`
-
-### Issue: Post-Deploy Script Fails at "Syncing Knowledge Base"
-
-**Symptom**: Playwright timeout or URL fetch error
-
-**Solutions**:
-1. Verify seed URLs are accessible: `curl -I https://auditorcontroller.org/`
-2. Check network connectivity from Lambda environment
-3. Increase timeout in `post_deploy.py` (line 476): `timeout=30000` → `timeout=60000`
-4. Reduce number of seed URLs in `config.yaml` to test with fewer pages
-5. Check CloudWatch logs for detailed error: `aws logs tail /aws/lambda/post-deploy --follow`
-
-### Issue: Lambda Function Returns "No Refunds Found"
-
-**Symptom**: Tax lookup always returns no matches
-
-**Solutions**:
-1. Verify refund data was uploaded: `aws s3 ls s3://<bucket>/refunds_demo_balanced.jsonl`
-2. Check data file format: `aws s3 cp s3://<bucket>/refunds_demo_balanced.jsonl - | head -1 | jq .`
-3. Verify claim deadlines in data are in the future: `aws s3 cp s3://<bucket>/refunds_demo_balanced.jsonl - | jq '.claim_deadline' | head -5`
-4. Check Lambda logs: `aws logs tail /aws/lambda/riverside-tax-lookup --follow`
-
-### Issue: Amazon Connect Contact Flow Fails
-
-**Symptom**: Calls drop or flow doesn't execute
-
-**Solutions**:
-1. Verify contact flow exists: `aws connect list-contact-flows --instance-id <instance-id>`
-2. Check flow configuration: `aws connect describe-contact-flow --instance-id <instance-id> --contact-flow-id <flow-id>`
-3. Verify Lambda permissions: `aws lambda get-policy --function-name riverside-tax-lookup`
-4. Check CloudWatch logs: `aws logs tail /aws/connect/TaxRefundFlow --follow`
-
-### Issue: SMS Not Sending
-
-**Symptom**: SMS tool returns error
-
-**Solutions**:
-1. Verify SNS topic exists: `aws sns list-topics | grep riverside`
-2. Check SNS permissions: `aws sns get-topic-attributes --topic-arn <topic-arn> --attribute-name Policy`
-3. Verify phone number format is E.164: `+1` followed by 10 digits
-4. Check CloudWatch logs: `aws logs tail /aws/lambda/riverside-tax-lookup --follow`
-5. Verify toll-free number is registered and active in Amazon Connect
-
-### Issue: Admin Dashboard Won't Load
-
-**Symptom**: CloudFront URL shows 403 or "Access Denied"
-
-**Solutions**:
-1. Check the latest CodeBuild run finished successfully in the AWS CodeBuild console
-2. Confirm the S3 admin bucket is non-empty: `aws s3 ls s3://<admin-bucket>/`
-3. Verify CloudFront is done propagating (up to 10 min on first create)
-4. Check browser console for CORS errors — the Lambda's `ALLOWED_ORIGINS` env var must include the CloudFront domain
-
-### Issue: Notification Emails Don't Arrive
-
-**Symptom**: Submissions come in but no email to the admin inbox
-
-**Solutions**:
-1. Confirm `notifications.mode: ses` in `config.yaml` (default is `ses`)
-2. Check the notification Lambda logs: `aws logs tail /aws/lambda/riverside-tax-refund-v2-notification-handler --follow`
-3. If logs show `SES rejected (MessageRejected)`, verify the sender identity and all recipient identities in the SES console. In sandbox mode both sender and recipients must be verified.
-4. Check spam — Cognito's default email provider (used for admin invitations) often lands in spam.
-
-## Recovery Procedures
-
-### Rollback to Previous Version
-
-If deployment fails and you need to rollback:
+## Tearing down
 
 ```bash
-# List previous stack versions
-aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE
-
-# Rollback to previous version
-aws cloudformation cancel-update-stack --stack-name riverside-tax-refund
+cdk destroy --require-approval never
 ```
 
-### Reset Knowledge Base
+S3 buckets with `auto_delete_objects=True` empty themselves. DynamoDB tables and CloudFront distributions delete in the foreground. The Cognito user pool is destroyed. Bedrock model access in the account is unaffected — that's an account-level setting.
 
-To clear and rebuild the knowledge base:
-
-```bash
-# Delete existing knowledge base
-aws qconnect delete-knowledge-base --knowledge-base-id <kb-id>
-
-# Re-run post-deploy script
-python3 post_deploy.py
-```
-
-### Update Refund Data
-
-To upload new refund data without redeploying:
-
-```bash
-# Upload new data file
-aws s3 cp refunds_demo_balanced.jsonl s3://<bucket>/refunds_demo_balanced.jsonl
-
-# Lambda will automatically use new data on next invocation (cache expires)
-```
-
-### Update AI Prompt
-
-To update the AI orchestration prompt without redeploying:
-
-1. Edit `config.yaml` with new prompt text
-2. Run: `python3 post_deploy.py`
-3. The script will update the prompt in Q in Connect
-
-### Rebuild the Admin Dashboard
-
-`cdk deploy` auto-triggers a CodeBuild run on every deploy. To manually rebuild
-without a code change:
-
-```bash
-aws codebuild start-build --project-name <AdminBuildProjectName>
-```
-
-`AdminBuildProjectName` is in the CDK stack outputs.
-
-## Monitoring
-
-### CloudWatch Logs
-
-Monitor Lambda execution:
-
-```bash
-# Main lookup function
-aws logs tail /aws/lambda/riverside-tax-lookup --follow
-
-# Upload handler
-aws logs tail /aws/lambda/upload-handler --follow
-
-# Post-deploy script
-aws logs tail /aws/lambda/post-deploy --follow
-
-# Notification handler
-aws logs tail /aws/lambda/riverside-tax-refund-v2-notification-handler --follow
-```
-
-### CloudWatch Metrics
-
-Monitor key metrics:
-
-```bash
-# Lambda invocations
-aws cloudwatch get-metric-statistics \
-  --namespace AWS/Lambda \
-  --metric-name Invocations \
-  --dimensions Name=FunctionName,Value=riverside-tax-lookup \
-  --start-time 2024-01-01T00:00:00Z \
-  --end-time 2024-01-02T00:00:00Z \
-  --period 3600 \
-  --statistics Sum
-```
-
-### Amazon Connect Metrics
-
-Monitor contact center performance:
-
-1. Go to Amazon Connect Console
-2. Select your instance
-3. Go to **Metrics and quality** → **Real-time metrics**
-4. Monitor: Contacts in queue, Average handle time, Abandonment rate
-
-## Key Learnings from Q in Connect + MCP Integration
-
-These were discovered during initial integration work and are worth knowing
-before extending the bot side of the system.
-
-### AI Agent Type Must Be ORCHESTRATION
-
-The AI agent **must** be `ORCHESTRATION` type to use MCP tools. `SELF_SERVICE`
-agents do not support MCP tool configuration. The AWS CLI `create-ai-agent`
-command does **not** support creating ORCHESTRATION agents — the agent must be
-created in the Q in Connect console. boto3 **can** read and update an
-existing ORCHESTRATION agent's configuration (including the prompt reference)
-and version it via `create-ai-agent-version`; `post_deploy.py` uses boto3.
-
-### MCP Gateway Registration Is Manual
-
-The AgentCore MCP Gateway must be registered as a third-party application in
-the Connect console. There is no API or CloudFormation resource for this. The
-CDK stack creates the gateway, but the Connect registration is a manual step.
-
-### Agent Prompt Updates Are Automated
-
-`post_deploy.py` uses boto3 to update the agent's `orchestrationAIAgentConfiguration`
-with the latest prompt version. The AWS CLI cannot do this — it shows the
-orchestration config as `SDK_UNKNOWN_MEMBER` — but boto3 handles it natively.
-
-### CreateWisdomSession Block Configuration
-
-The contact flow's `CreateWisdomSession` block must include:
-
-```json
-{
-  "Parameters": {
-    "WisdomAssistantArn": "<assistant-arn>",
-    "OrchestrationAIAgentConfiguration": {
-      "AgentAssistanceAgentVersionArn": "<agent-version-arn>"
-    }
-  },
-  "Type": "CreateWisdomSession"
-}
-```
-
-Using a `SELF_SERVICE` agent ARN in `AgentAssistanceAgentVersionArn` causes an
-error. Only `ORCHESTRATION` agent ARNs work here.
-
-### Lex Session Attribute
-
-The Lex bot block must also pass the agent ARN via session attribute:
-
-```json
-"LexSessionAttributes": {
-  "x-amz-lex:q-in-connect:ai-agent-arn": "<agent-version-arn>"
-}
-```
-
-Both the CreateWisdomSession config AND the Lex session attribute are required
-for the ORCHESTRATION agent to invoke MCP tools.
-
-### Agent Versioning Matters
-
-After configuring tools on the agent in the console, you must create a new
-version. `post_deploy.py` handles this automatically — it updates the prompt
-reference and creates a new version each run.
-
-### MCP Gateway Tool Naming
-
-The gateway exposes tools with a prefixed name:
-`<target-name>___<tool-name>` (e.g., `tax-lookup-target___tax_lookup`). Q in
-Connect handles this mapping automatically when the tool is added to the
-agent via the console.
-
-## Support
-
-For issues not covered in this guide:
-
-1. Check CloudWatch Logs for detailed error messages
-2. Review AWS service quotas: `aws service-quotas list-service-quotas --service-code connect`
-3. Contact AWS Support or your AWS account team
-4. Review the main [README.md](README.md) for additional context
+The data bucket's `refunds_demo_balanced.jsonl` is removed; the SES verified identity remains until manually deleted.
