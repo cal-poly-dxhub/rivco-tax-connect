@@ -13,9 +13,11 @@ cognito = boto3.client("cognito-idp")
 BUCKET = os.environ["UPLOAD_BUCKET"]
 TABLE_NAME = os.environ.get("TABLE_NAME", "")
 ADMIN_CONFIG_TABLE = os.environ.get("ADMIN_CONFIG_TABLE", "")
+CHAT_TABLE_NAME = os.environ.get("CHAT_TABLE", "")
 USER_POOL_ID = os.environ.get("USER_POOL_ID", "")
 table = dynamodb.Table(TABLE_NAME) if TABLE_NAME else None
 admin_table = dynamodb.Table(ADMIN_CONFIG_TABLE) if ADMIN_CONFIG_TABLE else None
+chat_table = dynamodb.Table(CHAT_TABLE_NAME) if CHAT_TABLE_NAME else None
 ALLOWED_TYPES = {
     "application/pdf",
     "image/jpeg",
@@ -833,6 +835,16 @@ def _handle_admin(event: dict[str, Any], headers: dict[str, str]) -> dict[str, A
             return _admin_get_form_schema(parts[1], headers)
         if len(parts) == 2 and method == "PUT":
             return _admin_put_form_schema(event, parts[1], headers)
+    # /admin/chat-sessions
+    if parts[:1] == ["chat-sessions"]:
+        if len(parts) == 1 and method == "GET":
+            return _admin_list_chat_sessions(event, headers)
+        if len(parts) == 2 and method == "GET":
+            return _admin_get_chat_session(parts[1], headers)
+        if len(parts) == 3 and parts[2] == "resolve" and method == "POST":
+            return _admin_resolve_chat_handoff(parts[1], headers)
+        if len(parts) == 2 and method == "DELETE":
+            return _admin_delete_chat_session(parts[1], headers)
 
     return _err(404, f"Unknown admin route: {method} {path}", headers)
 
@@ -1458,3 +1470,128 @@ def _handle_public_doc_requirements(event: dict[str, Any], headers: dict[str, st
         "docs": list(docs_by_id.values()),
         "either_of": either_of_all,
     })}
+
+
+# ── Chat sessions (super-admin: read transcripts and resolve handoffs) ──
+
+_SAFE_SESSION_ID = re.compile(r'^[a-z0-9]{8,32}$')
+
+
+def _admin_list_chat_sessions(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    """List pending agent handoffs by querying the handoffIx GSI.
+
+    Pass ?status=all to also include resolved handoffs (for audit). Default
+    is pending-only — that's what the admin queue page wants.
+    """
+    if not chat_table:
+        return _err(500, "Chat backend not configured", headers)
+    qs = event.get("queryStringParameters") or {}
+    status = (qs.get("status") or "pending").lower()
+    out: list[dict[str, Any]] = []
+    if status == "pending":
+        resp = chat_table.query(
+            IndexName="handoffIx",
+            KeyConditionExpression="gsi1pk = :p",
+            ExpressionAttributeValues={":p": "HANDOFF_PENDING"},
+            ScanIndexForward=False,  # newest first
+        )
+        items = resp.get("Items", [])
+    else:
+        # Scan SK=HANDOFF rows (small volume; fine without a second GSI)
+        items = _scan_all(
+            chat_table,
+            FilterExpression="sk = :h",
+            ExpressionAttributeValues={":h": "HANDOFF"},
+        )
+    for it in items:
+        sid = it["pk"].split("#", 1)[1]
+        out.append({
+            "sessionId": sid,
+            "refNumber": it.get("refNumber", ""),
+            "reason": it.get("reason", ""),
+            "requestedAt": it.get("requestedAt", ""),
+            "resolved": it.get("gsi1pk") != "HANDOFF_PENDING",
+        })
+    return {"statusCode": 200, "headers": headers,
+            "body": json.dumps({"sessions": out})}
+
+
+def _admin_get_chat_session(session_id: str, headers: dict[str, str]) -> dict[str, Any]:
+    """Return the full session: meta, every message, and the handoff row if any."""
+    if not chat_table:
+        return _err(500, "Chat backend not configured", headers)
+    if not _SAFE_SESSION_ID.match(session_id):
+        return _err(400, "Invalid session id", headers)
+    resp = chat_table.query(
+        KeyConditionExpression="pk = :p",
+        ExpressionAttributeValues={":p": f"SESSION#{session_id}"},
+    )
+    meta: dict[str, Any] = {}
+    handoff: dict[str, Any] = {}
+    messages: list[dict[str, Any]] = []
+    for it in resp.get("Items", []):
+        sk = it["sk"]
+        if sk == "META":
+            meta = {
+                "sessionId": session_id,
+                "startedAt": it.get("startedAt", ""),
+                "disconnectedAt": it.get("disconnectedAt", ""),
+                "status": it.get("status", ""),
+            }
+        elif sk == "HANDOFF":
+            handoff = {
+                "refNumber": it.get("refNumber", ""),
+                "reason": it.get("reason", ""),
+                "requestedAt": it.get("requestedAt", ""),
+                "resolved": it.get("gsi1pk") != "HANDOFF_PENDING",
+            }
+        elif sk.startswith("MSG#"):
+            messages.append({
+                "timestamp": sk[4:],
+                "role": it.get("role", ""),
+                "content": it.get("content", ""),
+            })
+    if not meta:
+        return _err(404, "Session not found", headers)
+    messages.sort(key=lambda m: m["timestamp"])
+    return {"statusCode": 200, "headers": headers,
+            "body": json.dumps({"meta": meta, "handoff": handoff, "messages": messages})}
+
+
+def _admin_resolve_chat_handoff(session_id: str, headers: dict[str, str]) -> dict[str, Any]:
+    """Mark a handoff handled — clear the GSI keys so it drops off the pending list."""
+    if not chat_table:
+        return _err(500, "Chat backend not configured", headers)
+    if not _SAFE_SESSION_ID.match(session_id):
+        return _err(400, "Invalid session id", headers)
+    try:
+        chat_table.update_item(
+            Key={"pk": f"SESSION#{session_id}", "sk": "HANDOFF"},
+            UpdateExpression="REMOVE gsi1pk, gsi1sk SET resolvedAt = :r",
+            ExpressionAttributeValues={":r": _now_iso()},
+            ConditionExpression="attribute_exists(pk)",
+        )
+    except chat_table.meta.client.exceptions.ConditionalCheckFailedException:
+        return _err(404, "Handoff not found", headers)
+    return {"statusCode": 200, "headers": headers,
+            "body": json.dumps({"sessionId": session_id, "resolved": True})}
+
+
+def _admin_delete_chat_session(session_id: str, headers: dict[str, str]) -> dict[str, Any]:
+    """Wipe a chat session — META, MSG rows, HANDOFF row."""
+    if not chat_table:
+        return _err(500, "Chat backend not configured", headers)
+    if not _SAFE_SESSION_ID.match(session_id):
+        return _err(400, "Invalid session id", headers)
+    resp = chat_table.query(
+        KeyConditionExpression="pk = :p",
+        ExpressionAttributeValues={":p": f"SESSION#{session_id}"},
+    )
+    items = resp.get("Items", [])
+    if not items:
+        return _err(404, "Session not found", headers)
+    with chat_table.batch_writer() as batch:
+        for it in items:
+            batch.delete_item(Key={"pk": it["pk"], "sk": it["sk"]})
+    return {"statusCode": 200, "headers": headers,
+            "body": json.dumps({"sessionId": session_id, "deleted": True})}
