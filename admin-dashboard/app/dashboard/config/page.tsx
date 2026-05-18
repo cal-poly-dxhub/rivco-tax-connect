@@ -17,7 +17,7 @@ import {
 import { currentSession, signOut } from "@/lib/cognito"
 import { api } from "@/lib/api"
 import { ThemeToggle } from "@/components/theme-toggle"
-import { AdminConfig, Department, AdminUser, REFUND_TYPES, DocReq, DocReqsResponse } from "@/lib/types"
+import { AdminConfig, Department, AdminUser, REFUND_TYPES, DocReq, DocReqsResponse, FormField, FormSchema, FormSchemasResponse } from "@/lib/types"
 
 export default function AdminConfigPage() {
   const router = useRouter()
@@ -74,6 +74,7 @@ export default function AdminConfigPage() {
               <TabsTrigger value="users">Users</TabsTrigger>
               <TabsTrigger value="labels">Refund-type labels</TabsTrigger>
               <TabsTrigger value="docs">Document requirements</TabsTrigger>
+              <TabsTrigger value="schemas">Form schemas</TabsTrigger>
             </TabsList>
             <TabsContent value="departments">
               <DepartmentsTab cfg={cfg} reload={reload} />
@@ -86,6 +87,9 @@ export default function AdminConfigPage() {
             </TabsContent>
             <TabsContent value="docs">
               <DocsTab />
+            </TabsContent>
+            <TabsContent value="schemas">
+              <SchemasTab />
             </TabsContent>
           </Tabs>
         )}
@@ -505,4 +509,194 @@ function DocTypeEditor({
       {err && <p className="text-destructive text-sm">{err}</p>}
     </div>
   )
+}
+
+/* ─── Form schemas ─── */
+
+const FIELD_TYPES = ["text", "email", "tel", "date", "number", "address", "textarea", "checkbox"] as const
+
+function SchemasTab() {
+  const [schemas, setSchemas] = useState<FormSchemasResponse | null>(null)
+  const [selected, setSelected] = useState<(typeof REFUND_TYPES)[number]>(REFUND_TYPES[0])
+  const [editing, setEditing] = useState<FormSchema | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState("")
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await api("/admin/form-schemas")
+        if (!res.ok) throw new Error(`/admin/form-schemas ${res.status}`)
+        setSchemas(await res.json())
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+      }
+    })()
+  }, [])
+  useEffect(() => {
+    if (schemas && schemas[selected]) {
+      setEditing(deepClone(schemas[selected]))
+    }
+  }, [selected, schemas])
+
+  async function load() {
+    setError("")
+    try {
+      const res = await api("/admin/form-schemas")
+      if (!res.ok) throw new Error(`/admin/form-schemas ${res.status}`)
+      const data: FormSchemasResponse = await res.json()
+      setSchemas(data)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  async function save() {
+    if (!editing) return
+    setSaving(true); setError("")
+    try {
+      const res = await api(`/admin/form-schemas/${selected}`, {
+        method: "PUT",
+        body: JSON.stringify({ title: editing.title, fields: editing.fields }),
+      })
+      if (!res.ok) throw new Error((await res.json()).error || `${res.status}`)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function updateField(i: number, patch: Partial<FormField>) {
+    if (!editing) return
+    const next = { ...editing, fields: editing.fields.map((f, idx) => idx === i ? { ...f, ...patch } : f) }
+    setEditing(next)
+  }
+  function removeField(i: number) {
+    if (!editing) return
+    setEditing({ ...editing, fields: editing.fields.filter((_, idx) => idx !== i) })
+  }
+  function addField() {
+    if (!editing) return
+    setEditing({
+      ...editing,
+      fields: [...editing.fields, { id: "", label: "", type: "text", required: false, section: "common" }],
+    })
+  }
+  function moveField(i: number, dir: -1 | 1) {
+    if (!editing) return
+    const j = i + dir
+    if (j < 0 || j >= editing.fields.length) return
+    const next = [...editing.fields]
+    ;[next[i], next[j]] = [next[j], next[i]]
+    setEditing({ ...editing, fields: next })
+  }
+
+  if (!schemas || !editing) {
+    return <p className="text-sm text-muted-foreground pt-4">{error || "Loading…"}</p>
+  }
+
+  const sectionOptions = ["common", ...REFUND_TYPES]
+
+  return (
+    <div className="flex flex-col gap-4 pt-4">
+      <div className="flex items-center gap-3">
+        <Label>Refund type</Label>
+        <select
+          value={selected}
+          onChange={(e) => setSelected(e.target.value as (typeof REFUND_TYPES)[number])}
+          className="border rounded px-2 py-1 text-sm bg-background"
+        >
+          {REFUND_TYPES.map((rt) => <option key={rt} value={rt}>{rt}</option>)}
+        </select>
+        <Button onClick={save} disabled={saving}>{saving ? "Saving…" : "Save schema"}</Button>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="schema-title">Form title</Label>
+        <Input
+          id="schema-title"
+          value={editing.title}
+          onChange={(e) => setEditing({ ...editing, title: e.target.value })}
+        />
+      </div>
+
+      <div className="border rounded-md p-3">
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-sm font-medium">Fields ({editing.fields.length})</h3>
+          <Button size="sm" variant="outline" onClick={addField}>+ Add field</Button>
+        </div>
+        <p className="text-xs text-muted-foreground mb-3">
+          Fields with the same <code>id</code> across refund types are deduplicated on the unified claimant form.
+          Use <code>section = common</code> for fields every claim needs (name, address, contact).
+        </p>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-10"></TableHead>
+              <TableHead>ID</TableHead>
+              <TableHead>Label</TableHead>
+              <TableHead className="w-28">Type</TableHead>
+              <TableHead className="w-28">Section</TableHead>
+              <TableHead className="w-20">Required</TableHead>
+              <TableHead className="w-12"></TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {editing.fields.map((f, i) => (
+              <TableRow key={f.id || `new-${i}`}>
+                <TableCell>
+                  <div className="flex flex-col">
+                    <button className="text-xs text-muted-foreground hover:text-foreground" onClick={() => moveField(i, -1)} disabled={i === 0}>↑</button>
+                    <button className="text-xs text-muted-foreground hover:text-foreground" onClick={() => moveField(i, 1)} disabled={i === editing.fields.length - 1}>↓</button>
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <Input value={f.id} onChange={(e) => updateField(i, { id: e.target.value })} placeholder="warrant_number" />
+                </TableCell>
+                <TableCell>
+                  <Input value={f.label} onChange={(e) => updateField(i, { label: e.target.value })} placeholder="Warrant Number" />
+                </TableCell>
+                <TableCell>
+                  <select
+                    value={f.type}
+                    onChange={(e) => updateField(i, { type: e.target.value })}
+                    className="w-full border rounded px-1 py-1 text-sm bg-background"
+                  >
+                    {FIELD_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </TableCell>
+                <TableCell>
+                  <select
+                    value={f.section}
+                    onChange={(e) => updateField(i, { section: e.target.value })}
+                    className="w-full border rounded px-1 py-1 text-sm bg-background"
+                  >
+                    {sectionOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </TableCell>
+                <TableCell className="text-center">
+                  <input
+                    type="checkbox"
+                    checked={f.required}
+                    onChange={(e) => updateField(i, { required: e.target.checked })}
+                  />
+                </TableCell>
+                <TableCell>
+                  <Button size="sm" variant="ghost" onClick={() => removeField(i)}>✕</Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+
+      {error && <p className="text-destructive text-sm">{error}</p>}
+    </div>
+  )
+}
+
+function deepClone<T>(x: T): T {
+  return JSON.parse(JSON.stringify(x))
 }

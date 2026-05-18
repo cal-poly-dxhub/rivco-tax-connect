@@ -75,6 +75,21 @@ export const STATUSES: StatusValue[] = [
 
 export const REFUND_TYPES = ["STALE_WARRANT", "PAYROLL", "PROPERTY_TAX"] as const
 
+export type FormField = {
+  id: string
+  label: string
+  type: string
+  required: boolean
+  section: string
+}
+
+export type FormSchema = {
+  title: string
+  fields: FormField[]
+}
+
+export type FormSchemasResponse = Record<string, FormSchema>
+
 export function labelFor(type: string, labels: Record<string, string>) {
   return labels[type] || type.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())
 }

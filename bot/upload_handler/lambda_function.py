@@ -352,6 +352,8 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return _handle_audit(event, headers)
     if resource == "/package" and method == "GET":
         return _handle_package(event, headers)
+    if resource == "/form-schemas" and method == "GET":
+        return _handle_public_form_schemas(event, headers)
     if resource == "/status" and method == "GET":
         return _handle_status(event, headers)
     if resource == "/upload" and method == "POST":
@@ -802,6 +804,14 @@ def _handle_admin(event: dict[str, Any], headers: dict[str, str]) -> dict[str, A
             return _admin_list_doc_requirements(headers)
         if len(parts) == 2 and method == "PUT":
             return _admin_put_doc_requirements(event, parts[1], headers)
+    # /admin/form-schemas
+    if parts[:1] == ["form-schemas"]:
+        if len(parts) == 1 and method == "GET":
+            return _admin_list_form_schemas(headers)
+        if len(parts) == 2 and method == "GET":
+            return _admin_get_form_schema(parts[1], headers)
+        if len(parts) == 2 and method == "PUT":
+            return _admin_put_form_schema(event, parts[1], headers)
 
     return _err(404, f"Unknown admin route: {method} {path}", headers)
 
@@ -1134,3 +1144,196 @@ def _admin_put_doc_requirements(event: dict[str, Any], refund_type: str, headers
     })
     return {"statusCode": 200, "headers": headers,
             "body": json.dumps({"refund_type": refund_type, "docs": normalized_docs, "either_of": either_of})}
+
+# ── Form schemas (unified claim form) ─────────────────────
+
+# Default field schemas per refund type. Used as the seed when the
+# admin-config table has no FORMSCHEMA#<type> entry yet. Super-admin can
+# override via the dashboard.
+#
+# Field shape:
+#   id         — stable identifier; shared across refund types by matching id
+#   label      — display label
+#   type       — text | email | tel | date | number | address | textarea | checkbox
+#   required   — whether the unified form must collect it
+#   section    — "common" (always shown) or a refund-type-specific section key
+#
+# The unified form dedupes by `id`: if two refund types both define
+# {"id": "name", ...}, the claimant only fills it once.
+_DEFAULT_FORM_SCHEMAS: dict[str, dict[str, Any]] = {
+    "STALE_WARRANT": {
+        "title": "Affidavit for the Replacement of Stale-Dated Warrant (AP-13)",
+        "fields": [
+            {"id": "name", "label": "Claimant Name", "type": "text", "required": True, "section": "common"},
+            {"id": "address", "label": "Mailing Address", "type": "address", "required": True, "section": "common"},
+            {"id": "email", "label": "Email Address", "type": "email", "required": True, "section": "common"},
+            {"id": "phone", "label": "Phone Number", "type": "tel", "required": True, "section": "common"},
+            {"id": "warrant_number", "label": "Warrant Number", "type": "text", "required": True, "section": "STALE_WARRANT"},
+            {"id": "warrant_amount", "label": "Warrant Amount", "type": "number", "required": True, "section": "STALE_WARRANT"},
+            {"id": "warrant_date", "label": "Warrant Date", "type": "date", "required": False, "section": "STALE_WARRANT"},
+            {"id": "business_name", "label": "Business Claimant Name & Title", "type": "text", "required": False, "section": "STALE_WARRANT"},
+            {"id": "business_unit", "label": "Business Unit", "type": "text", "required": False, "section": "STALE_WARRANT"},
+            {"id": "is_incorporated", "label": "Is the claimant an incorporated entity?", "type": "checkbox", "required": False, "section": "STALE_WARRANT"},
+            {"id": "is_owner", "label": "Is the claimant the original payee?", "type": "checkbox", "required": False, "section": "STALE_WARRANT"},
+        ],
+    },
+    "PAYROLL": {
+        "title": "Affidavit for the Replacement of Stale-Dated Payroll Warrant (AP-13)",
+        "fields": [
+            {"id": "name", "label": "Claimant Name", "type": "text", "required": True, "section": "common"},
+            {"id": "address", "label": "Mailing Address", "type": "address", "required": True, "section": "common"},
+            {"id": "email", "label": "Email Address", "type": "email", "required": True, "section": "common"},
+            {"id": "phone", "label": "Phone Number", "type": "tel", "required": True, "section": "common"},
+            {"id": "warrant_number", "label": "Warrant Number", "type": "text", "required": True, "section": "PAYROLL"},
+            {"id": "warrant_amount", "label": "Warrant Amount", "type": "number", "required": True, "section": "PAYROLL"},
+            {"id": "warrant_date", "label": "Warrant Date", "type": "date", "required": False, "section": "PAYROLL"},
+            {"id": "business_unit", "label": "Business Unit", "type": "text", "required": False, "section": "PAYROLL"},
+        ],
+    },
+    "PROPERTY_TAX": {
+        "title": "Property Tax Unclaimed Refund Claim",
+        "fields": [
+            {"id": "name", "label": "Claimant Name", "type": "text", "required": True, "section": "common"},
+            {"id": "address", "label": "Mailing Address", "type": "address", "required": True, "section": "common"},
+            {"id": "email", "label": "Email Address", "type": "email", "required": True, "section": "common"},
+            {"id": "phone", "label": "Phone Number", "type": "tel", "required": True, "section": "common"},
+            {"id": "company", "label": "Company (if applicable)", "type": "text", "required": False, "section": "PROPERTY_TAX"},
+            {"id": "title", "label": "Title (if representing a business)", "type": "text", "required": False, "section": "PROPERTY_TAX"},
+            {"id": "assessment_number", "label": "Assessment Number", "type": "text", "required": True, "section": "PROPERTY_TAX"},
+            {"id": "tax_year", "label": "Tax Year", "type": "text", "required": True, "section": "PROPERTY_TAX"},
+            {"id": "refund_amount", "label": "Refund Amount", "type": "number", "required": True, "section": "PROPERTY_TAX"},
+            {"id": "how_heard_contact", "label": "Heard via direct contact", "type": "checkbox", "required": False, "section": "PROPERTY_TAX"},
+            {"id": "how_heard_website", "label": "Heard via county website", "type": "checkbox", "required": False, "section": "PROPERTY_TAX"},
+            {"id": "how_heard_newspaper", "label": "Heard via newspaper", "type": "checkbox", "required": False, "section": "PROPERTY_TAX"},
+            {"id": "how_heard_other", "label": "Heard via other source", "type": "checkbox", "required": False, "section": "PROPERTY_TAX"},
+            {"id": "how_heard_other_text", "label": "Other source (describe)", "type": "text", "required": False, "section": "PROPERTY_TAX"},
+        ],
+    },
+}
+
+
+def _get_form_schema(refund_type: str) -> dict[str, Any]:
+    """Return the form schema for a refund type, seeded from defaults if absent."""
+    default = _DEFAULT_FORM_SCHEMAS.get(refund_type, {"title": refund_type, "fields": []})
+    if not admin_table:
+        return default
+    try:
+        resp = admin_table.get_item(Key={"pk": f"FORMSCHEMA#{refund_type}"})
+    except Exception:  # noqa: BLE001
+        return default
+    item = resp.get("Item")
+    if not item:
+        return default
+    return {
+        "title": item.get("title") or default.get("title") or refund_type,
+        "fields": item.get("fields") or default.get("fields") or [],
+    }
+
+
+def _admin_list_form_schemas(headers: dict[str, str]) -> dict[str, Any]:
+    """Return schemas for every known refund type."""
+    out = {rt: _get_form_schema(rt) for rt in _DEFAULT_FORM_SCHEMAS.keys()}
+    return {"statusCode": 200, "headers": headers, "body": json.dumps(out)}
+
+
+def _admin_get_form_schema(refund_type: str, headers: dict[str, str]) -> dict[str, Any]:
+    refund_type = refund_type.upper()
+    if refund_type not in _DEFAULT_FORM_SCHEMAS:
+        return _err(400, "Unknown refund type", headers)
+    return {"statusCode": 200, "headers": headers,
+            "body": json.dumps(_get_form_schema(refund_type))}
+
+
+def _admin_put_form_schema(event: dict[str, Any], refund_type: str, headers: dict[str, str]) -> dict[str, Any]:
+    refund_type = refund_type.upper()
+    if refund_type not in _DEFAULT_FORM_SCHEMAS:
+        return _err(400, "Unknown refund type", headers)
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except json.JSONDecodeError:
+        return _err(400, "Invalid JSON", headers)
+
+    fields = body.get("fields")
+    if not isinstance(fields, list):
+        return _err(400, "fields must be a list", headers)
+    valid_field_types = {"text", "email", "tel", "date", "number", "address", "textarea", "checkbox"}
+    normalized = []
+    seen_ids: set[str] = set()
+    for f in fields:
+        if not isinstance(f, dict) or not f.get("id"):
+            return _err(400, "each field requires an id", headers)
+        fid = str(f["id"]).strip()
+        if fid in seen_ids:
+            return _err(400, f"duplicate field id: {fid}", headers)
+        seen_ids.add(fid)
+        field_type = str(f.get("type") or "text")
+        if field_type not in valid_field_types:
+            return _err(400, f"invalid field type '{field_type}' for field '{fid}'. Must be one of: {', '.join(sorted(valid_field_types))}", headers)
+        normalized.append({
+            "id": fid,
+            "label": str(f.get("label") or fid),
+            "type": field_type,
+            "required": bool(f.get("required", False)),
+            "section": str(f.get("section") or "common"),
+        })
+
+    raw_title = body.get("title")
+    if raw_title is not None and not isinstance(raw_title, str):
+        return _err(400, "title must be a string", headers)
+    title = (raw_title or _DEFAULT_FORM_SCHEMAS[refund_type]["title"]).strip()
+
+    admin_table.put_item(Item={
+        "pk": f"FORMSCHEMA#{refund_type}",
+        "refund_type": refund_type,
+        "title": title,
+        "fields": normalized,
+        "updatedAt": _now_iso(),
+    })
+    return {"statusCode": 200, "headers": headers,
+            "body": json.dumps({"refund_type": refund_type, "title": title, "fields": normalized})}
+
+
+def _handle_public_form_schemas(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    """Return form schemas for the requested refund types.
+
+    Public: claimants access this before authentication. Accepts
+    ?types=PAYROLL,STALE_WARRANT and returns each schema plus a merged view
+    for the unified form.
+    """
+    qs = event.get("queryStringParameters") or {}
+    raw = (qs.get("types") or "").strip()
+    if not raw:
+        return _err(400, "types query parameter required", headers)
+    requested = [t.strip().upper() for t in raw.split(",") if t.strip()]
+    invalid = [t for t in requested if t not in _DEFAULT_FORM_SCHEMAS]
+    if invalid:
+        return _err(400, f"Unknown refund types: {', '.join(invalid)}", headers)
+
+    schemas: dict[str, dict[str, Any]] = {}
+    merged_by_id: dict[str, dict[str, Any]] = {}
+    for rt in requested:
+        schema = _get_form_schema(rt)
+        schemas[rt] = schema
+        for f in schema.get("fields", []):
+            fid = f["id"]
+            if fid in merged_by_id:
+                # If another refund type needed the same field, carry forward
+                # `required=True` if any schema requires it.
+                if f.get("required"):
+                    merged_by_id[fid]["required"] = True
+                continue
+            merged_by_id[fid] = {**f}
+
+    # Preserve section ordering: common first, then per-refund-type sections
+    # in the order they were requested.
+    section_order = ["common"] + requested
+    merged_fields = sorted(
+        merged_by_id.values(),
+        key=lambda f: section_order.index(f.get("section", "common")) if f.get("section") in section_order else 999,
+    )
+
+    return {"statusCode": 200, "headers": headers, "body": json.dumps({
+        "refund_types": requested,
+        "schemas": schemas,
+        "merged_fields": merged_fields,
+    })}
