@@ -46,7 +46,7 @@ admin_dashboard:
   github_repo: rivco-tax-connect
   github_branch: feat/replace-connect
 
-# Bedrock Claude — drives the web chat agent. Replaces Lex+Connect+Q in Connect.
+# Bedrock Claude — drives the web chat agent.
 bedrock:
   # Inference profile ID (cross-region) for the chat model.
   model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0

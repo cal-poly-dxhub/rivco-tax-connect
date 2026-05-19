@@ -3,9 +3,6 @@
 Invoked synchronously by the chat handler when the model emits a `tax_lookup`
 tool call. Returns a JSON-shaped string (refund list + portal URL, or a
 disambiguation prompt, or a no-match message).
-
-This used to also serve Lex code hooks and Q in Connect MCP gateway calls.
-Both are gone; the only entry point is now `{"customer_name": "..."}`.
 """
 import json
 import logging

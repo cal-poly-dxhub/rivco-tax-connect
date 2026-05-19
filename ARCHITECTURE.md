@@ -134,7 +134,7 @@ sequenceDiagram
 
 **Why the address-quiz handoff (instead of giving them straight to the refund)?** Identity verification matters when the system reveals dollar amounts and warrant numbers. The decoy quiz uses the customer's real address as one of four streets and rejects anything else. The model is hard-prompted not to reveal refund details until the tool returns a `refunds` payload (post-verification), and not to fabricate URLs.
 
-**Why a reference-number agent handoff (instead of live transfer)?** Live transfer is what Connect did. Without Connect, the simplest equivalent is: bot generates `REF-XXXXX`, persists the transcript, tells the user to call (951) 955-3800 and quote it. The admin dashboard surfaces pending handoffs; staff pick them up async with full context.
+**Why a reference-number agent handoff (instead of live transfer)?** A web chat can't directly transfer a phone call, so the simplest equivalent is: bot generates `REF-XXXXX`, persists the transcript, tells the user to call (951) 955-3800 and quote it. The admin dashboard surfaces pending handoffs; staff pick them up async with full context.
 
 **Why drop the Bedrock Knowledge Base?** OpenSearch Serverless costs ~$700/mo to host roughly 12 small auditor-controller webpages. The FAQ content (deadlines, processing times) lives directly in the system prompt; for everything else the agent points the user to auditorcontroller.org or (951) 955-3800. Trade-off: no dynamic re-crawling, no citations.
 
