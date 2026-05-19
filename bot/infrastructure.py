@@ -64,7 +64,7 @@ def load_config():
     with open('config.yaml') as f:
         return yaml.safe_load(f)
 
-class NovaSonicConnectStack(Stack):
+class RiversideTaxRefundStack(Stack):
     def __init__(self, scope: Construct, id: str, **kwargs) -> None:
         super().__init__(scope, id, **kwargs)
 

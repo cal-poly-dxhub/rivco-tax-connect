@@ -132,17 +132,6 @@ If you see the error, check chat-handler CloudWatch logs for `Extra inputs are n
 6. Admin dashboard `/dashboard` should show the submission with status `uploaded`
 7. Click into it — see the AP-13 PDF preview filled with the claim data
 
-## Stack hygiene
-
-```bash
-# Confirm no Connect/Lex/Wisdom resources remain in the account
-aws connect list-instances --profile <profile> --region us-west-2 --query "InstanceSummaryList[?contains(InstanceAlias, 'riverside')]"
-aws lexv2-models list-bots --profile <profile> --region us-west-2 --query "botSummaries[?contains(botName, 'TaxRefund')]"
-aws wisdom list-assistants --profile <profile> --region us-west-2 --query "assistantSummaries[?contains(name, 'riverside')]"
-```
-
-All three should return empty arrays.
-
 ## Tearing down a test session
 
 ```bash
