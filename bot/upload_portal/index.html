@@ -439,6 +439,9 @@
             var presetAddress = params.get("address") || "";
             var presetAssessment = params.get("assessment") || "";
             var presetTaxYear = params.get("taxyear") || "";
+            // Confidence: 'high' | 'low' | '' — set by tax_lookup. Persisted on
+            // submission so the admin dashboard can flag low-confidence claims.
+            var presetConfidence = (params.get("confidence") || "").toLowerCase();
 
             var formSections = document.getElementById("formSections");
             var docTitle = document.getElementById("docTitle");
@@ -999,6 +1002,7 @@
                             name: name,
                             refundType: refundType,
                             files: filesToUpload,
+                            confidence: presetConfidence || undefined,
                         }),
                     });
                     var data = await res.json();
