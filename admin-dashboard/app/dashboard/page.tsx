@@ -220,7 +220,7 @@ export default function DashboardPage() {
                 <TableRow key={s.submissionId} className="cursor-pointer" onClick={() => setSelected(s)}>
                   <TableCell className="font-medium">{s.name}</TableCell>
                   <TableCell>
-                    {s.refundType.split(",").map((t) => (
+                    {Array.from(new Set(s.refundType.split(","))).map((t) => (
                       <Badge key={t} variant="secondary" className="mr-1">{labelFor(t, labels)}</Badge>
                     ))}
                   </TableCell>
@@ -306,7 +306,7 @@ function SubmissionDetail({ submission }: { submission: Submission }) {
         <aside className="flex flex-col gap-4 overflow-y-auto">
           <div>
             <p className="text-muted-foreground text-xs">ID: {submission.submissionId}</p>
-            <p className="text-muted-foreground text-xs">{submission.refundType}</p>
+            <p className="text-muted-foreground text-xs">{Array.from(new Set(submission.refundType.split(","))).join(", ")}</p>
           </div>
           <div>
             <p className="font-medium">Tasks</p>
@@ -336,7 +336,7 @@ function SubmissionDetail({ submission }: { submission: Submission }) {
                     onClick={() => setActive(f)}
                     className={`text-left w-full truncate ${active?.filename === f.filename ? "font-semibold text-foreground" : "text-blue-600 hover:underline"}`}
                   >
-                    📄 {f.filename}
+                    📄 {f.filename === "unified-form.json" ? "Filled claim form" : f.filename}
                   </button>
                 </li>
               ))}
@@ -393,7 +393,9 @@ function FileViewer({ file, submission }: { file: PackageFile; submission: Submi
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between border-b p-2 bg-background">
         <div className="flex items-center gap-2">
-          <span className="text-xs truncate">{file.filename}</span>
+          <span className="text-xs truncate">
+            {isUnifiedForm ? "Filled claim form" : file.filename}
+          </span>
           {isUnifiedForm && (
             <button
               onClick={() => setShowRaw(!showRaw)}
@@ -415,7 +417,7 @@ function FileViewer({ file, submission }: { file: PackageFile; submission: Submi
         {isUnifiedForm && !showRaw ? (
           <FilledFormViewer
             formDataUrl={file.downloadUrl}
-            refundTypes={submission.refundType.split(",")}
+            refundTypes={Array.from(new Set(submission.refundType.split(",")))}
           />
         ) : (
           <>
