@@ -222,6 +222,7 @@ function UsersTab({ cfg, reload }: { cfg: AdminConfig; reload: () => void }) {
             <TableHead>Username</TableHead>
             <TableHead>Email</TableHead>
             <TableHead>Groups</TableHead>
+            <TableHead>Notifications</TableHead>
             <TableHead></TableHead>
           </TableRow>
         </TableHeader>
@@ -232,6 +233,11 @@ function UsersTab({ cfg, reload }: { cfg: AdminConfig; reload: () => void }) {
               <TableCell>{u.email}</TableCell>
               <TableCell>
                 {u.groups.map((g) => <Badge key={g} variant="secondary" className="mr-1">{g}</Badge>)}
+              </TableCell>
+              <TableCell>
+                {u.notifyEmail
+                  ? <Badge variant="secondary">on</Badge>
+                  : <Badge variant="outline" className="text-muted-foreground">off</Badge>}
               </TableCell>
               <TableCell className="text-right">
                 <Button variant="ghost" size="sm" onClick={() => setEditing(u)}>Edit</Button>
@@ -252,6 +258,7 @@ function UserForm({
 }: { cfg: AdminConfig; existing?: AdminUser; onClose: () => void; onSaved: () => void }) {
   const [email, setEmail] = useState(existing?.email || "")
   const [groups, setGroups] = useState<string[]>(existing?.groups || [])
+  const [notifyEmail, setNotifyEmail] = useState(existing?.notifyEmail ?? true)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState("")
 
@@ -259,7 +266,7 @@ function UserForm({
 
   async function save() {
     setBusy(true); setErr("")
-    const body = existing ? { email, groups } : { email, groups }
+    const body = { email, groups, notifyEmail }
     const path = existing ? `/admin/users/${encodeURIComponent(existing.username)}` : "/admin/users"
     try {
       const res = await api(path, { method: existing ? "PATCH" : "POST", body: JSON.stringify(body) })
@@ -297,6 +304,17 @@ function UserForm({
                 {g}
               </label>
             ))}
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label>Notifications</Label>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={notifyEmail}
+                onChange={(e) => setNotifyEmail(e.target.checked)}
+              />
+              Receive email notifications for new submissions and review-ready alerts
+            </label>
           </div>
           {err && <p className="text-destructive text-sm">{err}</p>}
           {!existing && (

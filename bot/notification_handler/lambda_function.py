@@ -65,7 +65,18 @@ def _departments_for_types(refund_types: list[str]) -> list[str]:
     return sorted(depts)
 
 
+def _opted_out_emails() -> set[str]:
+    """Return the set of emails for users with notifyEmail=False in admin-config."""
+    resp = admin_table.scan(
+        FilterExpression="begins_with(pk, :p) AND notifyEmail = :f",
+        ExpressionAttributeValues={":p": "USER#", ":f": False},
+    )
+    return {u.get("email") for u in resp.get("Items", []) if u.get("email")}
+
+
 def _recipients_for_departments(dept_keys: list[str]) -> list[str]:
+    """Cognito users in admin-<dept> groups, minus anyone who opted out of email."""
+    opted_out = _opted_out_emails()
     emails: set[str] = set()
     for key in dept_keys:
         group = f"admin-{key}"
@@ -76,7 +87,7 @@ def _recipients_for_departments(dept_keys: list[str]) -> list[str]:
         for u in users.get("Users", []):
             attrs = {a["Name"]: a["Value"] for a in u.get("Attributes", [])}
             email = attrs.get("email")
-            if email:
+            if email and email not in opted_out:
                 emails.add(email)
     return sorted(emails)
 
@@ -101,11 +112,23 @@ def _send(recipients: list[str], subject: str, body_text: str):
             logger.info("Sent '%s' to %s", subject, to)
         except ClientError as e:
             code = e.response.get("Error", {}).get("Code", "")
-            # Fall back to logging when the sender isn't verified yet.
-            if code in ("MessageRejected", "MailFromDomainNotVerifiedException"):
-                logger.warning("SES rejected (likely unverified sender). Logging instead. to=%s subject=%s body=%s",
-                               to, subject, body_text)
+            msg = e.response.get("Error", {}).get("Message", "")
+            # Common silent-failure modes:
+            #   - MessageRejected: account is in SES sandbox (ProductionAccessEnabled=False)
+            #     and the recipient is not a verified identity. Request production
+            #     access in the SES console, or verify each recipient.
+            #   - MailFromDomainNotVerifiedException: sender domain not verified.
+            # We log loudly so the cause is obvious instead of swallowing the error.
+            if code == "MessageRejected" and "Email address is not verified" in msg:
+                logger.error("SES SANDBOX: recipient %s is not verified. "
+                             "Request production access in the SES console, or verify the recipient. "
+                             "subject=%s", to, subject)
+            elif code in ("MessageRejected", "MailFromDomainNotVerifiedException"):
+                logger.error("SES rejected send. code=%s msg=%s to=%s subject=%s",
+                             code, msg, to, subject)
             else:
+                logger.error("SES send failed. code=%s msg=%s to=%s subject=%s",
+                             code, msg, to, subject)
                 raise
 
 
