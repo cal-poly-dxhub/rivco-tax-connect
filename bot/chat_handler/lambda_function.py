@@ -35,6 +35,8 @@ TAX_LOOKUP_FN = os.environ["TAX_LOOKUP_FN"]
 WS_ENDPOINT = os.environ["WS_ENDPOINT"]
 SES_SENDER = os.environ.get("SES_SENDER", "")
 AI_PROMPT_PARAM = os.environ["AI_PROMPT_PARAM"]
+GUARDRAIL_ID = os.environ.get("GUARDRAIL_ID", "")
+GUARDRAIL_VERSION = os.environ.get("GUARDRAIL_VERSION", "")
 REGION = os.environ.get("AWS_REGION", "us-west-2")
 SESSION_TTL_DAYS = 7
 
@@ -64,9 +66,15 @@ TOOLS = [
     {
         "name": "tax_lookup",
         "description": (
-            "Look up tax refunds for a customer by name. Returns refunds (type, amount, deadline, "
-            "address) and a portal_url unique to that customer. If multiple people share the name, "
-            "returns disambiguation_needed with the list of addresses."
+            "Look up tax refunds for a customer. Two-step identity verification. "
+            "Step 1: pass customer_name only — returns address_verification:'street' "
+            "with a list of street_options to ask the user. "
+            "Step 2: after the user picks a street, pass customer_name + customer_street — "
+            "returns address_verification:'number' asking for the house number on that street. "
+            "Step 3: pass customer_name + customer_street + customer_number — returns refunds "
+            "and portal_url on success, or verification_failed on a wrong answer. The tool never "
+            "returns the actual address. After verification_failed, do NOT retry; tell the user "
+            "to contact the office."
         ),
         "input_schema": {
             "type": "object",
@@ -75,9 +83,13 @@ TOOLS = [
                     "type": "string",
                     "description": "Full name, first name, or business name to search for.",
                 },
-                "customer_address": {
+                "customer_street": {
                     "type": "string",
-                    "description": "Optional. Used to disambiguate when multiple people share the name.",
+                    "description": "The street name the user picked from the verification quiz (e.g. 'Mission Blvd'). Step 2+.",
+                },
+                "customer_number": {
+                    "type": "string",
+                    "description": "The house number the user provided (e.g. '789'). Step 3 only.",
                 },
             },
             "required": ["customer_name"],
@@ -210,18 +222,106 @@ def _create_handoff(session_id: str, reason: str) -> str:
     return ref
 
 
+# ── Verification lockout (per-session attempt counter) ─────────
+
+MAX_VERIFICATION_FAILURES = 5
+LOCKOUT_TTL_SECONDS = 60 * 60  # 1 hour
+
+
+def _is_locked(session_id: str) -> bool:
+    """Return True if this session has hit MAX_VERIFICATION_FAILURES recently."""
+    resp = table.get_item(Key={"pk": f"SESSION#{session_id}", "sk": "META"})
+    item = resp.get("Item") or {}
+    locked_until = int(item.get("verificationLockedUntil") or 0)
+    return locked_until > int(time.time())
+
+
+def _record_verification_failure(session_id: str) -> tuple[int, bool]:
+    """Increment failure counter; lock the session at MAX_VERIFICATION_FAILURES.
+
+    Returns `(failures_after_increment, is_now_locked)`.
+    """
+    now = int(time.time())
+    resp = table.update_item(
+        Key={"pk": f"SESSION#{session_id}", "sk": "META"},
+        UpdateExpression=(
+            "SET verificationFailures = if_not_exists(verificationFailures, :z) + :one, "
+            "lastFailureAt = :ts"
+        ),
+        ExpressionAttributeValues={":z": 0, ":one": 1, ":ts": _now_iso()},
+        ReturnValues="UPDATED_NEW",
+    )
+    failures = int(resp.get("Attributes", {}).get("verificationFailures", 0))
+    if failures >= MAX_VERIFICATION_FAILURES:
+        table.update_item(
+            Key={"pk": f"SESSION#{session_id}", "sk": "META"},
+            UpdateExpression="SET verificationLockedUntil = :u",
+            ExpressionAttributeValues={":u": now + LOCKOUT_TTL_SECONDS},
+        )
+        return failures, True
+    return failures, False
+
+
+def _record_verification_success(session_id: str) -> None:
+    """Reset failure counter on a clean verification."""
+    table.update_item(
+        Key={"pk": f"SESSION#{session_id}", "sk": "META"},
+        UpdateExpression="SET verificationFailures = :z REMOVE verificationLockedUntil",
+        ExpressionAttributeValues={":z": 0},
+    )
+
+
 # ── Tool dispatch ──────────────────────────────────────────────
 
-def _tool_tax_lookup(input_: dict) -> str:
+def _tool_tax_lookup(session_id: str, input_: dict) -> str:
+    """Two-step verified lookup with per-session lockout after 5 failures."""
+    if _is_locked(session_id):
+        return json.dumps({
+            "locked": True,
+            "message": (
+                "This conversation has been locked after too many failed verification "
+                "attempts. Please contact the Auditor-Controller's office at "
+                "(951) 955-3800 to continue."
+            ),
+        })
+
     payload = {"customer_name": input_["customer_name"]}
-    if input_.get("customer_address"):
-        payload["customer_address"] = input_["customer_address"]
+    if input_.get("customer_street"):
+        payload["customer_street"] = input_["customer_street"]
+    if input_.get("customer_number"):
+        payload["customer_number"] = input_["customer_number"]
     resp = lambda_client.invoke(
         FunctionName=TAX_LOOKUP_FN,
         Payload=json.dumps(payload).encode("utf-8"),
     )
     body = json.loads(resp["Payload"].read())
-    return body.get("result", "Lookup failed.")
+    result_str = body.get("result", json.dumps({"error": "Lookup failed."}))
+
+    # If the tool reported a verification failure and we're at the *attempt*
+    # boundary (street or number provided), count it. Don't count the initial
+    # quiz fetch (no street, no number) as an attempt.
+    try:
+        result = json.loads(result_str)
+    except (json.JSONDecodeError, TypeError):
+        return result_str
+
+    is_attempt = bool(input_.get("customer_street") or input_.get("customer_number"))
+    if is_attempt and result.get("verification_failed"):
+        failures, locked = _record_verification_failure(session_id)
+        result["attempts_remaining"] = max(0, MAX_VERIFICATION_FAILURES - failures)
+        if locked:
+            result["locked"] = True
+            result["message"] = (
+                "Too many failed verification attempts. This conversation is locked "
+                "for an hour. Please contact the Auditor-Controller's office at "
+                "(951) 955-3800 to continue."
+            )
+        return json.dumps(result)
+
+    if result.get("refunds"):
+        _record_verification_success(session_id)
+
+    return result_str
 
 
 def _tool_request_agent(session_id: str, input_: dict) -> str:
@@ -248,7 +348,7 @@ def _tool_send_email(input_: dict) -> str:
 
 def _dispatch_tool(session_id: str, name: str, input_: dict) -> str:
     if name == "tax_lookup":
-        return _tool_tax_lookup(input_)
+        return _tool_tax_lookup(session_id, input_)
     if name == "request_agent":
         return _tool_request_agent(session_id, input_)
     if name == "send_email":
@@ -335,12 +435,22 @@ def _stream_turn(connection_id: str, messages: list[dict]) -> tuple[list[dict], 
         "messages": messages,
     }
 
-    response = bedrock.invoke_model_with_response_stream(
-        modelId=MODEL_ID,
-        body=json.dumps(body),
-        contentType="application/json",
-        accept="application/json",
-    )
+    invoke_kwargs: dict = {
+        "modelId": MODEL_ID,
+        "body": json.dumps(body),
+        "contentType": "application/json",
+        "accept": "application/json",
+    }
+    # Bedrock applies the guardrail to both the input messages and the model
+    # output stream. Blocked content surfaces as a `BLOCKED` stop_reason and a
+    # synthesized assistant message in the stream — same handling as a normal
+    # turn, no extra branch needed here.
+    if GUARDRAIL_ID:
+        invoke_kwargs["guardrailIdentifier"] = GUARDRAIL_ID
+        if GUARDRAIL_VERSION:
+            invoke_kwargs["guardrailVersion"] = GUARDRAIL_VERSION
+
+    response = bedrock.invoke_model_with_response_stream(**invoke_kwargs)
 
     blocks: dict[int, dict] = {}
     tool_input_buffers: dict[int, str] = {}

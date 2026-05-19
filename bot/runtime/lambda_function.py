@@ -194,6 +194,51 @@ def extract_street(address: str) -> str:
     return parts[0].strip() if parts else address.strip()
 
 
+def split_street_parts(street: str) -> tuple[str, str]:
+    """Split '789 MISSION BLVD' into ('789', 'MISSION BLVD'). Number may be empty."""
+    parts = street.strip().split(None, 1)
+    if not parts:
+        return ('', '')
+    if parts[0].replace('-', '').isdigit() or _looks_like_house_num(parts[0]):
+        number = parts[0]
+        rest = parts[1] if len(parts) > 1 else ''
+        return (number, rest)
+    return ('', street.strip())
+
+
+def _looks_like_house_num(token: str) -> bool:
+    """Some addresses use forms like '4080A' or '23-19'. Permit alphanumeric leads with a digit."""
+    if not token:
+        return False
+    return any(c.isdigit() for c in token) and len(token) <= 8
+
+
+def street_name_only(address: str) -> str:
+    """Return the street part with any leading house number stripped.
+
+    >>> street_name_only('789 MISSION BLVD, San Diego, CA 92154')
+    'MISSION BLVD'
+    """
+    _, name = split_street_parts(extract_street(address))
+    return name.strip()
+
+
+_CONTROL_BYTES = re.compile(r'[\x00-\x1f\x7f-\x9f]')
+
+
+def sanitize_input(value: str, max_len: int = 200) -> str:
+    """Strip control bytes, collapse whitespace, truncate.
+
+    Mitigates injection via Unicode controls / null bytes / oversized inputs
+    before the value reaches the fuzzy matcher or downstream tools.
+    """
+    if not isinstance(value, str):
+        return ''
+    cleaned = _CONTROL_BYTES.sub('', value)
+    cleaned = ' '.join(cleaned.split())  # collapse whitespace runs
+    return cleaned[:max_len]
+
+
 def generate_decoy_streets(real_address: str, count: int = 3) -> list[str]:
     """Pick decoy street names from other records, preferring same city/state."""
     records = load_records()
@@ -222,66 +267,140 @@ def generate_decoy_streets(real_address: str, count: int = 3) -> list[str]:
     return decoys[:count]
 
 
-def lookup(name: str, address: str = '') -> str:
+def _street_matches(claim_street_name: str, real_address: str) -> bool:
+    """Compare claimant's street-name guess against the real street name (no number).
+
+    Both sides are normalized: lower-cased, leading house number stripped.
+    Tolerates partial matches (e.g. "Mission" vs "Mission Blvd").
+    """
+    claim = (claim_street_name or '').lower().strip()
+    if not claim:
+        return False
+    real_name = street_name_only(real_address).lower().strip()
+    if not real_name:
+        return False
+    if claim == real_name:
+        return True
+    # Word-overlap tolerance — handle "mission blvd" vs "mission boulevard"
+    real_words = [w for w in real_name.split() if len(w) >= 4 and not w.isdigit()]
+    return any(w in claim or claim in w for w in real_words)
+
+
+def _number_matches(claim_number: str, real_address: str) -> bool:
+    """Compare claimant's house-number guess against the real number."""
+    claim = (claim_number or '').strip()
+    if not claim:
+        return False
+    real_num, _ = split_street_parts(extract_street(real_address))
+    if not real_num:
+        return False
+    return claim.lower().replace('-', '') == real_num.lower().replace('-', '')
+
+
+def lookup(name: str, street: str = '', number: str = '') -> str:
+    """Two-step verified refund lookup.
+
+    Verification flow:
+      step 1 (no street, no number): identity quiz with decoy street options
+      step 2 (street provided, no number): verify street matches, then ask for number
+      step 3 (street + number): verify both, return refunds without `address` field
+
+    Output never includes the real address. The caller (chat handler) is
+    expected to track failed-attempt counts per session and stop calling
+    once locked.
+    """
+    name = sanitize_input(name)
+    street = sanitize_input(street, max_len=80)
+    number = sanitize_input(number, max_len=20)
+
     best_name, records = find_best_match(name)
     if not best_name:
-        return (
-            f"We found no refunds for {name}. "
-            "You may have no refunds or your refund may have passed its claim deadline."
-        )
-
-    addresses = sorted(set(r.get('address', '') for r in records))
-    if len(addresses) > 1:
-        if not address:
-            # Present truncated street names only (no full address for privacy)
-            street_options = [extract_street(a) for a in addresses]
-            return json.dumps({
-                'disambiguation_needed': True,
-                'name': best_name,
-                'addresses': street_options,
-                'message': f"We found multiple people named {best_name}. Which street have you lived on?",
-            })
-        addr_lower = address.lower().strip()
-        selected = next((a for a in addresses if addr_lower in a.lower()), None)
-        if not selected:
-            selected = next((a for a in addresses if any(w in addr_lower for w in a.lower().split() if len(w) >= 4)), None)
-        if selected:
-            records = [r for r in records if r.get('address', '') == selected]
-        else:
-            street_options = [extract_street(a) for a in addresses]
-            return json.dumps({
-                'disambiguation_needed': True,
-                'name': best_name,
-                'addresses': street_options,
-                'message': f"That didn't match our records for {best_name}. Which of these streets is yours?",
-            })
-
-    # Address quiz: present the real street + decoys, ask user to identify theirs
-    real_address = records[0].get('address', '')
-    if real_address and not address:
-        real_street = extract_street(real_address)
-        decoys = generate_decoy_streets(real_address, count=3)
-        options = [real_street] + decoys
-        random.shuffle(options)
         return json.dumps({
-            'address_verification': True,
-            'name': best_name,
-            'street_options': options,
-            'message': f"To verify your identity, which of the following streets have you lived on?",
+            'no_match': True,
+            'message': (
+                f"We found no refunds for {name}. "
+                "You may have no refunds, or your refund may have passed its claim deadline."
+            ),
         })
 
-    # If address was provided, verify it matches
-    if address and real_address:
-        real_street = extract_street(real_address).lower()
-        if real_street not in address.lower() and address.lower() not in real_street:
-            # Check if any word from the real street appears in their answer
-            real_words = [w for w in real_street.split() if len(w) >= 4 and not w.isdigit()]
-            if not any(w in address.lower() for w in real_words):
-                return json.dumps({
-                    'verification_failed': True,
-                    'message': "That doesn't match our records. For security, we cannot proceed. Please contact the Auditor-Controller's office at (951) 955-3800.",
-                })
+    addresses = sorted(set(r.get('address', '') for r in records))
 
+    # Disambiguation when multiple records share the name (different addresses).
+    if len(addresses) > 1 and not street:
+        street_options = [street_name_only(a) for a in addresses]
+        return json.dumps({
+            'disambiguation_needed': True,
+            'name': best_name,
+            'street_options': street_options,
+            'message': f"We found multiple people named {best_name}. Which street have you lived on?",
+        })
+
+    # Filter to the matching record(s) once we have a street hint.
+    if len(addresses) > 1 and street:
+        matches = [r for r in records if _street_matches(street, r.get('address', ''))]
+        if not matches:
+            return json.dumps({
+                'verification_failed': True,
+                'message': (
+                    "That doesn't match our records. For security, we cannot proceed. "
+                    "Please contact the Auditor-Controller's office at (951) 955-3800."
+                ),
+            })
+        records = matches
+
+    real_address = records[0].get('address', '')
+    if not real_address:
+        return json.dumps({
+            'verification_failed': True,
+            'message': "We can't verify identity for this record. Please contact the office.",
+        })
+
+    # Step 1 — present the decoy quiz, ask which street.
+    if not street:
+        real_street_name = street_name_only(real_address)
+        decoy_addrs = generate_decoy_streets(real_address, count=3)
+        options = [real_street_name] + [street_name_only(a) for a in decoy_addrs]
+        random.shuffle(options)
+        return json.dumps({
+            'address_verification': 'street',
+            'name': best_name,
+            'street_options': options,
+            'message': "To verify your identity, which of the following streets have you currently or previously lived on?",
+        })
+
+    # Step 2 — street picked; verify it matches.
+    if not _street_matches(street, real_address):
+        return json.dumps({
+            'verification_failed': True,
+            'message': (
+                "That doesn't match our records. For security, we cannot proceed. "
+                "Please contact the Auditor-Controller's office at (951) 955-3800."
+            ),
+        })
+
+    # Step 2b — street ok, ask for the house number.
+    if not number:
+        return json.dumps({
+            'address_verification': 'number',
+            'name': best_name,
+            'street_picked': street_name_only(real_address),
+            'message': (
+                f"Thanks. To complete verification, what's the street number on "
+                f"{street_name_only(real_address)}?"
+            ),
+        })
+
+    # Step 3 — verify number too.
+    if not _number_matches(number, real_address):
+        return json.dumps({
+            'verification_failed': True,
+            'message': (
+                "That doesn't match our records. For security, we cannot proceed. "
+                "Please contact the Auditor-Controller's office at (951) 955-3800."
+            ),
+        })
+
+    # Verification passed — return refunds WITHOUT address.
     results = []
     for r in records:
         results.append({
@@ -289,21 +408,25 @@ def lookup(name: str, address: str = '') -> str:
             'refund_type': r['refund_type'],
             'amount': f"${r['amount']:,.2f}",
             'claim_deadline': r['claim_deadline'],
-            'address': r.get('address', ''),
         })
 
     portal_url = build_portal_url(records)
     return json.dumps({'refunds': results, 'portal_url': portal_url})
 
 
-def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
-    """Sync invocation with `{customer_name, customer_address?}` payload."""
-    logger.info("Event: %s", json.dumps(event, default=str))
+def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
+    """Sync invocation. Payload: `{customer_name, customer_street?, customer_number?}`.
+
+    Backwards-compat: a `customer_address` field maps to `customer_street`.
+    """
+    logger.info("Event: %s", json.dumps({k: v for k, v in event.items() if k != 'customer_number'}, default=str))
     try:
         name = (event.get('customer_name') or '').strip()
         if not name:
-            return {'result': 'customer_name is required'}
-        return {'result': lookup(name, event.get('customer_address', ''))}
+            return {'result': json.dumps({'error': 'customer_name is required'})}
+        street = (event.get('customer_street') or event.get('customer_address') or '').strip()
+        number = (event.get('customer_number') or '').strip()
+        return {'result': lookup(name, street, number)}
     except Exception:
         logger.exception("Unhandled error")
-        return {'result': 'An error occurred. Please try again.'}
+        return {'result': json.dumps({'error': 'An error occurred. Please try again.'})}
