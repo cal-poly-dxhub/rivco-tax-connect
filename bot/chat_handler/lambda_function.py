@@ -286,7 +286,7 @@ def _record_verification_success(customer_name: str) -> None:
 
 # ── Tool dispatch ──────────────────────────────────────────────
 
-def _tool_tax_lookup(session_id: str, input_: dict) -> str:
+def _tool_tax_lookup(_session_id: str, input_: dict) -> str:
     """Two-step verified lookup with per-name lockout after 5 failures."""
     customer_name = input_["customer_name"]
 
