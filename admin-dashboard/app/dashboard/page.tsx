@@ -15,13 +15,15 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
-import { currentSession, signOut } from "@/lib/cognito"
+import { signOut } from "@/lib/cognito"
 import { api } from "@/lib/api"
 import { ThemeToggle } from "@/components/theme-toggle"
 import {
-  Submission, StatusResponse, Permissions, STATUSES, labelFor, Package, PackageFile, AuditEntry, AuditResponse, StatusValue,
+  Submission, StatusResponse, STATUSES, labelFor, Package, PackageFile, AuditEntry, AuditResponse, StatusValue,
 } from "@/lib/types"
 import { FilledFormViewer } from "@/components/filled-form-viewer"
+import { useAuthGate } from "@/hooks/use-auth-gate"
+import { useApi } from "@/hooks/use-api"
 
 const STATUS_STYLES: Record<StatusValue, string> = {
   partial: "bg-orange-100 text-orange-800 border-orange-300",
@@ -47,34 +49,40 @@ function formatAudit(e: AuditEntry): string {
 
 export default function DashboardPage() {
   const router = useRouter()
-  const [subs, setSubs] = useState<Submission[]>([])
-  const [perms, setPerms] = useState<Permissions | null>(null)
+  const { ready } = useAuthGate()
+  const { data: status, error: statusError, setData: setStatus } = useApi<StatusResponse>(
+    "/status",
+    { enabled: ready },
+  )
   const [labels, setLabels] = useState<Record<string, string>>({})
   const [search, setSearch] = useState("")
   const [deptFilter, setDeptFilter] = useState<string>("all")
   const [statusFilter, setStatusFilter] = useState<string>("all")
-  const [error, setError] = useState("")
+  const [actionError, setActionError] = useState("")
   const [selected, setSelected] = useState<Submission | null>(null)
 
+  const subs = status?.submissions ?? []
+  const perms = status?.permissions ?? null
+  const error = actionError || statusError
+
+  // Super-admins also see refund-type labels; load lazily once we know the role.
   useEffect(() => {
-    (async () => {
-      const session = await currentSession()
-      if (!session || session.kind !== "success") return router.replace("/")
-      try {
-        const res = await api("/status")
-        if (!res.ok) throw new Error(`/status ${res.status}`)
-        const data: StatusResponse = await res.json()
-        setSubs(data.submissions)
-        setPerms(data.permissions)
-        if (data.permissions.isSuperAdmin) {
-          const cfgRes = await api("/admin/config")
-          if (cfgRes.ok) setLabels((await cfgRes.json()).refundTypeLabels || {})
-        }
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e))
+    if (!perms?.isSuperAdmin) return
+    let cancelled = false
+    ;(async () => {
+      const res = await api("/admin/config")
+      if (!cancelled && res.ok) {
+        setLabels((await res.json()).refundTypeLabels || {})
       }
     })()
-  }, [router])
+    return () => {
+      cancelled = true
+    }
+  }, [perms?.isSuperAdmin])
+
+  function setSubs(updater: (prev: Submission[]) => Submission[]) {
+    setStatus((prev) => (prev ? { ...prev, submissions: updater(prev.submissions) } : prev))
+  }
 
   const availableDepts = useMemo(() => {
     const set = new Set<string>()
@@ -101,7 +109,7 @@ export default function DashboardPage() {
       method: "POST",
       body: JSON.stringify({ submissionId: id, department, status }),
     })
-    if (!res.ok) setError(`Update failed: ${res.status}`)
+    if (!res.ok) setActionError(`Update failed: ${res.status}`)
   }
 
   async function deleteSubmission(id: string) {
@@ -111,7 +119,7 @@ export default function DashboardPage() {
       body: JSON.stringify({ submissionId: id }),
     })
     if (res.ok) setSubs((prev) => prev.filter((s) => s.submissionId !== id))
-    else setError(`Delete failed: ${res.status}`)
+    else setActionError(`Delete failed: ${res.status}`)
   }
 
   function onSignOut() {
@@ -245,37 +253,25 @@ export default function DashboardPage() {
 }
 
 function SubmissionDetail({ submission }: { submission: Submission }) {
-  const [pkg, setPkg] = useState<Package | null>(null)
+  const { data: pkg, error: err } = useApi<Package>(
+    `/package?id=${encodeURIComponent(submission.submissionId)}`,
+    { deps: [submission.submissionId] },
+  )
+  // Audit log is best-effort; ignore errors so the detail view still renders.
+  const { data: auditData } = useApi<AuditResponse>(
+    `/audit/${encodeURIComponent(submission.submissionId)}`,
+    { deps: [submission.submissionId] },
+  )
+  const audit = auditData?.entries ?? null
   const [active, setActive] = useState<PackageFile | null>(null)
-  const [err, setErr] = useState("")
-  const [audit, setAudit] = useState<AuditEntry[] | null>(null)
 
+  // Reset selection when the user opens a different submission.
   useEffect(() => {
-    (async () => {
-      try {
-        const res = await api(`/package?id=${encodeURIComponent(submission.submissionId)}`)
-        if (!res.ok) throw new Error(`/package ${res.status}`)
-        const data: Package = await res.json()
-        setPkg(data)
-        if (data.files.length) setActive(data.files[0])
-      } catch (e) {
-        setErr(e instanceof Error ? e.message : String(e))
-      }
-    })()
+    setActive(null)
   }, [submission.submissionId])
-
   useEffect(() => {
-    (async () => {
-      try {
-        const res = await api(`/audit/${encodeURIComponent(submission.submissionId)}`)
-        if (!res.ok) return
-        const data: AuditResponse = await res.json()
-        setAudit(data.entries)
-      } catch {
-        // audit is best-effort in the UI too
-      }
-    })()
-  }, [submission.submissionId])
+    if (pkg && pkg.files.length && !active) setActive(pkg.files[0])
+  }, [pkg, active])
 
   return (
     <>
