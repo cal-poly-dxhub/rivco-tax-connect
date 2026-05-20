@@ -39,6 +39,7 @@ GUARDRAIL_ID = os.environ.get("GUARDRAIL_ID", "")
 GUARDRAIL_VERSION = os.environ.get("GUARDRAIL_VERSION", "")
 REGION = os.environ.get("AWS_REGION", "us-west-2")
 SESSION_TTL_DAYS = 7
+OFFICE_PHONE = os.environ.get("OFFICE_PHONE", "(951) 955-3800")
 
 ANTHROPIC_VERSION = "bedrock-2023-05-31"
 
@@ -222,50 +223,62 @@ def _create_handoff(session_id: str, reason: str) -> str:
     return ref
 
 
-# ── Verification lockout (per-session attempt counter) ─────────
+# ── Verification lockout (per-name attempt counter) ────────────
+# Keyed on a normalized version of the looked-up customer name so a new
+# session does not reset the counter.
 
 MAX_VERIFICATION_FAILURES = 5
 LOCKOUT_TTL_SECONDS = 60 * 60  # 1 hour
 
 
-def _is_locked(session_id: str) -> bool:
-    """Return True if this session has hit MAX_VERIFICATION_FAILURES recently."""
-    resp = table.get_item(Key={"pk": f"SESSION#{session_id}", "sk": "META"})
+def _lockout_pk(customer_name: str) -> str:
+    return f"LOCKOUT#{customer_name.lower().strip()}"
+
+
+def _is_locked(customer_name: str) -> bool:
+    resp = table.get_item(Key={"pk": _lockout_pk(customer_name), "sk": "META"})
     item = resp.get("Item") or {}
     locked_until = int(item.get("verificationLockedUntil") or 0)
     return locked_until > int(time.time())
 
 
-def _record_verification_failure(session_id: str) -> tuple[int, bool]:
-    """Increment failure counter; lock the session at MAX_VERIFICATION_FAILURES.
+def _record_verification_failure(customer_name: str) -> tuple[int, bool]:
+    """Atomically increment the failure counter; lock when the threshold is reached.
+
+    Uses ADD (atomic counter) for the increment so concurrent requests can't
+    double-count. The lock timestamp is set in a second conditional write that
+    is idempotent — concurrent callers racing to set it are both fine.
 
     Returns `(failures_after_increment, is_now_locked)`.
     """
     now = int(time.time())
     resp = table.update_item(
-        Key={"pk": f"SESSION#{session_id}", "sk": "META"},
-        UpdateExpression=(
-            "SET verificationFailures = if_not_exists(verificationFailures, :z) + :one, "
-            "lastFailureAt = :ts"
-        ),
-        ExpressionAttributeValues={":z": 0, ":one": 1, ":ts": _now_iso()},
+        Key={"pk": _lockout_pk(customer_name), "sk": "META"},
+        UpdateExpression="ADD verificationFailures :one SET lastFailureAt = :ts",
+        ExpressionAttributeValues={":one": 1, ":ts": _now_iso()},
         ReturnValues="UPDATED_NEW",
     )
     failures = int(resp.get("Attributes", {}).get("verificationFailures", 0))
-    if failures >= MAX_VERIFICATION_FAILURES:
-        table.update_item(
-            Key={"pk": f"SESSION#{session_id}", "sk": "META"},
-            UpdateExpression="SET verificationLockedUntil = :u",
-            ExpressionAttributeValues={":u": now + LOCKOUT_TTL_SECONDS},
-        )
-        return failures, True
-    return failures, False
+    is_locked = failures >= MAX_VERIFICATION_FAILURES
+    if is_locked:
+        try:
+            table.update_item(
+                Key={"pk": _lockout_pk(customer_name), "sk": "META"},
+                UpdateExpression="SET verificationLockedUntil = :u",
+                ConditionExpression=(
+                    "attribute_not_exists(verificationLockedUntil) OR verificationLockedUntil <= :now"
+                ),
+                ExpressionAttributeValues={":u": now + LOCKOUT_TTL_SECONDS, ":now": now},
+            )
+        except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
+            pass  # already locked by a concurrent request — fine
+    return failures, is_locked
 
 
-def _record_verification_success(session_id: str) -> None:
+def _record_verification_success(customer_name: str) -> None:
     """Reset failure counter on a clean verification."""
     table.update_item(
-        Key={"pk": f"SESSION#{session_id}", "sk": "META"},
+        Key={"pk": _lockout_pk(customer_name), "sk": "META"},
         UpdateExpression="SET verificationFailures = :z REMOVE verificationLockedUntil",
         ExpressionAttributeValues={":z": 0},
     )
@@ -274,18 +287,20 @@ def _record_verification_success(session_id: str) -> None:
 # ── Tool dispatch ──────────────────────────────────────────────
 
 def _tool_tax_lookup(session_id: str, input_: dict) -> str:
-    """Two-step verified lookup with per-session lockout after 5 failures."""
-    if _is_locked(session_id):
+    """Two-step verified lookup with per-name lockout after 5 failures."""
+    customer_name = input_["customer_name"]
+
+    if _is_locked(customer_name):
         return json.dumps({
             "locked": True,
             "message": (
-                "This conversation has been locked after too many failed verification "
-                "attempts. Please contact the Auditor-Controller's office at "
-                "(951) 955-3800 to continue."
+                "This lookup has been locked after too many failed verification "
+                f"attempts. Please contact the Auditor-Controller's office at "
+                f"{OFFICE_PHONE} to continue."
             ),
         })
 
-    payload = {"customer_name": input_["customer_name"]}
+    payload = {"customer_name": customer_name}
     if input_.get("customer_street"):
         payload["customer_street"] = input_["customer_street"]
     if input_.get("customer_number"):
@@ -297,9 +312,8 @@ def _tool_tax_lookup(session_id: str, input_: dict) -> str:
     body = json.loads(resp["Payload"].read())
     result_str = body.get("result", json.dumps({"error": "Lookup failed."}))
 
-    # If the tool reported a verification failure and we're at the *attempt*
-    # boundary (street or number provided), count it. Don't count the initial
-    # quiz fetch (no street, no number) as an attempt.
+    # Count a failure only when an answer was actually provided (street or number).
+    # The initial name-only call that returns the quiz does not count.
     try:
         result = json.loads(result_str)
     except (json.JSONDecodeError, TypeError):
@@ -307,19 +321,19 @@ def _tool_tax_lookup(session_id: str, input_: dict) -> str:
 
     is_attempt = bool(input_.get("customer_street") or input_.get("customer_number"))
     if is_attempt and result.get("verification_failed"):
-        failures, locked = _record_verification_failure(session_id)
+        failures, locked = _record_verification_failure(customer_name)
         result["attempts_remaining"] = max(0, MAX_VERIFICATION_FAILURES - failures)
         if locked:
             result["locked"] = True
             result["message"] = (
-                "Too many failed verification attempts. This conversation is locked "
-                "for an hour. Please contact the Auditor-Controller's office at "
-                "(951) 955-3800 to continue."
+                "Too many failed verification attempts. Further lookups for this name "
+                f"are locked for an hour. Please contact the Auditor-Controller's office at "
+                f"{OFFICE_PHONE} to continue."
             )
         return json.dumps(result)
 
     if result.get("refunds"):
-        _record_verification_success(session_id)
+        _record_verification_success(customer_name)
 
     return result_str
 
