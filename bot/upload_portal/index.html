@@ -437,7 +437,9 @@
                 var hasPropertyTax = refundTypes.includes("PROPERTY_TAX");
                 var hasPayroll = refundTypes.includes("PAYROLL");
 
-                if (hasStaleWarrant && !hasPropertyTax && !hasPayroll) {
+                // STALE_WARRANT and PAYROLL share the AP-13 affidavit.
+                var isAp13Only = (hasStaleWarrant || hasPayroll) && !hasPropertyTax;
+                if (isAp13Only) {
                     docTitle.textContent = "Affidavit for the Replacement of Stale Dated Warrant";
                     formIdLabel.textContent = "AP – 13";
                 } else if (hasPropertyTax && !hasStaleWarrant && !hasPayroll) {
@@ -453,9 +455,9 @@
                         }).join(" · ");
                 }
 
-                // Notarization warning
+                // Notarization warning — both AP-13 refund types require notarization above $1,000.
                 for (var i = 0; i < refundTypes.length; i++) {
-                    if (refundTypes[i] === "STALE_WARRANT") {
+                    if (refundTypes[i] === "STALE_WARRANT" || refundTypes[i] === "PAYROLL") {
                         var amt = parseFloat(amounts[i] || 0);
                         if (amt > 1000) {
                             banner.innerHTML =

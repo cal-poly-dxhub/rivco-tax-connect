@@ -41,8 +41,11 @@ const AP13_CHECKBOX_MAP: Record<string, { yes: string; no: string }> = {
   warrant_included: { yes: "Check Box7", no: "Check Box8" },
 }
 
+// STALE_WARRANT and PAYROLL both use the AP-13 affidavit.
+const AP13_REFUND_TYPES = new Set(["STALE_WARRANT", "PAYROLL"])
+
 export function hasOverlayConfig(refundType: string): boolean {
-  return refundType === "STALE_WARRANT"
+  return AP13_REFUND_TYPES.has(refundType)
 }
 
 export async function renderFilledPdf(
@@ -50,7 +53,7 @@ export async function renderFilledPdf(
   formData: Record<string, unknown>,
   signatureDataUrl?: string,
 ): Promise<Uint8Array | null> {
-  if (refundType !== "STALE_WARRANT") return null
+  if (!AP13_REFUND_TYPES.has(refundType)) return null
 
   const pdfBytes = await fetch("/forms/ap13-affidavit.pdf").then((r) => r.arrayBuffer())
   const pdfDoc = await PDFDocument.load(pdfBytes)
@@ -83,10 +86,14 @@ export async function renderFilledPdf(
   // Page 2 — Mailing address
   setField(form, "Text24", val("address"))
 
-  // Checkboxes
+  // Checkboxes — only mark a box when the claimant gave an explicit answer.
+  // Treating undefined as "No" would misrepresent unanswered questions.
   for (const [formFieldId, pdfNames] of Object.entries(AP13_CHECKBOX_MAP)) {
     const v = formData[formFieldId]
+    if (v === undefined || v === null || v === "") continue
     const isYes = v === true || v === "true" || v === "Yes" || v === "yes"
+    const isNo = v === false || v === "false" || v === "No" || v === "no"
+    if (!isYes && !isNo) continue
     try {
       const checkbox = form.getCheckBox(isYes ? pdfNames.yes : pdfNames.no)
       checkbox.check()
@@ -155,6 +162,15 @@ function formatFieldValue(fieldId: string, value: unknown): string {
   return String(value)
 }
 
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+}
+
 function dataUrlToBytes(dataUrl: string): Uint8Array {
   const base64 = dataUrl.split(",")[1]
   const binary = atob(base64)
@@ -168,7 +184,7 @@ function dataUrlToBytes(dataUrl: string): Uint8Array {
 export async function renderPropertyTaxHtml(
   formData: Record<string, unknown>,
 ): Promise<string> {
-  const f = (id: string) => String(formData[id] || "")
+  const f = (id: string) => escapeHtml(String(formData[id] ?? ""))
   return `<!DOCTYPE html>
 <html>
 <head>

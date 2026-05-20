@@ -13,9 +13,8 @@ Used for: STALE_WARRANT and PAYROLL refund types.
 
 **Not yet available as a PDF.** The county's online form at
 https://apps.auditorcontroller.org/unclaimedrefund/refundform.aspx is an
-ASP.NET web form with no PDF download. We reconstruct the fields from the
-existing `bot/upload_portal/property-tax-form.html` HTML template until the
-county provides the printable PDF.
+ASP.NET web form with no PDF download. We reconstruct the fields directly
+from that live form until the county provides the printable PDF.
 
 To request: ask the Auditor-Controller Property Tax division for the printable
 PDF version of the unclaimed refund claim form.
