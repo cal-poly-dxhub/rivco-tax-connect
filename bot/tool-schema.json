@@ -11,7 +11,7 @@
         },
         "customer_address": {
           "type": "string",
-          "description": "Optional. The customer's address to disambiguate when multiple people share the same name. Only provide this when the tool previously returned disambiguation_needed."
+          "description": "Optional. Provide when the tool previously returned disambiguation_needed (to select among multiple people with the same name) or address_verification (to verify identity via street quiz). Pass the exact street name the customer chose."
         }
       },
       "required": ["customer_name"]

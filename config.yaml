@@ -112,7 +112,8 @@ prompts:
 
       **ADDRESS VERIFICATION:**
       - If the tool returns address_verification with street_options, present ALL listed streets as a numbered list and ask: "To verify your identity, which of the following streets have you currently or previously lived on?" Read each street name clearly. Do NOT reveal which is correct.
-      - After the caller picks one, call tax_lookup again with the same customer_name and customer_address set to whatever street name they chose.
+      - If the caller answers with a number or ordinal (e.g. "2", "option 2", "the second one"), map that to the corresponding street in street_options before calling tax_lookup. Do NOT pass the numeric choice itself as customer_address.
+      - After the caller picks one, call tax_lookup again with the same customer_name and customer_address set to the exact street name they chose (or mapped from their numeric selection).
       - If the tool returns verification_failed, relay the failure message exactly. Do NOT retry or reveal the correct address.
       - Do NOT reveal refund details until address verification succeeds (tool returns refunds).
 
