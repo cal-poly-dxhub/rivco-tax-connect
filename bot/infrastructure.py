@@ -1,9 +1,13 @@
 import json
+import jsii
 import os
 import re
+import shutil
+import subprocess
+import sys
 import yaml
 from aws_cdk import (
-    Stack, Duration, RemovalPolicy, CfnOutput, BundlingOptions, BundlingFileAccess,
+    Stack, Duration, RemovalPolicy, CfnOutput, BundlingOptions, ILocalBundling,
     aws_s3 as s3,
     aws_s3_deployment as s3deploy,
     aws_lambda as _lambda,
@@ -24,6 +28,31 @@ from aws_cdk import (
     custom_resources as cr,
 )
 from constructs import Construct
+
+@jsii.implements(ILocalBundling)
+class _LocalBundling:
+    def try_bundle(self, output_dir: str, *, image, asset_hash=None, bundling_file_access=None,
+                   command=None, entrypoint=None, environment=None, local=None, network=None,
+                   output_type=None, platform=None, security_opt=None, user=None,
+                   volumes=None, volumes_from=None, working_directory=None) -> bool:
+        try:
+            source = os.path.join(os.path.dirname(__file__), "runtime")
+            req = os.path.join(source, "requirements.txt")
+            if os.path.exists(req):
+                subprocess.check_call(
+                    [sys.executable, "-m", "pip", "install", "-r", req, "-t", output_dir, "--quiet"]
+                )
+            for item in os.listdir(source):
+                s = os.path.join(source, item)
+                d = os.path.join(output_dir, item)
+                if os.path.isdir(s):
+                    shutil.copytree(s, d, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(s, d)
+            return True
+        except Exception:
+            return False
+
 
 def load_config():
     with open('config.yaml') as f:
@@ -85,12 +114,7 @@ class NovaSonicConnectStack(Stack):
                 "bot/runtime",
                 bundling=BundlingOptions(
                     image=_lambda.Runtime.PYTHON_3_12.bundling_image,
-                    platform="linux/amd64",
-                    bundling_file_access=BundlingFileAccess.VOLUME_COPY,
-                    command=[
-                        "bash", "-c",
-                        "pip install -r requirements.txt -t /asset-output && cp -au . /asset-output"
-                    ],
+                    local=_LocalBundling(),
                 ),
             ),
             role=role,
