@@ -8,8 +8,10 @@ type Props = {
   refundTypes: string[]
 }
 
+type RenderedItem = { type: string; url: string; label: string; signatureMissing?: boolean }
+
 export function FilledFormViewer({ formDataUrl, refundTypes }: Props) {
-  const [pdfUrls, setPdfUrls] = useState<{ type: string; url: string; label: string }[]>([])
+  const [pdfUrls, setPdfUrls] = useState<RenderedItem[]>([])
   const [active, setActive] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
@@ -28,17 +30,18 @@ export function FilledFormViewer({ formDataUrl, refundTypes }: Props) {
         const formData: Record<string, unknown> = json.formData || json
         const signature: string | undefined = json.signature
 
-        const results: { type: string; url: string; label: string }[] = []
+        const results: RenderedItem[] = []
 
         for (const rt of refundTypes) {
           if (hasOverlayConfig(rt)) {
-            const bytes = await renderFilledPdf(rt, formData, signature)
-            if (bytes && !cancelled) {
-              const blob = new Blob([bytes as unknown as BlobPart], { type: "application/pdf" })
+            const result = await renderFilledPdf(rt, formData, signature)
+            if (result && !cancelled) {
+              const blob = new Blob([result.bytes as unknown as BlobPart], { type: "application/pdf" })
               results.push({
                 type: rt,
                 url: URL.createObjectURL(blob),
                 label: `${rt} (PDF overlay)`,
+                signatureMissing: result.signatureMissing,
               })
             }
           } else if (rt === "PROPERTY_TAX") {
@@ -106,6 +109,11 @@ export function FilledFormViewer({ formDataUrl, refundTypes }: Props) {
               {p.label}
             </button>
           ))}
+        </div>
+      )}
+      {activeItem.signatureMissing && (
+        <div className="px-3 py-2 text-xs bg-amber-50 text-amber-900 border-b border-amber-200">
+          Signature could not be rendered in this preview. The signed payload is preserved in the raw <code>unified-form.json</code>.
         </div>
       )}
       <iframe

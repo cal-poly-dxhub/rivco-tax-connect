@@ -48,12 +48,21 @@ export function hasOverlayConfig(refundType: string): boolean {
   return AP13_REFUND_TYPES.has(refundType)
 }
 
+export type FilledPdfResult = {
+  bytes: Uint8Array
+  // True when a signature was provided but pdf-lib couldn't embed it. The
+  // signed payload is still in unified-form.json — this only affects the
+  // admin's visual preview.
+  signatureMissing: boolean
+}
+
 export async function renderFilledPdf(
   refundType: string,
   formData: Record<string, unknown>,
   signatureDataUrl?: string,
-): Promise<Uint8Array | null> {
+): Promise<FilledPdfResult | null> {
   if (!AP13_REFUND_TYPES.has(refundType)) return null
+  let signatureMissing = false
 
   const pdfBytes = await fetch("/forms/ap13-affidavit.pdf").then((r) => r.arrayBuffer())
   const pdfDoc = await PDFDocument.load(pdfBytes)
@@ -117,7 +126,7 @@ export async function renderFilledPdf(
         height: scaled.height,
       })
     } catch {
-      // signature embed failed
+      signatureMissing = true
     }
   }
 
@@ -140,7 +149,7 @@ export async function renderFilledPdf(
   }
 
   form.flatten()
-  return pdfDoc.save()
+  return { bytes: await pdfDoc.save(), signatureMissing }
 }
 
 function setField(form: ReturnType<PDFDocument["getForm"]>, name: string, value: string) {

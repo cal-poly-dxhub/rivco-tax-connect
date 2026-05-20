@@ -100,16 +100,37 @@ export default function DashboardPage() {
   }, [subs, search, deptFilter, statusFilter])
 
   async function changeStatus(id: string, department: string, status: string) {
-    setSubs((prev) => prev.map((s) => (
+    // Snapshot the prior status so we can roll back the optimistic update
+    // if the server rejects the change.
+    const prev = subs.find((s) => s.submissionId === id)?.statuses[department]
+    setSubs((curr) => curr.map((s) => (
       s.submissionId === id
         ? { ...s, statuses: { ...s.statuses, [department]: status as StatusValue } }
         : s
     )))
-    const res = await api("/update-status", {
-      method: "POST",
-      body: JSON.stringify({ submissionId: id, department, status }),
-    })
-    if (!res.ok) setActionError(`Update failed: ${res.status}`)
+    let res: Response
+    try {
+      res = await api("/update-status", {
+        method: "POST",
+        body: JSON.stringify({ submissionId: id, department, status }),
+      })
+    } catch (e) {
+      setSubs((curr) => curr.map((s) => (
+        s.submissionId === id && prev !== undefined
+          ? { ...s, statuses: { ...s.statuses, [department]: prev } }
+          : s
+      )))
+      setActionError(e instanceof Error ? e.message : String(e))
+      return
+    }
+    if (!res.ok) {
+      setSubs((curr) => curr.map((s) => (
+        s.submissionId === id && prev !== undefined
+          ? { ...s, statuses: { ...s.statuses, [department]: prev } }
+          : s
+      )))
+      setActionError(`Update failed: ${res.status}`)
+    }
   }
 
   async function deleteSubmission(id: string) {

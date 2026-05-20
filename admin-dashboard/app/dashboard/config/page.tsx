@@ -141,14 +141,19 @@ function DepartmentForm({
       ? { label, refund_types: types }
       : { key, label, refund_types: types }
     const path = existing ? `/admin/departments/${encodeURIComponent(existing.key)}` : "/admin/departments"
-    const res = await api(path, { method: existing ? "PATCH" : "POST", body: JSON.stringify(body) })
-    setBusy(false)
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}))
-      setErr(data.error || `Save failed: ${res.status}`)
-      return
+    try {
+      const res = await api(path, { method: existing ? "PATCH" : "POST", body: JSON.stringify(body) })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setErr(data.error || `Save failed: ${res.status}`)
+        return
+      }
+      onSaved(); onClose()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
     }
-    onSaved(); onClose()
   }
 
   return (
@@ -256,14 +261,19 @@ function UserForm({
     setBusy(true); setErr("")
     const body = existing ? { email, groups } : { email, groups }
     const path = existing ? `/admin/users/${encodeURIComponent(existing.username)}` : "/admin/users"
-    const res = await api(path, { method: existing ? "PATCH" : "POST", body: JSON.stringify(body) })
-    setBusy(false)
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}))
-      setErr(data.error || `Save failed: ${res.status}`)
-      return
+    try {
+      const res = await api(path, { method: existing ? "PATCH" : "POST", body: JSON.stringify(body) })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setErr(data.error || `Save failed: ${res.status}`)
+        return
+      }
+      onSaved(); onClose()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
     }
-    onSaved(); onClose()
   }
 
   return (
@@ -314,10 +324,14 @@ function LabelsTab({ cfg, reload }: { cfg: AdminConfig; reload: () => void }) {
     const label = (edits[type] ?? cfg.refundTypeLabels[type] ?? "").trim()
     if (!label) return
     setBusy(type)
-    await api(`/admin/refund-types/${encodeURIComponent(type)}`, {
-      method: "PUT", body: JSON.stringify({ label }),
-    })
-    setBusy(""); reload()
+    try {
+      await api(`/admin/refund-types/${encodeURIComponent(type)}`, {
+        method: "PUT", body: JSON.stringify({ label }),
+      })
+      reload()
+    } finally {
+      setBusy("")
+    }
   }
 
   return (
@@ -392,17 +406,22 @@ function DocTypeEditor({
   async function save() {
     setBusy(true); setErr("")
     const cleanDocs = docs.filter((d) => d.id.trim())
-    const res = await api(`/admin/doc-requirements/${encodeURIComponent(refundType)}`, {
-      method: "PUT",
-      body: JSON.stringify({ docs: cleanDocs, either_of: eitherOf.filter((g) => g.length) }),
-    })
-    setBusy(false)
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}))
-      setErr(data.error || `Save failed: ${res.status}`)
-      return
+    try {
+      const res = await api(`/admin/doc-requirements/${encodeURIComponent(refundType)}`, {
+        method: "PUT",
+        body: JSON.stringify({ docs: cleanDocs, either_of: eitherOf.filter((g) => g.length) }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setErr(data.error || `Save failed: ${res.status}`)
+        return
+      }
+      onSaved()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
     }
-    onSaved()
   }
 
   return (
