@@ -1385,15 +1385,22 @@ def _evaluate_doc_condition(condition: dict[str, Any], params: dict[str, str]) -
     except (ValueError, TypeError):
         actual_num = None
 
-    if op == "gt" and actual_num is not None:
-        return actual_num > float(expected)
-    if op == "gte" and actual_num is not None:
-        return actual_num >= float(expected)
-    if op == "lt" and actual_num is not None:
-        return actual_num < float(expected)
-    if op == "lte" and actual_num is not None:
-        return actual_num <= float(expected)
+    try:
+        expected_num = float(expected) if expected is not None else None
+    except (ValueError, TypeError):
+        expected_num = None
+
+    if op == "gt" and actual_num is not None and expected_num is not None:
+        return actual_num > expected_num
+    if op == "gte" and actual_num is not None and expected_num is not None:
+        return actual_num >= expected_num
+    if op == "lt" and actual_num is not None and expected_num is not None:
+        return actual_num < expected_num
+    if op == "lte" and actual_num is not None and expected_num is not None:
+        return actual_num <= expected_num
     if op == "eq":
+        if actual_num is not None and expected_num is not None:
+            return actual_num == expected_num
         return actual_raw.lower() == str(expected).lower()
     if op == "in":
         vals = [str(v).lower() for v in expected] if isinstance(expected, list) else []
