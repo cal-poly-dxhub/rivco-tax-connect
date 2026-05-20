@@ -15,14 +15,14 @@
                 --navy-dark: #020d40;
                 --blue: #0c71ca;
                 --yellow: #ffc629;
-                --bg: #f4f6f9;
+                --bg: #e8ecf0;
                 --surface: #ffffff;
-                --border: #d6dce2;
+                --border: #1a1a2e;
+                --border-light: #b0b8c4;
                 --text: #1a1a2e;
                 --text-muted: #556575;
                 --red: #c61f1f;
                 --green: #2e7d32;
-                --radius: 6px;
             }
             * { box-sizing: border-box; margin: 0; padding: 0; }
             body {
@@ -30,222 +30,237 @@
                 background: var(--bg);
                 color: var(--text);
                 min-height: 100vh;
-                font-size: 15px;
-                line-height: 1.5;
+                font-size: 14px;
+                line-height: 1.4;
             }
 
-            /* ── Header ── */
-            .site-header {
-                background: var(--navy);
-                color: #fff;
-                padding: 1rem 2rem;
-                display: flex;
-                align-items: center;
-                gap: 1rem;
-            }
-            .site-header img { max-height: 3rem; }
-            .site-header h1 {
-                font-family: "Montserrat", sans-serif;
-                font-size: 1rem;
-                font-weight: 600;
-            }
-            .site-header .sub {
-                display: block;
-                font-weight: 400;
-                font-size: 0.75rem;
-                opacity: 0.85;
-                text-transform: uppercase;
-                letter-spacing: 0.05em;
-            }
-
-            /* ── Layout ── */
-            .container {
-                max-width: 780px;
-                margin: 2rem auto;
-                padding: 0 1.25rem 4rem;
-            }
-            .card {
+            /* ── Document page ── */
+            .page {
+                max-width: 750px;
+                margin: 1.5rem auto;
                 background: var(--surface);
-                border: 1px solid var(--border);
-                border-radius: var(--radius);
-                padding: 1.75rem 2rem;
-                margin-bottom: 1.25rem;
-                box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+                border: 1px solid #999;
+                box-shadow: 0 2px 12px rgba(0,0,0,0.12);
+                padding: 2.5rem 3rem;
             }
-            .form-title {
+            @media (max-width: 800px) {
+                .page { margin: 0; border: none; padding: 1.5rem 1.25rem; }
+            }
+
+            /* ── Document header (mimics AP-13) ── */
+            .doc-header {
+                display: grid;
+                grid-template-columns: 70px 1fr auto;
+                gap: 1rem;
+                align-items: center;
+                margin-bottom: 1.5rem;
+                padding-bottom: 1rem;
+                border-bottom: 2px solid var(--border);
+            }
+            .doc-header img { width: 65px; height: 65px; }
+            .doc-header .title-block h1 {
                 font-family: "Montserrat", sans-serif;
-                font-size: 1.15rem;
+                font-size: 1.05rem;
                 font-weight: 700;
-                color: var(--navy);
-                margin-bottom: 0.25rem;
+                text-transform: uppercase;
+                line-height: 1.3;
             }
-            .form-subtitle {
-                font-size: 0.85rem;
+            .doc-header .title-block .office {
+                font-size: 0.8rem;
+                color: var(--text-muted);
+                text-transform: uppercase;
+                letter-spacing: 0.03em;
+            }
+            .doc-header .form-id {
+                border: 2px solid var(--border);
+                padding: 0.4rem 0.75rem;
+                text-align: center;
+                font-family: "Montserrat", sans-serif;
+                font-size: 0.75rem;
+                line-height: 1.4;
+                font-weight: 700;
+            }
+            .doc-header .form-id .big {
+                font-size: 1.1rem;
+                display: block;
+            }
+
+            /* ── Legal text block ── */
+            .legal-block {
+                background: #f8f9fa;
+                border: 1px solid var(--border-light);
+                padding: 0.75rem 1rem;
+                font-size: 0.78rem;
                 color: var(--text-muted);
                 margin-bottom: 1.5rem;
+                line-height: 1.5;
             }
+            .legal-block strong { color: var(--text); }
 
-            /* ── Section header ── */
-            .section-title {
-                display: flex;
-                align-items: baseline;
-                gap: 0.5rem;
-                margin-bottom: 0.75rem;
-                padding-bottom: 0.5rem;
-                border-bottom: 2px solid var(--navy);
-            }
-            .section-title h2 {
+            /* ── Section headers ── */
+            .section-header {
                 font-family: "Montserrat", sans-serif;
-                font-size: 0.95rem;
+                font-size: 0.85rem;
                 font-weight: 700;
-                color: var(--navy);
                 text-transform: uppercase;
-                letter-spacing: 0.04em;
-            }
-            .section-title .section-label {
-                font-size: 0.75rem;
-                color: var(--text-muted);
-                font-weight: 400;
-                letter-spacing: normal;
-                text-transform: none;
+                text-align: center;
+                letter-spacing: 0.05em;
+                border-top: 1px solid var(--border);
+                border-bottom: 1px solid var(--border);
+                padding: 0.4rem 0;
+                margin: 1.5rem 0 1rem;
             }
 
-            /* ── Form fields ── */
-            .field {
+            /* ── Table-style field groups (like warrant info) ── */
+            .field-table {
+                width: 100%;
+                border-collapse: collapse;
                 margin-bottom: 1rem;
             }
-            .field-row {
-                display: grid;
-                gap: 0.75rem;
-                grid-template-columns: 1fr 1fr;
-            }
-            .field-row.one { grid-template-columns: 1fr; }
-            @media (max-width: 560px) {
-                .field-row { grid-template-columns: 1fr; }
-            }
-            label {
-                display: block;
+            .field-table th {
                 font-family: "Montserrat", sans-serif;
-                font-weight: 600;
-                font-size: 0.75rem;
-                color: var(--text-muted);
-                margin-bottom: 0.25rem;
-                letter-spacing: 0.04em;
+                font-size: 0.7rem;
+                font-weight: 700;
                 text-transform: uppercase;
-            }
-            label .req { color: var(--red); margin-left: 0.2rem; }
-            input[type="text"],
-            input[type="email"],
-            input[type="tel"],
-            input[type="date"],
-            input[type="number"],
-            textarea {
-                width: 100%;
-                padding: 0.55rem 0.75rem;
-                background: #fff;
+                letter-spacing: 0.04em;
+                text-align: center;
+                padding: 0.3rem 0.5rem;
                 border: 1px solid var(--border);
-                border-radius: 4px;
+                background: #f3f4f6;
+            }
+            .field-table td {
+                border: 1px solid var(--border);
+                padding: 0.25rem 0.4rem;
+                vertical-align: bottom;
+            }
+            .field-table input {
+                width: 100%;
+                border: none;
+                outline: none;
                 font-size: 0.95rem;
                 font-family: "Lato", sans-serif;
-                color: var(--text);
-                transition: border-color 0.15s, box-shadow 0.15s;
+                padding: 0.3rem 0;
+                background: transparent;
             }
-            input:focus,
-            textarea:focus {
+            .field-table input:focus {
+                background: #eef5ff;
+            }
+
+            /* ── Line-style fields (signature block) ── */
+            .line-field {
+                margin-bottom: 1rem;
+                position: relative;
+            }
+            .line-field input,
+            .line-field textarea {
+                width: 100%;
+                border: none;
+                border-bottom: 1px solid var(--border);
+                padding: 0.4rem 0 0.2rem;
+                font-size: 0.95rem;
+                font-family: "Lato", sans-serif;
+                background: transparent;
                 outline: none;
-                border-color: var(--blue);
-                box-shadow: 0 0 0 3px rgba(12, 113, 202, 0.12);
             }
-            textarea { min-height: 4rem; resize: vertical; }
-            input[readonly] { background: #f7f8fa; color: var(--text-muted); }
-            .checkbox-field {
+            .line-field input:focus,
+            .line-field textarea:focus {
+                border-bottom-color: var(--blue);
+                background: #f8fbff;
+            }
+            .line-field textarea {
+                min-height: 2.5rem;
+                resize: vertical;
+            }
+            .line-field label {
+                display: block;
+                font-family: "Montserrat", sans-serif;
+                font-size: 0.68rem;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.04em;
+                color: var(--text-muted);
+                margin-top: 0.2rem;
+            }
+            .line-field label .req { color: var(--red); }
+            .line-field-row {
+                display: grid;
+                gap: 1.5rem;
+                grid-template-columns: 1fr 1fr;
+            }
+            @media (max-width: 560px) {
+                .line-field-row { grid-template-columns: 1fr; }
+            }
+
+            /* ── Checkbox fields ── */
+            .checkbox-row {
                 display: flex;
                 align-items: center;
-                gap: 0.5rem;
-                padding: 0.4rem 0;
-            }
-            .checkbox-field input { width: 1rem; height: 1rem; accent-color: var(--navy); }
-            .checkbox-field label {
-                margin: 0;
-                text-transform: none;
-                letter-spacing: normal;
-                font-family: "Lato", sans-serif;
-                font-weight: 400;
+                gap: 0.75rem;
+                margin: 0.5rem 0;
                 font-size: 0.9rem;
-                color: var(--text);
+            }
+            .checkbox-row input { width: 1rem; height: 1rem; accent-color: var(--navy); }
+            .checkbox-row .options {
+                display: flex;
+                gap: 1rem;
+                margin-left: auto;
+            }
+            .checkbox-row .options label {
+                display: flex;
+                align-items: center;
+                gap: 0.3rem;
+                font-weight: 600;
+                font-size: 0.85rem;
+            }
+
+            /* ── Declaration / perjury text ── */
+            .declaration {
+                font-size: 0.82rem;
+                line-height: 1.6;
+                margin: 1.5rem 0;
+                font-weight: 700;
+            }
+            .all-payees {
+                text-align: center;
+                font-weight: 700;
+                font-size: 0.9rem;
+                margin: 1rem 0;
             }
 
             /* ── Signature ── */
             .sig-wrap {
-                border: 2px dashed #b0bec5;
-                border-radius: 4px;
+                border: 2px dashed var(--border-light);
                 padding: 0.5rem;
-                background: #f9fafb;
+                background: #fafbfc;
+                margin-top: 0.5rem;
             }
             .sig-wrap canvas {
                 display: block;
                 width: 100%;
-                height: 140px;
+                height: 100px;
                 background: #fff;
-                border-radius: 2px;
                 cursor: crosshair;
             }
             .sig-actions {
                 display: flex;
                 gap: 0.5rem;
-                margin-top: 0.5rem;
+                margin-top: 0.4rem;
                 justify-content: flex-end;
             }
             .sig-clear {
                 background: none;
-                border: 1px solid var(--border);
-                padding: 0.3rem 0.75rem;
-                border-radius: 4px;
-                font-size: 0.8rem;
+                border: 1px solid var(--border-light);
+                padding: 0.25rem 0.6rem;
+                font-size: 0.75rem;
                 cursor: pointer;
                 color: var(--text-muted);
             }
-            .sig-clear:hover { color: var(--text); border-color: var(--text-muted); }
 
-            /* ── Submit ── */
-            button.primary {
-                width: 100%;
-                padding: 0.85rem 1.5rem;
-                background: var(--yellow);
-                color: var(--navy-dark);
-                border: none;
-                border-radius: 4px;
-                font-size: 0.95rem;
-                font-weight: 700;
-                font-family: "Montserrat", sans-serif;
-                cursor: pointer;
-                letter-spacing: 0.04em;
-                text-transform: uppercase;
-                margin-top: 0.5rem;
-                transition: background 0.2s, transform 0.1s;
-            }
-            button.primary:hover { background: #fed23a; transform: translateY(-1px); }
-            button.primary:disabled { background: #e0e0e0; color: #999; cursor: not-allowed; transform: none; }
-
-            button.secondary {
-                padding: 0.5rem 1rem;
-                background: #fff;
-                color: var(--navy);
-                border: 1px solid var(--navy);
-                border-radius: 4px;
-                font-size: 0.85rem;
-                font-family: "Montserrat", sans-serif;
-                font-weight: 600;
-                cursor: pointer;
-            }
-            button.secondary:hover { background: var(--navy); color: #fff; }
-
-            /* ── Status / notarization banners ── */
+            /* ── Notarization banner ── */
+            .banner { margin: 1rem 0; }
             .status {
-                margin-top: 1rem;
-                padding: 0.7rem 1rem;
-                border-radius: 4px;
-                font-size: 0.9rem;
+                padding: 0.6rem 1rem;
+                font-size: 0.85rem;
                 border-left: 3px solid;
             }
             .status.ok { background: #e8f5e9; border-color: var(--green); color: #2e7d32; }
@@ -253,84 +268,121 @@
             .status.loading { background: #e3f2fd; border-color: var(--blue); color: #1565c0; }
             .status.warn { background: #fff8e1; border-color: #f9a825; color: #7a5800; }
 
-            /* ── Confirmation view ── */
-            .done-view {
-                text-align: center;
-                padding: 3rem 1rem;
-            }
-            .done-view h2 {
+            /* ── Submit ── */
+            button.primary {
+                width: 100%;
+                padding: 0.8rem 1.5rem;
+                background: var(--yellow);
+                color: var(--navy-dark);
+                border: none;
+                font-size: 0.9rem;
+                font-weight: 700;
                 font-family: "Montserrat", sans-serif;
-                font-size: 1.25rem;
-                color: var(--green);
-                margin-bottom: 0.5rem;
+                cursor: pointer;
+                letter-spacing: 0.04em;
+                text-transform: uppercase;
+                margin-top: 1rem;
+                transition: background 0.2s;
             }
-            .done-view p { color: var(--text-muted); margin-bottom: 1rem; }
-            .done-actions {
-                display: flex;
-                gap: 0.75rem;
-                justify-content: center;
-                margin-top: 1.5rem;
+            button.primary:hover { background: #fed23a; }
+            button.primary:disabled { background: #e0e0e0; color: #999; cursor: not-allowed; }
+
+            /* ── Done view ── */
+            .done-view { text-align: center; padding: 2rem 1rem; }
+            .done-view h2 { font-family: "Montserrat", sans-serif; font-size: 1.1rem; color: var(--green); margin-bottom: 0.5rem; }
+            .done-view p { color: var(--text-muted); margin-bottom: 1rem; font-size: 0.9rem; }
+            .done-actions { display: flex; gap: 0.75rem; justify-content: center; margin-top: 1rem; }
+            button.secondary {
+                padding: 0.5rem 1rem;
+                background: #fff;
+                color: var(--navy);
+                border: 1px solid var(--navy);
+                font-size: 0.85rem;
+                font-family: "Montserrat", sans-serif;
+                font-weight: 600;
+                cursor: pointer;
+            }
+            button.secondary:hover { background: var(--navy); color: #fff; }
+
+            /* ── Footer ── */
+            .doc-footer {
+                margin-top: 2rem;
+                padding-top: 1rem;
+                border-top: 1px solid var(--border-light);
+                text-align: center;
+                font-size: 0.72rem;
+                color: var(--text-muted);
+                line-height: 1.6;
             }
 
             /* ── Print ── */
             @media print {
                 body { background: #fff; }
-                .site-header { background: #fff; color: var(--navy); border-bottom: 2px solid var(--navy); }
-                .card { box-shadow: none; border: none; }
+                .page { box-shadow: none; border: none; margin: 0; padding: 1.5rem; }
                 button, .sig-actions, .print-hide { display: none !important; }
-                .container { max-width: none; padding: 0; margin: 0; }
-                .section-title { border-bottom-color: var(--navy); }
             }
         </style>
     </head>
     <body>
-        <div class="site-header">
-            <img src="images/ACO_Logo_Small.png" alt="Riverside County Auditor-Controller" />
-            <h1>
-                Unclaimed Refund Claim
-                <span class="sub">Auditor-Controller · County of Riverside</span>
-            </h1>
-        </div>
-
-        <div class="container">
-            <div class="card" id="formCard">
-                <h1 class="form-title" id="formTitle">Loading your claim form…</h1>
-                <p class="form-subtitle" id="formSubtitle">
-                    Please wait while we prepare the correct form for you.
-                </p>
-                <div id="formSections"></div>
-                <div id="banner"></div>
+        <div class="page" id="formPage">
+            <div class="doc-header">
+                <img src="images/RivCo_seal_small.png" alt="County of Riverside Seal" />
+                <div class="title-block">
+                    <h1 id="docTitle">Unclaimed Refund Claim</h1>
+                    <span class="office">Office of the Auditor-Controller</span>
+                </div>
+                <div class="form-id">
+                    <span>SPM Form</span>
+                    <span class="big" id="formIdLabel">—</span>
+                </div>
             </div>
 
-            <div class="card" id="signCard" style="display:none">
-                <div class="section-title">
-                    <h2>Signature</h2>
-                    <span class="section-label">Sign once; applies to every claim on this form.</span>
-                </div>
-                <p class="form-subtitle">
-                    By signing, you affirm that the information provided is true and complete to the best of your knowledge.
+            <div class="legal-block" id="legalBlock">
+                <strong>Government Code Section 29802.</strong> (a) Any warrant issued is void (stale) if not presented to the county treasurer for payment within six months after its date. (b) Any time within two years from the date on which the original warrant became void, the payee or assignee may present the warrant to the auditor to draw new warrants within the limitations prescribed by board resolution.
+            </div>
+
+            <div id="banner" class="banner"></div>
+
+            <div class="legal-block" style="background:#fff3cd; border-color:#f9a825; font-size:0.82rem; color:#5d4200;">
+                <strong>Provide all information.</strong> An incomplete form will be returned.
+            </div>
+
+            <div id="formSections"></div>
+
+            <div id="signSection" style="display:none">
+                <div class="section-header">Signature</div>
+                <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.5rem;">
+                    By signing, you affirm that the information provided is true and complete. One signature covers all claim types on this form.
                 </p>
                 <div class="sig-wrap">
-                    <canvas id="sigCanvas" width="720" height="140"></canvas>
+                    <canvas id="sigCanvas" width="720" height="100"></canvas>
                 </div>
                 <div class="sig-actions">
-                    <button type="button" class="sig-clear" id="sigClear">Clear signature</button>
+                    <button type="button" class="sig-clear" id="sigClear">Clear</button>
                 </div>
+                <label style="font-size:0.68rem; color:var(--text-muted); text-transform:uppercase; font-family:'Montserrat',sans-serif; font-weight:700; margin-top:0.3rem; display:block;">
+                    Signature (Payee/Business Claimant)
+                </label>
             </div>
 
-            <div class="card" id="submitCard" style="display:none">
-                <button type="button" class="primary" id="submitBtn">Submit claim</button>
-                <div id="status" class="status" role="alert" style="display:none"></div>
+            <div id="submitSection" style="display:none">
+                <button type="button" class="primary" id="submitBtn">Submit Claim</button>
+                <div id="status" class="status" role="alert" style="display:none; margin-top:0.75rem;"></div>
             </div>
 
-            <div class="card" id="doneCard" style="display:none">
+            <div id="doneSection" style="display:none">
                 <div class="done-view">
-                    <h2>✓ Claim submitted</h2>
+                    <h2>Claim Submitted</h2>
                     <p>Your unclaimed-refund claim has been sent to the Auditor-Controller's office. Keep a copy for your records.</p>
                     <div class="done-actions">
                         <button type="button" class="secondary" onclick="window.print()">Print a copy</button>
                     </div>
                 </div>
+            </div>
+
+            <div class="doc-footer">
+                County of Riverside · Office of the Auditor-Controller<br>
+                4080 Lemon Street, 6th Floor · P.O. Box 1326 · Riverside, CA 92502-1326
             </div>
         </div>
 
@@ -340,7 +392,6 @@
             var API_URL = window.API_URL || "";
             var params = new URLSearchParams(window.location.search);
 
-            // Params from the bot handoff
             var types = (params.get("type") || "").split(",").filter(Boolean);
             var amounts = (params.get("amount") || "").split(",");
             var ids = (params.get("id") || "").split(",");
@@ -350,12 +401,13 @@
             var presetTaxYear = params.get("taxyear") || "";
 
             var formSections = document.getElementById("formSections");
-            var formTitle = document.getElementById("formTitle");
-            var formSubtitle = document.getElementById("formSubtitle");
+            var docTitle = document.getElementById("docTitle");
+            var formIdLabel = document.getElementById("formIdLabel");
+            var legalBlock = document.getElementById("legalBlock");
             var banner = document.getElementById("banner");
-            var signCard = document.getElementById("signCard");
-            var submitCard = document.getElementById("submitCard");
-            var doneCard = document.getElementById("doneCard");
+            var signSection = document.getElementById("signSection");
+            var submitSection = document.getElementById("submitSection");
+            var doneSection = document.getElementById("doneSection");
             var statusEl = document.getElementById("status");
             var submitBtn = document.getElementById("submitBtn");
 
@@ -364,47 +416,55 @@
                 return;
             }
 
-            // Fetch the merged schema
             fetch(API_URL + "/form-schemas?types=" + encodeURIComponent(types.join(",")))
                 .then(function (r) { if (!r.ok) throw new Error("schema fetch " + r.status); return r.json(); })
                 .then(function (data) { renderForm(data); })
                 .catch(function (e) { showError("Unable to load the claim form: " + e.message); });
 
             function showError(msg) {
-                formTitle.textContent = "We couldn't load your claim form";
-                formSubtitle.textContent = "";
+                docTitle.textContent = "Error";
+                legalBlock.style.display = "none";
                 banner.innerHTML = '<div class="status err">' + msg + '</div>';
             }
 
-            /**
-             * Renders the unified form, grouped by section in the order:
-             *   common, <each refund type in URL order>
-             * Pre-fills known fields from URL params.
-             */
             function renderForm(data) {
                 var schemas = data.schemas || {};
                 var merged = data.merged_fields || [];
                 var refundTypes = data.refund_types || [];
 
-                // Build a combined title that names each form this submission covers
-                var titles = refundTypes.map(function (rt) {
-                    return (schemas[rt] && schemas[rt].title) || rt;
-                });
-                formTitle.textContent = "Unclaimed Refund Claim";
-                formSubtitle.textContent = "This single form covers: " + titles.join(" · ");
+                // Set document title based on types
+                var hasStaleWarrant = refundTypes.includes("STALE_WARRANT");
+                var hasPropertyTax = refundTypes.includes("PROPERTY_TAX");
+                var hasPayroll = refundTypes.includes("PAYROLL");
 
-                // Warn if any stale-warrant claim exceeds $1,000 (notarization threshold)
-                var notarizationNeeded = false;
-                for (var i = 0; i < refundTypes.length; i++) {
-                    if (refundTypes[i] === "STALE_WARRANT") {
-                        var amt = parseFloat(amounts[i] || 0);
-                        if (amt > 1000) { notarizationNeeded = true; break; }
-                    }
+                // STALE_WARRANT and PAYROLL share the AP-13 affidavit.
+                var isAp13Only = (hasStaleWarrant || hasPayroll) && !hasPropertyTax;
+                if (isAp13Only) {
+                    docTitle.textContent = "Affidavit for the Replacement of Stale Dated Warrant";
+                    formIdLabel.textContent = "AP – 13";
+                } else if (hasPropertyTax && !hasStaleWarrant && !hasPayroll) {
+                    docTitle.textContent = "Property Tax Refund Claim";
+                    formIdLabel.textContent = "PTR";
+                    legalBlock.style.display = "none";
+                } else {
+                    docTitle.textContent = "Unclaimed Refund Claim";
+                    formIdLabel.textContent = "Multi";
+                    legalBlock.innerHTML = '<strong>This combined form covers:</strong> ' +
+                        refundTypes.map(function(rt) {
+                            return (schemas[rt] && schemas[rt].title) || rt;
+                        }).join(" · ");
                 }
-                if (notarizationNeeded) {
-                    banner.innerHTML =
-                        '<div class="status warn">This claim exceeds $1,000 and will require a notarized affidavit ' +
-                        'before the refund can be issued. Please notarize your signed form and include it with your submission.</div>';
+
+                // Notarization warning — both AP-13 refund types require notarization above $1,000.
+                for (var i = 0; i < refundTypes.length; i++) {
+                    if (refundTypes[i] === "STALE_WARRANT" || refundTypes[i] === "PAYROLL") {
+                        var amt = parseFloat(amounts[i] || 0);
+                        if (amt > 1000) {
+                            banner.innerHTML =
+                                '<div class="status warn"><strong>Notarization required.</strong> This claim exceeds $1,000 and will require a notarized affidavit (AP-13 Page 2) before the refund can be issued.</div>';
+                            break;
+                        }
+                    }
                 }
 
                 // Group fields by section
@@ -415,63 +475,114 @@
                     (bySection[s] = bySection[s] || []).push(f);
                 });
 
-                // Render each section
                 sectionOrder.forEach(function (section) {
                     var fields = bySection[section];
                     if (!fields || fields.length === 0) return;
 
                     var sectionEl = document.createElement("div");
-                    sectionEl.className = "section";
 
-                    var titleEl = document.createElement("div");
-                    titleEl.className = "section-title";
-                    var h2 = document.createElement("h2");
-                    var subLabel = document.createElement("span");
-                    subLabel.className = "section-label";
+                    // Section header
+                    var header = document.createElement("div");
+                    header.className = "section-header";
                     if (section === "common") {
-                        h2.textContent = "Claimant Information";
-                        subLabel.textContent = "Required for every claim.";
+                        header.textContent = "Claimant Information";
                     } else {
-                        var sTitle = (schemas[section] && schemas[section].title) || section;
-                        h2.textContent = sTitle;
-                        subLabel.textContent = "Fields specific to this claim type.";
+                        header.textContent = (schemas[section] && schemas[section].title) || section;
                     }
-                    titleEl.appendChild(h2);
-                    titleEl.appendChild(subLabel);
-                    sectionEl.appendChild(titleEl);
+                    sectionEl.appendChild(header);
 
-                    // Two-column layout for short fields, full-width for address/textarea
-                    var currentRow = null;
-                    fields.forEach(function (f) {
+                    // Check if this is the warrant-info section (has warrant_amount, warrant_number)
+                    var warrantFields = fields.filter(function(f) {
+                        return f.id === "warrant_date" || f.id === "warrant_amount" ||
+                               f.id === "warrant_number" || f.id === "business_unit";
+                    });
+                    var otherFields = fields.filter(function(f) {
+                        return f.id !== "warrant_date" && f.id !== "warrant_amount" &&
+                               f.id !== "warrant_number" && f.id !== "business_unit";
+                    });
+
+                    // Render warrant fields as a table if present
+                    if (warrantFields.length > 0) {
+                        var tableHtml = '<table class="field-table"><thead><tr>';
+                        warrantFields.forEach(function(f) {
+                            tableHtml += '<th>' + f.label + (f.required ? ' <span style="color:var(--red)">*</span>' : '') + '</th>';
+                        });
+                        tableHtml += '</tr></thead><tbody><tr>';
+                        warrantFields.forEach(function(f) {
+                            var val = prefillFor(f.id, refundTypes);
+                            tableHtml += '<td><input type="text" id="f_' + f.id + '" data-field-id="' + f.id + '"' +
+                                (f.required ? ' required' : '') +
+                                ' value="' + escHtml(val) + '"></td>';
+                        });
+                        tableHtml += '</tr></tbody></table>';
+                        var tableWrapper = document.createElement("div");
+                        tableWrapper.innerHTML = tableHtml;
+                        sectionEl.appendChild(tableWrapper);
+                    }
+
+                    // Render remaining fields as line-style inputs
+                    var row = null;
+                    otherFields.forEach(function (f) {
                         var wide = f.type === "address" || f.type === "textarea";
-                        if (wide || !currentRow) {
-                            currentRow = document.createElement("div");
-                            currentRow.className = "field-row " + (wide ? "one" : "");
-                            sectionEl.appendChild(currentRow);
+
+                        if (f.type === "checkbox") {
+                            var cbEl = document.createElement("div");
+                            cbEl.className = "checkbox-row";
+                            cbEl.innerHTML =
+                                '<span>' + f.label + '</span>' +
+                                '<div class="options">' +
+                                '<label><input type="radio" name="' + f.id + '" value="true" data-field-id="' + f.id + '"> Yes</label>' +
+                                '<label><input type="radio" name="' + f.id + '" value="false" data-field-id="' + f.id + '"> No</label>' +
+                                '</div>';
+                            sectionEl.appendChild(cbEl);
+                            return;
                         }
-                        currentRow.appendChild(buildField(f, refundTypes));
-                        if (wide) currentRow = null;
+
+                        if (wide || !row) {
+                            row = document.createElement("div");
+                            row.className = "line-field-row" + (wide ? " " : "");
+                            if (wide) row.style.gridTemplateColumns = "1fr";
+                            sectionEl.appendChild(row);
+                        }
+
+                        var fieldEl = document.createElement("div");
+                        fieldEl.className = "line-field";
+
+                        var val = prefillFor(f.id, refundTypes);
+                        var inputTag;
+                        if (f.type === "address" || f.type === "textarea") {
+                            inputTag = '<textarea id="f_' + f.id + '" data-field-id="' + f.id + '"' +
+                                (f.required ? ' required' : '') + '>' + escHtml(val) + '</textarea>';
+                        } else {
+                            var iType = { text: "text", email: "email", tel: "tel", date: "date", number: "number" }[f.type] || "text";
+                            inputTag = '<input type="' + iType + '" id="f_' + f.id + '" data-field-id="' + f.id + '"' +
+                                (f.required ? ' required' : '') +
+                                ' value="' + escHtml(val) + '">';
+                        }
+                        fieldEl.innerHTML = inputTag +
+                            '<label for="f_' + f.id + '">' + f.label + (f.required ? ' <span class="req">*</span>' : '') + '</label>';
+                        row.appendChild(fieldEl);
+
+                        if (wide) row = null;
                     });
 
                     formSections.appendChild(sectionEl);
                 });
 
-                signCard.style.display = "";
-                submitCard.style.display = "";
+                signSection.style.display = "";
+                submitSection.style.display = "";
                 initSignature();
             }
 
-            /**
-             * Return the prefilled value for a field ID, using URL params and
-             * refund-type-specific data.
-             */
+            function escHtml(s) {
+                return s.replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+            }
+
             function prefillFor(fieldId, refundTypes) {
                 if (fieldId === "name") return presetName;
                 if (fieldId === "address") return presetAddress;
                 if (fieldId === "assessment_number") return presetAssessment;
                 if (fieldId === "tax_year") return presetTaxYear;
-
-                // Map per-refund-type amount+id back to the right field
                 for (var i = 0; i < refundTypes.length; i++) {
                     var rt = refundTypes[i];
                     if (rt === "PROPERTY_TAX") {
@@ -484,58 +595,7 @@
                 return "";
             }
 
-            function buildField(f, refundTypes) {
-                var wrap = document.createElement("div");
-                wrap.className = "field";
-
-                if (f.type === "checkbox") {
-                    wrap.className += " checkbox-field";
-                    var cb = document.createElement("input");
-                    cb.type = "checkbox";
-                    cb.id = "f_" + f.id;
-                    cb.dataset.fieldId = f.id;
-                    wrap.appendChild(cb);
-                    var lab = document.createElement("label");
-                    lab.htmlFor = "f_" + f.id;
-                    lab.textContent = f.label;
-                    wrap.appendChild(lab);
-                    return wrap;
-                }
-
-                var lab = document.createElement("label");
-                lab.htmlFor = "f_" + f.id;
-                lab.textContent = f.label;
-                if (f.required) {
-                    var req = document.createElement("span");
-                    req.className = "req";
-                    req.textContent = "*";
-                    lab.appendChild(req);
-                }
-                wrap.appendChild(lab);
-
-                var input;
-                if (f.type === "textarea" || f.type === "address") {
-                    input = document.createElement("textarea");
-                    input.rows = f.type === "address" ? 2 : 3;
-                } else {
-                    input = document.createElement("input");
-                    input.type = {
-                        text: "text",
-                        email: "email",
-                        tel: "tel",
-                        date: "date",
-                        number: "number",
-                    }[f.type] || "text";
-                }
-                input.id = "f_" + f.id;
-                input.dataset.fieldId = f.id;
-                if (f.required) input.required = true;
-                input.value = prefillFor(f.id, refundTypes);
-                wrap.appendChild(input);
-                return wrap;
-            }
-
-            /* ── Signature pad (minimal, canvas-based) ── */
+            /* ── Signature ── */
             var sigCanvas = document.getElementById("sigCanvas");
             var sigCtx, sigDrawn;
 
@@ -587,14 +647,17 @@
                     setStatus("err", "Please sign the form before submitting.");
                     return;
                 }
-                // Gather form data
                 var formData = {};
                 var inputs = document.querySelectorAll("[data-field-id]");
                 var missing = [];
                 inputs.forEach(function (el) {
                     var id = el.dataset.fieldId;
-                    var val = el.type === "checkbox" ? !!el.checked : (el.value || "").trim();
-                    if (el.required && (val === "" || val === false)) missing.push(id);
+                    if (el.type === "radio") {
+                        if (el.checked) formData[id] = el.value === "true";
+                        return;
+                    }
+                    var val = (el.value || "").trim();
+                    if (el.required && val === "") missing.push(id);
                     formData[id] = val;
                 });
                 if (missing.length) {
@@ -616,30 +679,24 @@
                 })], { type: "application/json" });
 
                 try {
-                    // Step 1: request upload URL for the unified form
                     var res = await fetch(API_URL + "/upload", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({
                             name: name,
                             refundType: refundType,
-                            files: [{
-                                filename: "unified-form.json",
-                                contentType: "application/json",
-                            }],
+                            files: [{ filename: "unified-form.json", contentType: "application/json" }],
                         }),
                     });
                     var data = await res.json();
                     if (!res.ok) throw new Error(data.error || "Request failed");
 
-                    // Step 2: PUT the unified form to S3
                     await fetch(data.uploads[0].uploadUrl, {
                         method: "PUT",
                         headers: { "Content-Type": "application/json" },
                         body: unifiedBlob,
                     });
 
-                    // Step 3: mark upload complete
                     await fetch(API_URL + "/upload-complete", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
@@ -649,11 +706,10 @@
                         }),
                     });
 
-                    // Done
-                    document.getElementById("formCard").style.display = "none";
-                    signCard.style.display = "none";
-                    submitCard.style.display = "none";
-                    doneCard.style.display = "";
+                    document.getElementById("formPage").innerHTML =
+                        '<div class="doc-header"><img src="images/RivCo_seal_small.png" alt="Seal"><div class="title-block"><h1>Claim Submitted</h1><span class="office">Office of the Auditor-Controller</span></div><div class="form-id"><span>Reference</span><span class="big">' + data.submissionId.slice(0,8) + '</span></div></div>' +
+                        '<div class="done-view"><h2>Your claim has been received</h2><p>The Auditor-Controller\'s office will review your submission. Please allow up to 90 days for processing.</p><div class="done-actions"><button type="button" class="secondary" onclick="window.print()">Print a copy</button></div></div>' +
+                        '<div class="doc-footer">County of Riverside · Office of the Auditor-Controller<br>4080 Lemon Street, 6th Floor · P.O. Box 1326 · Riverside, CA 92502-1326</div>';
                     window.scrollTo({ top: 0, behavior: "smooth" });
                 } catch (err) {
                     submitBtn.disabled = false;

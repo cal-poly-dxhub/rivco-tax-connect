@@ -15,12 +15,15 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
-import { currentSession, signOut } from "@/lib/cognito"
+import { signOut } from "@/lib/cognito"
 import { api } from "@/lib/api"
 import { ThemeToggle } from "@/components/theme-toggle"
 import {
-  Submission, StatusResponse, Permissions, STATUSES, labelFor, Package, PackageFile, AuditEntry, AuditResponse, StatusValue,
+  Submission, StatusResponse, STATUSES, labelFor, Package, PackageFile, AuditEntry, AuditResponse, StatusValue,
 } from "@/lib/types"
+import { FilledFormViewer } from "@/components/filled-form-viewer"
+import { useAuthGate } from "@/hooks/use-auth-gate"
+import { useApi } from "@/hooks/use-api"
 
 const STATUS_STYLES: Record<StatusValue, string> = {
   partial: "bg-orange-100 text-orange-800 border-orange-300",
@@ -46,34 +49,40 @@ function formatAudit(e: AuditEntry): string {
 
 export default function DashboardPage() {
   const router = useRouter()
-  const [subs, setSubs] = useState<Submission[]>([])
-  const [perms, setPerms] = useState<Permissions | null>(null)
+  const { ready } = useAuthGate()
+  const { data: status, error: statusError, setData: setStatus } = useApi<StatusResponse>(
+    "/status",
+    { enabled: ready },
+  )
   const [labels, setLabels] = useState<Record<string, string>>({})
   const [search, setSearch] = useState("")
   const [deptFilter, setDeptFilter] = useState<string>("all")
   const [statusFilter, setStatusFilter] = useState<string>("all")
-  const [error, setError] = useState("")
+  const [actionError, setActionError] = useState("")
   const [selected, setSelected] = useState<Submission | null>(null)
 
+  const subs = status?.submissions ?? []
+  const perms = status?.permissions ?? null
+  const error = actionError || statusError
+
+  // Super-admins also see refund-type labels; load lazily once we know the role.
   useEffect(() => {
-    (async () => {
-      const session = await currentSession()
-      if (!session || session.kind !== "success") return router.replace("/")
-      try {
-        const res = await api("/status")
-        if (!res.ok) throw new Error(`/status ${res.status}`)
-        const data: StatusResponse = await res.json()
-        setSubs(data.submissions)
-        setPerms(data.permissions)
-        if (data.permissions.isSuperAdmin) {
-          const cfgRes = await api("/admin/config")
-          if (cfgRes.ok) setLabels((await cfgRes.json()).refundTypeLabels || {})
-        }
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e))
+    if (!perms?.isSuperAdmin) return
+    let cancelled = false
+    ;(async () => {
+      const res = await api("/admin/config")
+      if (!cancelled && res.ok) {
+        setLabels((await res.json()).refundTypeLabels || {})
       }
     })()
-  }, [router])
+    return () => {
+      cancelled = true
+    }
+  }, [perms?.isSuperAdmin])
+
+  function setSubs(updater: (prev: Submission[]) => Submission[]) {
+    setStatus((prev) => (prev ? { ...prev, submissions: updater(prev.submissions) } : prev))
+  }
 
   const availableDepts = useMemo(() => {
     const set = new Set<string>()
@@ -91,16 +100,37 @@ export default function DashboardPage() {
   }, [subs, search, deptFilter, statusFilter])
 
   async function changeStatus(id: string, department: string, status: string) {
-    setSubs((prev) => prev.map((s) => (
+    // Snapshot the prior status so we can roll back the optimistic update
+    // if the server rejects the change.
+    const prev = subs.find((s) => s.submissionId === id)?.statuses[department]
+    setSubs((curr) => curr.map((s) => (
       s.submissionId === id
         ? { ...s, statuses: { ...s.statuses, [department]: status as StatusValue } }
         : s
     )))
-    const res = await api("/update-status", {
-      method: "POST",
-      body: JSON.stringify({ submissionId: id, department, status }),
-    })
-    if (!res.ok) setError(`Update failed: ${res.status}`)
+    let res: Response
+    try {
+      res = await api("/update-status", {
+        method: "POST",
+        body: JSON.stringify({ submissionId: id, department, status }),
+      })
+    } catch (e) {
+      setSubs((curr) => curr.map((s) => (
+        s.submissionId === id && prev !== undefined
+          ? { ...s, statuses: { ...s.statuses, [department]: prev } }
+          : s
+      )))
+      setActionError(e instanceof Error ? e.message : String(e))
+      return
+    }
+    if (!res.ok) {
+      setSubs((curr) => curr.map((s) => (
+        s.submissionId === id && prev !== undefined
+          ? { ...s, statuses: { ...s.statuses, [department]: prev } }
+          : s
+      )))
+      setActionError(`Update failed: ${res.status}`)
+    }
   }
 
   async function deleteSubmission(id: string) {
@@ -110,7 +140,7 @@ export default function DashboardPage() {
       body: JSON.stringify({ submissionId: id }),
     })
     if (res.ok) setSubs((prev) => prev.filter((s) => s.submissionId !== id))
-    else setError(`Delete failed: ${res.status}`)
+    else setActionError(`Delete failed: ${res.status}`)
   }
 
   function onSignOut() {
@@ -244,37 +274,25 @@ export default function DashboardPage() {
 }
 
 function SubmissionDetail({ submission }: { submission: Submission }) {
-  const [pkg, setPkg] = useState<Package | null>(null)
+  const { data: pkg, error: err } = useApi<Package>(
+    `/package?id=${encodeURIComponent(submission.submissionId)}`,
+    { deps: [submission.submissionId] },
+  )
+  // Audit log is best-effort; ignore errors so the detail view still renders.
+  const { data: auditData } = useApi<AuditResponse>(
+    `/audit/${encodeURIComponent(submission.submissionId)}`,
+    { deps: [submission.submissionId] },
+  )
+  const audit = auditData?.entries ?? null
   const [active, setActive] = useState<PackageFile | null>(null)
-  const [err, setErr] = useState("")
-  const [audit, setAudit] = useState<AuditEntry[] | null>(null)
 
+  // Reset selection when the user opens a different submission.
   useEffect(() => {
-    (async () => {
-      try {
-        const res = await api(`/package?id=${encodeURIComponent(submission.submissionId)}`)
-        if (!res.ok) throw new Error(`/package ${res.status}`)
-        const data: Package = await res.json()
-        setPkg(data)
-        if (data.files.length) setActive(data.files[0])
-      } catch (e) {
-        setErr(e instanceof Error ? e.message : String(e))
-      }
-    })()
+    setActive(null)
   }, [submission.submissionId])
-
   useEffect(() => {
-    (async () => {
-      try {
-        const res = await api(`/audit/${encodeURIComponent(submission.submissionId)}`)
-        if (!res.ok) return
-        const data: AuditResponse = await res.json()
-        setAudit(data.entries)
-      } catch {
-        // audit is best-effort in the UI too
-      }
-    })()
-  }, [submission.submissionId])
+    if (pkg && pkg.files.length && !active) setActive(pkg.files[0])
+  }, [pkg, active])
 
   return (
     <>
@@ -338,23 +356,25 @@ function SubmissionDetail({ submission }: { submission: Submission }) {
           </div>
         </aside>
         <section className="border rounded-md bg-muted/20 overflow-hidden flex flex-col">
-          {active ? <FileViewer file={active} /> : <p className="p-4 text-muted-foreground">Select a file to preview.</p>}
+          {active ? <FileViewer file={active} submission={submission} /> : <p className="p-4 text-muted-foreground">Select a file to preview.</p>}
         </section>
       </div>
     </>
   )
 }
 
-function FileViewer({ file }: { file: PackageFile }) {
+function FileViewer({ file, submission }: { file: PackageFile; submission: Submission }) {
   const [jsonText, setJsonText] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [showRaw, setShowRaw] = useState(false)
   const ext = file.filename.split(".").pop()?.toLowerCase() || ""
   const isPdf = ext === "pdf"
   const isImage = ["jpg", "jpeg", "png", "heic", "gif", "webp"].includes(ext)
   const isJson = ext === "json"
+  const isUnifiedForm = file.filename === "unified-form.json"
 
   useEffect(() => {
-    if (!isJson) return
+    if (!isJson || (isUnifiedForm && !showRaw)) return
     setLoading(true); setJsonText(null)
     fetch(file.downloadUrl)
       .then((r) => r.text())
@@ -364,12 +384,22 @@ function FileViewer({ file }: { file: PackageFile }) {
       })
       .catch((e) => setJsonText(`Failed to load: ${e.message}`))
       .finally(() => setLoading(false))
-  }, [file.downloadUrl, isJson])
+  }, [file.downloadUrl, isJson, isUnifiedForm, showRaw])
 
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between border-b p-2 bg-background">
-        <span className="text-xs truncate">{file.filename}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs truncate">{file.filename}</span>
+          {isUnifiedForm && (
+            <button
+              onClick={() => setShowRaw(!showRaw)}
+              className="text-xs px-2 py-0.5 rounded border bg-muted text-muted-foreground hover:bg-muted/80"
+            >
+              {showRaw ? "Form view" : "Raw JSON"}
+            </button>
+          )}
+        </div>
         <a
           href={file.downloadUrl}
           download={file.filename}
@@ -379,17 +409,26 @@ function FileViewer({ file }: { file: PackageFile }) {
         </a>
       </div>
       <div className="flex-1 overflow-auto">
-        {isPdf && <iframe src={file.downloadUrl} className="w-full h-full min-h-[500px]" title={file.filename} />}
-        {isImage && <img src={file.downloadUrl} alt={file.filename} className="max-w-full h-auto p-4 mx-auto" />}
-        {isJson && (
-          loading
-            ? <p className="p-4 text-muted-foreground text-xs">Loading…</p>
-            : <pre className="p-4 text-xs whitespace-pre-wrap break-all">{jsonText}</pre>
-        )}
-        {!isPdf && !isImage && !isJson && (
-          <div className="p-4 text-sm text-muted-foreground">
-            Preview not supported for .{ext}. Use Download.
-          </div>
+        {isUnifiedForm && !showRaw ? (
+          <FilledFormViewer
+            formDataUrl={file.downloadUrl}
+            refundTypes={submission.refundType.split(",")}
+          />
+        ) : (
+          <>
+            {isPdf && <iframe src={file.downloadUrl} className="w-full h-full min-h-[500px]" title={file.filename} />}
+            {isImage && <img src={file.downloadUrl} alt={file.filename} className="max-w-full h-auto p-4 mx-auto" />}
+            {isJson && (
+              loading
+                ? <p className="p-4 text-muted-foreground text-xs">Loading…</p>
+                : <pre className="p-4 text-xs whitespace-pre-wrap break-all">{jsonText}</pre>
+            )}
+            {!isPdf && !isImage && !isJson && (
+              <div className="p-4 text-sm text-muted-foreground">
+                Preview not supported for .{ext}. Use Download.
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

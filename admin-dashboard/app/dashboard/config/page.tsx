@@ -14,38 +14,17 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
-import { currentSession, signOut } from "@/lib/cognito"
+import { signOut } from "@/lib/cognito"
 import { api } from "@/lib/api"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { AdminConfig, Department, AdminUser, REFUND_TYPES, DocReq, DocReqsResponse, FormField, FormSchema, FormSchemasResponse } from "@/lib/types"
+import { useAuthGate } from "@/hooks/use-auth-gate"
+import { useApi } from "@/hooks/use-api"
 
 export default function AdminConfigPage() {
   const router = useRouter()
-  const [cfg, setCfg] = useState<AdminConfig | null>(null)
-  const [error, setError] = useState("")
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    (async () => {
-      const session = await currentSession()
-      if (!session || session.kind !== "success") return router.replace("/")
-      if (!session.groups.includes("super-admin")) return router.replace("/dashboard")
-      await reload()
-    })()
-  }, [router])
-
-  async function reload() {
-    setLoading(true)
-    try {
-      const res = await api("/admin/config")
-      if (!res.ok) throw new Error(`/admin/config ${res.status}`)
-      setCfg(await res.json())
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setLoading(false)
-    }
-  }
+  const { ready } = useAuthGate({ requireSuperAdmin: true })
+  const { data: cfg, error, loading, reload } = useApi<AdminConfig>("/admin/config", { enabled: ready })
 
   function onSignOut() {
     signOut()
@@ -162,14 +141,19 @@ function DepartmentForm({
       ? { label, refund_types: types }
       : { key, label, refund_types: types }
     const path = existing ? `/admin/departments/${encodeURIComponent(existing.key)}` : "/admin/departments"
-    const res = await api(path, { method: existing ? "PATCH" : "POST", body: JSON.stringify(body) })
-    setBusy(false)
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}))
-      setErr(data.error || `Save failed: ${res.status}`)
-      return
+    try {
+      const res = await api(path, { method: existing ? "PATCH" : "POST", body: JSON.stringify(body) })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setErr(data.error || `Save failed: ${res.status}`)
+        return
+      }
+      onSaved(); onClose()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
     }
-    onSaved(); onClose()
   }
 
   return (
@@ -277,14 +261,19 @@ function UserForm({
     setBusy(true); setErr("")
     const body = existing ? { email, groups } : { email, groups }
     const path = existing ? `/admin/users/${encodeURIComponent(existing.username)}` : "/admin/users"
-    const res = await api(path, { method: existing ? "PATCH" : "POST", body: JSON.stringify(body) })
-    setBusy(false)
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}))
-      setErr(data.error || `Save failed: ${res.status}`)
-      return
+    try {
+      const res = await api(path, { method: existing ? "PATCH" : "POST", body: JSON.stringify(body) })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setErr(data.error || `Save failed: ${res.status}`)
+        return
+      }
+      onSaved(); onClose()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
     }
-    onSaved(); onClose()
   }
 
   return (
@@ -335,10 +324,14 @@ function LabelsTab({ cfg, reload }: { cfg: AdminConfig; reload: () => void }) {
     const label = (edits[type] ?? cfg.refundTypeLabels[type] ?? "").trim()
     if (!label) return
     setBusy(type)
-    await api(`/admin/refund-types/${encodeURIComponent(type)}`, {
-      method: "PUT", body: JSON.stringify({ label }),
-    })
-    setBusy(""); reload()
+    try {
+      await api(`/admin/refund-types/${encodeURIComponent(type)}`, {
+        method: "PUT", body: JSON.stringify({ label }),
+      })
+      reload()
+    } finally {
+      setBusy("")
+    }
   }
 
   return (
@@ -365,30 +358,7 @@ function LabelsTab({ cfg, reload }: { cfg: AdminConfig; reload: () => void }) {
 /* ─── Document requirements ─── */
 
 function DocsTab() {
-  const [data, setData] = useState<DocReqsResponse | null>(null)
-  const [err, setErr] = useState("")
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await api("/admin/doc-requirements")
-        if (!res.ok) throw new Error(`${res.status}`)
-        setData(await res.json())
-      } catch (e) {
-        setErr(e instanceof Error ? e.message : String(e))
-      }
-    })()
-  }, [])
-
-  async function load() {
-    try {
-      const res = await api("/admin/doc-requirements")
-      if (!res.ok) throw new Error(`${res.status}`)
-      setData(await res.json())
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
-    }
-  }
+  const { data, error: err, reload } = useApi<DocReqsResponse>("/admin/doc-requirements")
 
   if (err) return <p className="text-destructive text-sm pt-4">{err}</p>
   if (!data) return <p className="text-muted-foreground text-sm pt-4">Loading…</p>
@@ -399,7 +369,7 @@ function DocsTab() {
         Each refund type has a list of required documents. Mark a document <strong>internal</strong> to hide it from department admins (visible only to super-admin).
       </p>
       {REFUND_TYPES.map((rt) => (
-        <DocTypeEditor key={rt} refundType={rt} initial={data[rt]} onSaved={load} />
+        <DocTypeEditor key={rt} refundType={rt} initial={data[rt]} onSaved={reload} />
       ))}
     </div>
   )
@@ -436,17 +406,22 @@ function DocTypeEditor({
   async function save() {
     setBusy(true); setErr("")
     const cleanDocs = docs.filter((d) => d.id.trim())
-    const res = await api(`/admin/doc-requirements/${encodeURIComponent(refundType)}`, {
-      method: "PUT",
-      body: JSON.stringify({ docs: cleanDocs, either_of: eitherOf.filter((g) => g.length) }),
-    })
-    setBusy(false)
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}))
-      setErr(data.error || `Save failed: ${res.status}`)
-      return
+    try {
+      const res = await api(`/admin/doc-requirements/${encodeURIComponent(refundType)}`, {
+        method: "PUT",
+        body: JSON.stringify({ docs: cleanDocs, either_of: eitherOf.filter((g) => g.length) }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setErr(data.error || `Save failed: ${res.status}`)
+        return
+      }
+      onSaved()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
     }
-    onSaved()
   }
 
   return (
@@ -516,53 +491,31 @@ function DocTypeEditor({
 const FIELD_TYPES = ["text", "email", "tel", "date", "number", "address", "textarea", "checkbox"] as const
 
 function SchemasTab() {
-  const [schemas, setSchemas] = useState<FormSchemasResponse | null>(null)
+  const { data: schemas, error: loadError, reload } = useApi<FormSchemasResponse>("/admin/form-schemas")
   const [selected, setSelected] = useState<(typeof REFUND_TYPES)[number]>(REFUND_TYPES[0])
   const [editing, setEditing] = useState<FormSchema | null>(null)
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState("")
+  const [saveError, setSaveError] = useState("")
+  const error = saveError || loadError
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await api("/admin/form-schemas")
-        if (!res.ok) throw new Error(`/admin/form-schemas ${res.status}`)
-        setSchemas(await res.json())
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e))
-      }
-    })()
-  }, [])
   useEffect(() => {
     if (schemas && schemas[selected]) {
       setEditing(deepClone(schemas[selected]))
     }
   }, [selected, schemas])
 
-  async function load() {
-    setError("")
-    try {
-      const res = await api("/admin/form-schemas")
-      if (!res.ok) throw new Error(`/admin/form-schemas ${res.status}`)
-      const data: FormSchemasResponse = await res.json()
-      setSchemas(data)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    }
-  }
-
   async function save() {
     if (!editing) return
-    setSaving(true); setError("")
+    setSaving(true); setSaveError("")
     try {
       const res = await api(`/admin/form-schemas/${selected}`, {
         method: "PUT",
         body: JSON.stringify({ title: editing.title, fields: editing.fields }),
       })
       if (!res.ok) throw new Error((await res.json()).error || `${res.status}`)
-      await load()
+      await reload()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setSaveError(e instanceof Error ? e.message : String(e))
     } finally {
       setSaving(false)
     }

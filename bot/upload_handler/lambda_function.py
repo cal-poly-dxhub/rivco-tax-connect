@@ -32,29 +32,35 @@ PACKAGE_EXPIRY = 7 * 24 * 3600  # 7 days
 #   required  — counts toward `complete` status
 #   internal  — hidden from non-super-admins (e.g. signed affidavit JSON)
 #   either_of — at least one of the listed doc ids must be present (OR group)
+#
+# The unified portal collects identity / address details inside the form JSON
+# itself and submits a single `unified-form.json`. The seeded defaults below
+# therefore require only that signed-form artifact; admins can re-introduce
+# photo-id / proof-of-address upload requirements via the doc-requirements UI.
 _DEFAULT_DOC_REQS: dict[str, dict[str, Any]] = {
     "STALE_WARRANT": {
         "docs": [
-            {"id": "photo-id", "label": "Government-issued photo ID", "required": True},
-            {"id": "proof-of-address", "label": "Proof of current address", "required": True},
             {"id": "ap13-affidavit", "label": "Signed AP13 affidavit", "required": True, "internal": True},
         ],
     },
     "PAYROLL": {
         "docs": [
-            {"id": "photo-id", "label": "Government-issued photo ID", "required": True},
-            {"id": "proof-of-address", "label": "Proof of current address", "required": True},
             {"id": "ap13-affidavit", "label": "Signed AP13 affidavit", "required": True, "internal": True},
         ],
     },
     "PROPERTY_TAX": {
         "docs": [
-            {"id": "photo-id", "label": "Government-issued photo ID", "required": True},
             {"id": "property-tax-claim", "label": "Signed property tax claim", "required": True, "internal": True},
         ],
-        "either_of": [["proof-of-payment", "proof-of-ownership"]],
     },
 }
+
+# The unified portal posts a single `unified-form.json` covering every refund
+# type in the claim. Map it to each internal "signed" doc id so that file
+# satisfies the affidavit / property-tax-claim requirement for any refund type
+# present on the submission.
+_UNIFIED_FORM_FILENAME = "unified-form.json"
+_UNIFIED_FORM_FULFILLS = {"ap13-affidavit", "property-tax-claim"}
 
 
 def _get_doc_req(refund_type: str) -> dict[str, Any]:
@@ -103,6 +109,19 @@ def _internal_doc_ids(refund_types: list[str]) -> set[str]:
 def _doc_prefix(filename: str) -> str:
     """Map 'photo-id_passport.pdf' → 'photo-id' and 'ap13-affidavit.json' → 'ap13-affidavit'."""
     return filename.split("_", 1)[0].rsplit(".", 1)[0]
+
+
+def _fulfilled_doc_ids(filenames: list[str]) -> set[str]:
+    """Return the set of doc-requirement ids satisfied by the uploaded filenames.
+
+    Most files map 1:1 via `_doc_prefix`. The unified portal additionally posts
+    a single `unified-form.json` that contains the signed claim payload, which
+    fulfills the per-refund-type affidavit/claim doc ids in `_UNIFIED_FORM_FULFILLS`.
+    """
+    ids = {_doc_prefix(f) for f in filenames}
+    if _UNIFIED_FORM_FILENAME in filenames:
+        ids |= _UNIFIED_FORM_FULFILLS
+    return ids
 
 
 def _sanitize_filename(name: str) -> str:
@@ -193,7 +212,7 @@ def _derive_tasks(status: str, refund_types: list[str], documents: list[str]) ->
     dept's status; the returned task list then represents that dept's checklist.
     """
     tasks: list[dict[str, Any]] = []
-    uploaded_prefixes = {_doc_prefix(f) for f in documents}
+    uploaded_prefixes = _fulfilled_doc_ids(documents)
 
     # Per-refund-type required docs. Use a dict keyed by id so we dedupe across
     # overlapping refund types.
@@ -424,7 +443,7 @@ def _handle_package(event: dict[str, Any], headers: dict[str, str]) -> dict[str,
 def _classify_status(refund_types: list[str], filenames: list[str]) -> str:
     """Return 'uploaded' or 'partial' based on expected vs actual docs for the given refund types."""
     expected = _required_doc_ids(refund_types)
-    uploaded_prefixes = {_doc_prefix(f) for f in filenames}
+    uploaded_prefixes = _fulfilled_doc_ids(filenames)
     if not expected <= uploaded_prefixes:
         return "partial"
     for group in _either_of_groups(refund_types):
@@ -1257,12 +1276,17 @@ def _admin_put_form_schema(event: dict[str, Any], refund_type: str, headers: dic
     if not isinstance(fields, list):
         return _err(400, "fields must be a list", headers)
     valid_field_types = {"text", "email", "tel", "date", "number", "address", "textarea", "checkbox"}
+    # Field IDs are interpolated into HTML id/name/data-field-id attributes by
+    # the public portal, so they must be safe identifier strings.
+    valid_field_id = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$')
     normalized = []
     seen_ids: set[str] = set()
     for f in fields:
         if not isinstance(f, dict) or not f.get("id"):
             return _err(400, "each field requires an id", headers)
         fid = str(f["id"]).strip()
+        if not valid_field_id.match(fid):
+            return _err(400, f"invalid field id '{fid}': must start with a letter or underscore and contain only letters, digits, underscores, or hyphens", headers)
         if fid in seen_ids:
             return _err(400, f"duplicate field id: {fid}", headers)
         seen_ids.add(fid)
@@ -1311,6 +1335,11 @@ def _handle_public_form_schemas(event: dict[str, Any], headers: dict[str, str]) 
 
     schemas: dict[str, dict[str, Any]] = {}
     merged_by_id: dict[str, dict[str, Any]] = {}
+    # NOTE: Today the chat handoff carries one warrant per claim, so merging
+    # by `id` is fine — a combined claim that genuinely needs *both* a stale
+    # warrant and a payroll warrant would collapse the two warrant_number /
+    # warrant_amount pairs into one. Revisit (namespace per refund type) if
+    # multi-warrant submissions become real.
     for rt in requested:
         schema = _get_form_schema(rt)
         schemas[rt] = schema
