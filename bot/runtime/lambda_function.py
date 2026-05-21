@@ -56,8 +56,13 @@ def build_claim_url(record: dict[str, Any]) -> str:
     return AP13_PDF_URL
 
 
-def build_portal_url(records: list[dict[str, Any]]) -> str:
-    """Build a single claims portal URL with all refund types and amounts."""
+def build_portal_url(records: list[dict[str, Any]], confidence: str = '') -> str:
+    """Build a single claims portal URL with all refund types and amounts.
+
+    `confidence` ('high'|'low') is propagated as a query param so the upload
+    portal stores it on the submission, and the admin dashboard can flag
+    low-confidence claims for extra-doc review.
+    """
     if not UPLOAD_PORTAL_URL:
         logger.warning("UPLOAD_PORTAL_URL not set — portal link will be empty")
         return ''
@@ -73,6 +78,8 @@ def build_portal_url(records: list[dict[str, Any]]) -> str:
         'address': records[0].get('address', ''),
         'id': identifiers,
     }
+    if confidence:
+        params['confidence'] = confidence
     pt = next((r for r in records if r['refund_type'] == 'PROPERTY_TAX'), None)
     if pt:
         params.update({k: pt[k] for k in ('assessment', 'taxyear') if k in pt})
@@ -141,9 +148,15 @@ def combined_score(query_norm: str, record_name_norm: str) -> float:
     return max(full_score, tok_score * 0.95)
 
 
-def find_best_match(query: str) -> tuple[str | None, list[dict[str, Any]]]:
+# Confidence bands. High = exact / alias hit at correct address. Low = match
+# above threshold but with name-level edits — admin should require extra docs.
+HIGH_CONFIDENCE_THRESHOLD = 0.95
+
+
+def find_best_match(query: str) -> tuple[str | None, list[dict[str, Any]], float]:
+    """Return (best_name, matching_records, score). Score is 0 if no match."""
     if not query:
-        return None, []
+        return None, [], 0.0
 
     q_norm = normalize_name(query)
     records = load_records()
@@ -180,13 +193,13 @@ def find_best_match(query: str) -> tuple[str | None, list[dict[str, Any]]]:
 
         if best_score < FUZZY_THRESHOLD:
             logger.info("Best score %.3f below threshold %.2f — no match", best_score, FUZZY_THRESHOLD)
-            return None, []
+            return None, [], best_score
 
     best_name = best_record['name']
     matching_records = [r for r in records if r['name'] == best_name]
     logger.info("Matched: '%s' (score=%.3f) | %d record(s)", best_name, best_score, len(matching_records))
 
-    return best_name, matching_records
+    return best_name, matching_records, best_score
 
 
 def extract_street(address: str) -> str:
@@ -322,7 +335,7 @@ def lookup(name: str, street: str = '', number: str = '') -> str:
     street = sanitize_input(street, max_len=80)
     number = sanitize_input(number, max_len=20)
 
-    best_name, records = find_best_match(name)
+    best_name, records, score = find_best_match(name)
     if not best_name:
         return json.dumps({
             'no_match': True,
@@ -419,8 +432,17 @@ def lookup(name: str, street: str = '', number: str = '') -> str:
             'claim_deadline': r['claim_deadline'],
         })
 
-    portal_url = build_portal_url(records)
-    return json.dumps({'refunds': results, 'portal_url': portal_url})
+    # `confidence` reflects the name-match strength, not the address verification.
+    # 'high' = exact / alias hit. 'low' = above threshold but with name-level
+    # edits — the dashboard surfaces low-confidence claims for extra-doc review.
+    confidence = 'high' if score >= HIGH_CONFIDENCE_THRESHOLD else 'low'
+    portal_url = build_portal_url(records, confidence)
+    return json.dumps({
+        'refunds': results,
+        'portal_url': portal_url,
+        'confidence': confidence,
+        'match_score': round(score, 3),
+    })
 
 
 def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:

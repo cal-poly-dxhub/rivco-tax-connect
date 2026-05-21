@@ -514,6 +514,7 @@ def _handle_status(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
                 "refundType": item.get("refundType", ""),
                 "statuses": statuses,
                 "documents": docs,
+                "confidence": item.get("confidence", "high"),
                 "submittedAt": item.get("submittedAt", ""),
                 "departments": depts_out,
                 "tasksByDepartment": tasks_by_dept,
@@ -723,6 +724,12 @@ def _handle_upload(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
     name = (body.get("name") or "").strip()
     refund_type = (body.get("refundType") or "").strip()
     files = body.get("files") or []
+    # Confidence is the name-match strength from tax_lookup. Defaults to "high"
+    # (claimant arrived via portal directly without going through chat) so the
+    # admin queue isn't flooded with low-confidence flags from non-bot traffic.
+    confidence = (body.get("confidence") or "high").strip().lower()
+    if confidence not in ("high", "low"):
+        confidence = "high"
 
     if not name or not refund_type:
         return _err(400, "name and refundType are required", headers)
@@ -765,6 +772,7 @@ def _handle_upload(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
             "departments": departments,
             "statuses": {d: "partial" for d in departments},
             "documents": [],
+            "confidence": confidence,
             "submittedAt": now,
             "updatedAt": now,
         })

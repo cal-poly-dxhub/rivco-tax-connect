@@ -218,7 +218,20 @@ export default function DashboardPage() {
               const taskDone = allTasks.filter((t) => t.done).length
               return (
                 <TableRow key={s.submissionId} className="cursor-pointer" onClick={() => setSelected(s)}>
-                  <TableCell className="font-medium">{s.name}</TableCell>
+                  <TableCell className="font-medium">
+                    <div className="flex items-center gap-2">
+                      {s.name}
+                      {s.confidence === "low" && (
+                        <Badge
+                          variant="outline"
+                          className="bg-amber-50 text-amber-900 border-amber-300 text-[10px]"
+                          title="The bot matched this name with low confidence. Request extra verification documentation before approving."
+                        >
+                          ⚠ extra docs
+                        </Badge>
+                      )}
+                    </div>
+                  </TableCell>
                   <TableCell>
                     {Array.from(new Set(s.refundType.split(","))).map((t) => (
                       <Badge key={t} variant="secondary" className="mr-1">{labelFor(t, labels)}</Badge>
@@ -300,8 +313,28 @@ function SubmissionDetail({ submission }: { submission: Submission }) {
   return (
     <>
       <DialogHeader>
-        <DialogTitle>{submission.name}</DialogTitle>
+        <DialogTitle>
+          <div className="flex items-center gap-2">
+            {submission.name}
+            {submission.confidence === "low" && (
+              <Badge
+                variant="outline"
+                className="bg-amber-50 text-amber-900 border-amber-300 text-xs"
+              >
+                ⚠ low-confidence match
+              </Badge>
+            )}
+          </div>
+        </DialogTitle>
       </DialogHeader>
+      {submission.confidence === "low" && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+          <strong>Extra verification recommended.</strong> The bot's name match
+          for this claim was below the high-confidence threshold (likely an
+          alias, abbreviation, or near-miss). Request additional identity
+          documentation from the claimant before approving.
+        </div>
+      )}
       <div className="grid grid-cols-[260px_1fr] gap-4 text-sm flex-1 min-h-0">
         <aside className="flex flex-col gap-4 overflow-y-auto">
           <div>
