@@ -78,6 +78,12 @@ def build_portal_url(records: list[dict[str, Any]]) -> str:
     return f"{UPLOAD_PORTAL_URL}?{urlencode(params)}"
 
 
+_ROAD_SUFFIXES = frozenset({
+    'street', 'st', 'avenue', 'ave', 'drive', 'dr', 'boulevard', 'blvd',
+    'lane', 'ln', 'road', 'rd', 'way', 'court', 'ct', 'place', 'pl',
+    'circle', 'cir', 'terrace', 'ter', 'trail', 'trl', 'highway', 'hwy',
+})
+
 ALIAS_MAP = {
     'inc': 'incorporated', 'incorporated': 'incorporated',
     'corp': 'corporation', 'corporation': 'corporation',
@@ -156,11 +162,6 @@ def find_best_match(query: str) -> tuple[str | None, list[dict[str, Any]]]:
         # a higher-confidence match, surface it as a possible alias
         near_misses = [(s, r) for s, r in scored if s >= FUZZY_THRESHOLD * 0.75]
         if near_misses:
-            addresses_seen = {}
-            for s, r in near_misses:
-                addr = r.get('address', '')
-                if addr and addr not in addresses_seen:
-                    addresses_seen[addr] = (s, r)
             # Check if any two near-misses share an address (alias candidate)
             addr_groups: dict[str, list] = {}
             for s, r in scored[:20]:
@@ -191,6 +192,14 @@ def extract_street(address: str) -> str:
     """Extract just the street name/number portion (before the city comma)."""
     parts = address.split(',')
     return parts[0].strip() if parts else address.strip()
+
+
+def street_name_words(street: str) -> list[str]:
+    """Return meaningful words from a street string, excluding road-type suffixes and numbers."""
+    return [
+        w for w in street.lower().split()
+        if w not in _ROAD_SUFFIXES and not w.isdigit() and len(w) >= 2
+    ]
 
 
 def generate_decoy_streets(real_address: str, count: int = 3) -> list[str]:
@@ -273,10 +282,11 @@ def lookup(name: str, address: str = '') -> str:
     # If address was provided, verify it matches
     if address and real_address:
         real_street = extract_street(real_address).lower()
-        if real_street not in address.lower() and address.lower() not in real_street:
-            # Check if any word from the real street appears in their answer
-            real_words = [w for w in real_street.split() if len(w) >= 4 and not w.isdigit()]
-            if not any(w in address.lower() for w in real_words):
+        provided_street = extract_street(address).lower()
+        if real_street not in provided_street and provided_street not in real_street:
+            real_words = street_name_words(real_street)
+            provided_words = set(street_name_words(provided_street))
+            if not real_words or not any(w in provided_words for w in real_words):
                 return json.dumps({
                     'verification_failed': True,
                     'message': "That doesn't match our records. For security, we cannot proceed. Please contact the Auditor-Controller's office at (951) 955-3800.",
