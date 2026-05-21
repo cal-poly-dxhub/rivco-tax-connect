@@ -16,6 +16,7 @@ from aws_cdk import (
     aws_apigateway as apigw,
     aws_apigatewayv2 as apigwv2,
     aws_apigatewayv2_integrations as apigwv2_int,
+    aws_bedrock as bedrock,
     aws_dynamodb as dynamodb,
     aws_cognito as cognito,
     aws_codebuild as codebuild,
@@ -164,6 +165,39 @@ class RiversideTaxRefundStack(Stack):
             tier=ssm.ParameterTier.ADVANCED,
         )
 
+        # ── Bedrock Guardrail (deny prompt-injection / harmful prompts) ──
+        # Applied on every chat handler invocation. Default deny on prompt
+        # attacks + the four harm categories. Cheap (~$0.15/1k checks).
+        guardrail = bedrock.CfnGuardrail(
+            self, "ChatGuardrail",
+            name=f"{proj}-chat-guardrail",
+            blocked_input_messaging=(
+                "I can't help with that request. If you're trying to look up a "
+                "refund or get information about an Auditor-Controller service, "
+                "let me know and I'll help."
+            ),
+            blocked_outputs_messaging=(
+                "I can't share that. If you have a question about a refund or "
+                "Auditor-Controller service, please let me know."
+            ),
+            content_policy_config=bedrock.CfnGuardrail.ContentPolicyConfigProperty(
+                filters_config=[
+                    bedrock.CfnGuardrail.ContentFilterConfigProperty(
+                        type=t, input_strength="HIGH", output_strength="HIGH"
+                    ) for t in ("SEXUAL", "VIOLENCE", "HATE", "INSULTS", "MISCONDUCT")
+                ] + [
+                    # PROMPT_ATTACK only supports input filtering
+                    bedrock.CfnGuardrail.ContentFilterConfigProperty(
+                        type="PROMPT_ATTACK", input_strength="HIGH", output_strength="NONE"
+                    ),
+                ],
+            ),
+        )
+        guardrail_version = bedrock.CfnGuardrailVersion(
+            self, "ChatGuardrailVersion",
+            guardrail_identifier=guardrail.attr_guardrail_id,
+        )
+
         # ── Chat handler Lambda (Bedrock Claude + WebSocket streaming) ──
         chat_fn = _lambda.Function(
             self, "ChatHandler",
@@ -185,6 +219,8 @@ class RiversideTaxRefundStack(Stack):
                 "TAX_LOOKUP_FN": fn.function_name,
                 "AI_PROMPT_PARAM": prompt_param.parameter_name,
                 "SES_SENDER": (cfg.get("notifications") or {}).get("sender", ""),
+                "GUARDRAIL_ID": guardrail.attr_guardrail_id,
+                "GUARDRAIL_VERSION": guardrail_version.attr_version,
             },
         )
         chat_table.grant_read_write_data(chat_fn)
@@ -194,6 +230,10 @@ class RiversideTaxRefundStack(Stack):
             actions=["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
             resources=[f"arn:aws:bedrock:*::foundation-model/*",
                        f"arn:aws:bedrock:*:{self.account}:inference-profile/*"],
+        ))
+        chat_fn.add_to_role_policy(iam.PolicyStatement(
+            actions=["bedrock:ApplyGuardrail"],
+            resources=[guardrail.attr_guardrail_arn],
         ))
         chat_fn.add_to_role_policy(iam.PolicyStatement(
             actions=["ses:SendEmail", "ses:SendRawEmail"],
