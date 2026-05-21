@@ -61,7 +61,7 @@ export type StatusResponse = {
 }
 
 export type Department = { key: string; label: string; refund_types: string[] }
-export type AdminUser = { username: string; email: string; groups: string[]; createdAt: string }
+export type AdminUser = { username: string; email: string; groups: string[]; notifyEmail: boolean; createdAt: string }
 
 export type AdminConfig = {
   departments: Department[]
