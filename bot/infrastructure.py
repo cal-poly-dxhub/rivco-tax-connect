@@ -673,7 +673,7 @@ class RiversideTaxRefundStack(Stack):
                         "commands": [
                             "cd admin-dashboard",
                             "corepack enable",
-                            "yarn install --immutable",
+                            "yarn install --immutable --ignore-engines",
                         ],
                     },
                     "build": {
