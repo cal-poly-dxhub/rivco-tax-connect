@@ -738,6 +738,7 @@ def _handle_upload(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
 
     name = (body.get("name") or "").strip()
     refund_type = (body.get("refundType") or "").strip()
+    address = (body.get("address") or "").strip()
     files = body.get("files") or []
     # Confidence is the name-match strength from tax_lookup. Defaults to "high"
     # (claimant arrived via portal directly without going through chat) so the
@@ -780,7 +781,7 @@ def _handle_upload(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
     if table:
         refund_types = [t.strip() for t in refund_type.split(",") if t.strip()]
         departments = _derive_departments(refund_types)
-        _put_submission({
+        item = {
             "submissionId": submission_id,
             "name": name,
             "refundType": refund_type,
@@ -790,7 +791,10 @@ def _handle_upload(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
             "confidence": confidence,
             "submittedAt": now,
             "updatedAt": now,
-        })
+        }
+        if address:
+            item["address"] = address
+        _put_submission(item)
 
     return {
         "statusCode": 200,

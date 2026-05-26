@@ -415,7 +415,7 @@ export default function NewClaimPage() {
           "/upload",
           {
             method: "POST",
-            body: JSON.stringify({ name, refundType, files: fileList }),
+            body: JSON.stringify({ name, refundType, address, files: fileList }),
           },
         );
         // Use the pre-reserved submissionId for DynamoDB but upload to the new S3 folder.
@@ -428,7 +428,7 @@ export default function NewClaimPage() {
           "/upload",
           {
             method: "POST",
-            body: JSON.stringify({ name, refundType, files: fileList }),
+            body: JSON.stringify({ name, refundType, address, files: fileList }),
           },
         );
         sid = uploadRes.submissionId;
