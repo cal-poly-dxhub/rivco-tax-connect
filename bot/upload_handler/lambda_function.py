@@ -306,13 +306,26 @@ def _get_submission(submission_id: str) -> dict[str, Any] | None:
     return table.get_item(Key=_sub_key(submission_id)).get("Item")
 
 
-def _put_submission(item: dict[str, Any]) -> None:
-    """Write a submission record. Attaches pk/sk/gsi1 keys from submissionId."""
+def _put_submission(
+    item: dict[str, Any],
+    address: str = "",
+    initial_status: str = "partial",
+) -> None:
+    """Write a submission record. Attaches pk/sk/gsi1 keys from submissionId.
+
+    Optional `address` stores the claimant mailing address on the META row
+    (used for the address-quiz verification flow).
+    Optional `initial_status` overrides per-dept status; defaults to "partial".
+    """
     if not table:
         return
     sid = item["submissionId"]
+    extra: dict[str, Any] = {}
+    if address:
+        extra["address"] = address
     item = {
         **item,
+        **extra,
         "pk": f"SUBMISSION#{sid}",
         "sk": "META",
         "gsi1pk": "SUBMISSION_LIST",
@@ -387,6 +400,8 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return _handle_update_status(event, headers)
     if resource == "/delete-submission" and method == "POST":
         return _handle_delete_submission(event, headers)
+    if resource.startswith("/claimant/") or resource == "/claimant/{proxy+}":
+        return _handle_claimant(event, headers)
 
     return _err(404, f"No handler for {method} {resource}", headers)
 
@@ -1609,3 +1624,481 @@ def _admin_delete_chat_session(session_id: str, headers: dict[str, str]) -> dict
             batch.delete_item(Key={"pk": it["pk"], "sk": it["sk"]})
     return {"statusCode": 200, "headers": headers,
             "body": json.dumps({"sessionId": session_id, "deleted": True})}
+
+
+# ── Claimant portal (public, HMAC-token-gated for status/continue) ────────
+
+import logging as _logging
+logger = _logging.getLogger(__name__)
+
+# Street suffix words — stripped when comparing street names for quiz matching.
+_ROAD_SUFFIXES = frozenset({
+    'street', 'st', 'avenue', 'ave', 'drive', 'dr', 'boulevard', 'blvd',
+    'lane', 'ln', 'road', 'rd', 'way', 'court', 'ct', 'place', 'pl',
+    'circle', 'cir', 'terrace', 'ter', 'trail', 'trl', 'highway', 'hwy',
+})
+
+# Fallback decoy streets used if there aren't enough real submissions to pull from.
+_FALLBACK_DECOYS = [
+    "Magnolia Ave",
+    "Van Buren Blvd",
+    "Arlington Ave",
+    "Mission Inn Ave",
+    "Market St",
+    "University Ave",
+]
+
+
+def _street_name_words(street: str) -> list[str]:
+    return [
+        w for w in street.lower().split()
+        if w not in _ROAD_SUFFIXES and not w.isdigit() and len(w) >= 2
+    ]
+
+
+def _extract_street(address: str) -> str:
+    """Return just the street portion (first comma-delimited chunk)."""
+    return address.split(",", 1)[0].strip() if "," in address else address.strip()
+
+
+def _generate_decoy_streets(real_address: str, all_addresses: list[str], count: int = 3) -> list[str]:
+    """Pick `count` distinct street strings that differ from `real_address`."""
+    import random
+    real_street = _extract_street(real_address)
+    seen = {real_street.lower()}
+    decoys: list[str] = []
+    candidates = list(all_addresses)
+    random.shuffle(candidates)
+    for addr in candidates:
+        if addr == real_address:
+            continue
+        s = _extract_street(addr)
+        if s.lower() not in seen:
+            decoys.append(s)
+            seen.add(s.lower())
+        if len(decoys) >= count:
+            break
+    # Pad with fallbacks if needed
+    for fb in _FALLBACK_DECOYS:
+        if len(decoys) >= count:
+            break
+        if fb.lower() not in seen:
+            decoys.append(fb)
+            seen.add(fb.lower())
+    return decoys[:count]
+
+
+def _verify_claimant_token(submission_id: str, token: str) -> bool:
+    """Verify HMAC-signed claimant token. Returns True if valid and not expired."""
+    import base64
+    import hmac
+    import hashlib
+    import time
+    secret = os.environ.get("CLAIMANT_SECRET", "dev-secret-change-me")
+    if secret == "dev-secret-change-me":
+        logger.warning("CLAIMANT_SECRET not set — using insecure dev default")
+    try:
+        decoded = base64.urlsafe_b64decode(token + "==").decode()
+        parts = decoded.split(":")
+        if len(parts) != 3:
+            return False
+        sid, expiry_str, provided_hmac = parts
+        if sid != submission_id:
+            return False
+        if int(expiry_str) < int(time.time()):
+            return False
+        expected = hmac.new(
+            secret.encode(),
+            f"{sid}:{expiry_str}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        return hmac.compare_digest(expected, provided_hmac)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _handle_claimant(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    """Route dispatcher for all /claimant/* paths."""
+    resource = event.get("resource", "")
+    path_params = event.get("pathParameters") or {}
+    method = event.get("httpMethod", "")
+
+    # API Gateway routes the /claimant/{proxy+} catch-all; extract sub-path.
+    proxy = path_params.get("proxy", "").strip("/")
+    # Also handle explicit resource strings used in unit tests / older deployments.
+    if resource == "/claimant/reserve" or proxy == "reserve":
+        if method == "POST":
+            return _claimant_reserve(event, headers)
+    elif resource == "/claimant/quiz" or proxy == "quiz":
+        if method == "GET":
+            return _claimant_quiz(event, headers)
+    elif resource == "/claimant/verify" or proxy == "verify":
+        if method == "POST":
+            return _claimant_verify(event, headers)
+    elif resource == "/claimant/status" or proxy == "status":
+        if method == "GET":
+            return _claimant_status(event, headers)
+    elif resource == "/claimant/continue" or proxy == "continue":
+        if method == "POST":
+            return _claimant_continue(event, headers)
+
+    return _err(404, f"No claimant handler for {method} {resource or proxy}", headers)
+
+
+def _claimant_reserve(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    """POST /claimant/reserve — create a submission record before form fill.
+
+    Body: {"name": "...", "refundType": "STALE_WARRANT,PAYROLL", "address": "..."}
+    Returns: {"submissionId": "abc123def456"}
+    """
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except json.JSONDecodeError:
+        return _err(400, "Invalid JSON", headers)
+
+    name = (body.get("name") or "").strip()
+    refund_type = (body.get("refundType") or "").strip()
+    address = (body.get("address") or "").strip()
+
+    if not name:
+        return _err(400, "name is required", headers)
+    if not refund_type:
+        return _err(400, "refundType is required", headers)
+    if not address:
+        return _err(400, "address is required", headers)
+
+    submission_id = uuid.uuid4().hex[:12]
+    now = _now_iso()
+    refund_types = [t.strip() for t in refund_type.split(",") if t.strip()]
+    departments = _derive_departments(refund_types)
+
+    _put_submission(
+        {
+            "submissionId": submission_id,
+            "name": name,
+            "refundType": refund_type,
+            "departments": departments,
+            "statuses": {d: "draft" for d in departments},
+            "documents": [],
+            "submittedAt": now,
+            "updatedAt": now,
+        },
+        address=address,
+        initial_status="draft",
+    )
+
+    return {
+        "statusCode": 200,
+        "headers": headers,
+        "body": json.dumps({"submissionId": submission_id}),
+    }
+
+
+def _claimant_quiz(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    """GET /claimant/quiz?id={submissionId}
+
+    Returns shuffled street options for the address quiz.
+    Rate-limited to 10 requests per hour per submission.
+    """
+    import random
+    qs = event.get("queryStringParameters") or {}
+    submission_id = (qs.get("id") or "").strip()
+    if not submission_id:
+        return _err(400, "id is required", headers)
+    if not re.fullmatch(r'[0-9a-f]{12}', submission_id):
+        return _err(400, "Invalid submission id", headers)
+    if not table:
+        return _err(500, "DynamoDB not configured", headers)
+
+    item = _get_submission(submission_id)
+    if not item:
+        return _err(404, "Submission not found", headers)
+
+    # ── Rate limit: max 10 quiz fetches per hour ──
+    import time
+    now_ts = int(time.time())
+    window_start = item.get("quizFetchWindowStart") or 0
+    fetch_count = int(item.get("quizFetchCount") or 0)
+    if now_ts - int(window_start) > 3600:
+        # New hour window — reset
+        fetch_count = 0
+        window_start = now_ts
+
+    if fetch_count >= 10:
+        return _err(429, "Too many quiz requests. Please try again later.", headers)
+
+    # Atomically increment fetch counter
+    try:
+        table.update_item(
+            Key=_sub_key(submission_id),
+            UpdateExpression="SET quizFetchCount = :c, quizFetchWindowStart = :w",
+            ExpressionAttributeValues={
+                ":c": fetch_count + 1,
+                ":w": window_start,
+            },
+        )
+    except Exception:  # noqa: BLE001
+        pass  # best-effort rate limit; don't fail the user
+
+    address = item.get("address", "")
+    if not address:
+        return _err(400, "No address on file for this submission", headers)
+
+    # Gather other addresses from the submissions table for decoys (up to 50)
+    try:
+        resp = table.query(
+            IndexName="listIx",
+            KeyConditionExpression="gsi1pk = :p",
+            ExpressionAttributeValues={":p": "SUBMISSION_LIST"},
+            Limit=50,
+            ScanIndexForward=False,
+        )
+        other_addresses = [
+            it.get("address", "")
+            for it in resp.get("Items", [])
+            if it.get("submissionId") != submission_id and it.get("address")
+        ]
+    except Exception:  # noqa: BLE001
+        other_addresses = []
+
+    real_street = _extract_street(address)
+    decoys = _generate_decoy_streets(address, other_addresses, count=3)
+
+    options = [real_street] + decoys
+    random.shuffle(options)
+
+    return {
+        "statusCode": 200,
+        "headers": headers,
+        "body": json.dumps({"street_options": options}),
+    }
+
+
+def _claimant_verify(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    """POST /claimant/verify
+
+    Body: {"submissionId": "...", "street": "...", "number": "..."}
+    Verifies street + house number against stored address.
+    Returns {"token": "...", "expiresAt": "..."} on success.
+    Returns 403 with attempts_remaining on failure.
+    """
+    import base64
+    import hmac
+    import hashlib
+    import time
+
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except json.JSONDecodeError:
+        return _err(400, "Invalid JSON", headers)
+
+    submission_id = (body.get("submissionId") or "").strip()
+    provided_street = (body.get("street") or "").strip()
+    provided_number = (body.get("number") or "").strip()
+
+    if not submission_id:
+        return _err(400, "submissionId is required", headers)
+    if not re.fullmatch(r'[0-9a-f]{12}', submission_id):
+        return _err(400, "Invalid submission id", headers)
+    if not provided_street or not provided_number:
+        return _err(400, "street and number are required", headers)
+    if not table:
+        return _err(500, "DynamoDB not configured", headers)
+
+    item = _get_submission(submission_id)
+    if not item:
+        return _err(404, "Submission not found", headers)
+
+    # Check lockout
+    locked_until = item.get("verificationLockedUntil") or 0
+    now_ts = int(time.time())
+    if int(locked_until) > now_ts:
+        return _err(403, json.dumps({
+            "error": "verification_locked",
+            "attempts_remaining": 0,
+        }), headers)
+
+    address = item.get("address", "")
+    if not address:
+        return _err(400, "No address on file for this submission", headers)
+
+    stored_street = _extract_street(address)
+
+    # Verify street — word-overlap matching (flexible casing / suffix-stripped)
+    provided_words = set(_street_name_words(provided_street))
+    stored_words = set(_street_name_words(stored_street))
+    street_ok = bool(provided_words & stored_words)
+
+    # Verify house number — first numeric token of the address
+    stored_parts = address.strip().split()
+    stored_number = stored_parts[0] if stored_parts else ""
+    number_ok = provided_number.strip() == stored_number.strip()
+
+    if not (street_ok and number_ok):
+        # Increment failure counter
+        failures = int(item.get("verificationFailures") or 0) + 1
+        update_expr = "SET verificationFailures = :f"
+        expr_vals: dict[str, Any] = {":f": failures}
+        if failures >= 5:
+            lock_until = now_ts + 3600
+            update_expr += ", verificationLockedUntil = :l"
+            expr_vals[":l"] = lock_until
+        table.update_item(
+            Key=_sub_key(submission_id),
+            UpdateExpression=update_expr,
+            ExpressionAttributeValues=expr_vals,
+        )
+        remaining = max(0, 5 - failures)
+        return _err(403, json.dumps({
+            "error": "verification_failed",
+            "attempts_remaining": remaining,
+        }), headers)
+
+    # ── Verification succeeded — issue token ──
+    secret = os.environ.get("CLAIMANT_SECRET", "dev-secret-change-me")
+    if secret == "dev-secret-change-me":
+        logger.warning("CLAIMANT_SECRET not set — using insecure dev default")
+
+    expiry = now_ts + 3600  # 1-hour token
+    msg = f"{submission_id}:{expiry}"
+    sig = hmac.new(secret.encode(), msg.encode(), hashlib.sha256).hexdigest()
+    token_plain = f"{submission_id}:{expiry}:{sig}"
+    token = base64.urlsafe_b64encode(token_plain.encode()).rstrip(b"=").decode()
+
+    expiry_iso = datetime.fromtimestamp(expiry, tz=timezone.utc).isoformat()
+
+    # Reset failure counter
+    table.update_item(
+        Key=_sub_key(submission_id),
+        UpdateExpression="SET verificationFailures = :z REMOVE verificationLockedUntil",
+        ExpressionAttributeValues={":z": 0},
+    )
+
+    return {
+        "statusCode": 200,
+        "headers": headers,
+        "body": json.dumps({"token": token, "expiresAt": expiry_iso}),
+    }
+
+
+_STATUS_ORDER = ["draft", "partial", "uploaded", "under-review", "approved", "denied"]
+
+
+def _worst_status(statuses: dict[str, str]) -> str:
+    """Return the worst-case status across all departments."""
+    if not statuses:
+        return "partial"
+    def rank(s: str) -> int:
+        # "worse" = earlier in the pipeline = lower index (not yet processed)
+        order = ["draft", "partial", "uploaded", "under-review", "approved", "denied"]
+        try:
+            return order.index(s)
+        except ValueError:
+            return 0
+    return min(statuses.values(), key=rank)
+
+
+def _claimant_status(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    """GET /claimant/status?id={submissionId}  (requires X-Claimant-Token header)
+
+    Returns filtered submission data safe for the claimant to see.
+    """
+    qs = event.get("queryStringParameters") or {}
+    submission_id = (qs.get("id") or "").strip()
+    token = (event.get("headers") or {}).get("X-Claimant-Token") or \
+            (event.get("headers") or {}).get("x-claimant-token") or ""
+
+    if not submission_id:
+        return _err(400, "id is required", headers)
+    if not re.fullmatch(r'[0-9a-f]{12}', submission_id):
+        return _err(400, "Invalid submission id", headers)
+    if not token:
+        return _err(401, "X-Claimant-Token header required", headers)
+    if not _verify_claimant_token(submission_id, token):
+        return _err(403, "Invalid or expired token", headers)
+    if not table:
+        return _err(500, "DynamoDB not configured", headers)
+
+    item = _get_submission(submission_id)
+    if not item:
+        return _err(404, "Submission not found", headers)
+
+    refund_type = item.get("refundType", "")
+    refund_types = [t.strip() for t in refund_type.split(",") if t.strip()]
+    internal_ids = _internal_doc_ids(refund_types)
+
+    statuses = item.get("statuses") or {}
+    overall = _worst_status(statuses)
+
+    # Strip internal docs from the document list
+    all_docs = item.get("documents") or []
+    visible_docs = [d for d in all_docs if _doc_prefix(d) not in internal_ids]
+
+    return {
+        "statusCode": 200,
+        "headers": headers,
+        "body": json.dumps({
+            "submissionId": submission_id,
+            "name": item.get("name", ""),
+            "refundType": refund_type,
+            "overallStatus": overall,
+            "documents": visible_docs,
+            "submittedAt": item.get("submittedAt", ""),
+            "updatedAt": item.get("updatedAt", ""),
+        }),
+    }
+
+
+def _presigned_put(submission_id: str, filename: str, content_type: str) -> str:
+    """Generate a presigned PUT URL for a file within a submission's S3 prefix."""
+    sanitized = _sanitize_filename(filename)
+    key = f"{submission_id}/{sanitized}"
+    return s3.generate_presigned_url(
+        "put_object",
+        Params={"Bucket": BUCKET, "Key": key, "ContentType": content_type},
+        ExpiresIn=900,
+    )
+
+
+def _claimant_continue(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    """POST /claimant/continue  (requires X-Claimant-Token header)
+
+    Body: {"submissionId": "...", "files": [{"filename": "...", "contentType": "..."}]}
+    Returns: {"uploads": [{"filename": "...", "uploadUrl": "..."}]}
+    """
+    token = (event.get("headers") or {}).get("X-Claimant-Token") or \
+            (event.get("headers") or {}).get("x-claimant-token") or ""
+
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except json.JSONDecodeError:
+        return _err(400, "Invalid JSON", headers)
+
+    submission_id = (body.get("submissionId") or "").strip()
+    files = body.get("files") or []
+
+    if not submission_id:
+        return _err(400, "submissionId is required", headers)
+    if not re.fullmatch(r'[0-9a-f]{12}', submission_id):
+        return _err(400, "Invalid submission id", headers)
+    if not token:
+        return _err(401, "X-Claimant-Token header required", headers)
+    if not _verify_claimant_token(submission_id, token):
+        return _err(403, "Invalid or expired token", headers)
+    if not files or len(files) > 10:
+        return _err(400, "Provide 1–10 files", headers)
+
+    uploads = []
+    for f in files:
+        content_type = f.get("contentType", "")
+        filename = _sanitize_filename(f.get("filename") or "file")
+        if content_type not in ALLOWED_TYPES:
+            return _err(400, f"Unsupported file type: {content_type}", headers)
+        upload_url = _presigned_put(submission_id, filename, content_type)
+        uploads.append({"filename": filename, "uploadUrl": upload_url})
+
+    return {
+        "statusCode": 200,
+        "headers": headers,
+        "body": json.dumps({"uploads": uploads}),
+    }
