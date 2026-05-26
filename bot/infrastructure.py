@@ -669,7 +669,7 @@ class RiversideTaxRefundStack(Stack):
                 "version": "0.2",
                 "phases": {
                     "install": {
-                        "runtime-versions": {"nodejs": "20"},
+                        "runtime-versions": {"nodejs": "22"},
                         "commands": [
                             "cd admin-dashboard",
                             "corepack enable",
@@ -792,7 +792,7 @@ class RiversideTaxRefundStack(Stack):
                 "version": "0.2",
                 "phases": {
                     "install": {
-                        "runtime-versions": {"nodejs": "20"},
+                        "runtime-versions": {"nodejs": "22"},
                         "commands": [
                             "cd claimant-portal",
                             "corepack enable",
