@@ -143,7 +143,7 @@ def _cors_headers(event: dict[str, Any] | None = None) -> dict[str, str]:
             origin = req_origin
     return {
         "Access-Control-Allow-Origin": origin,
-        "Access-Control-Allow-Headers": "Content-Type,Authorization",
+        "Access-Control-Allow-Headers": "Content-Type,Authorization,X-Claimant-Token",
         "Access-Control-Allow-Methods": "POST,GET,PATCH,PUT,DELETE,OPTIONS",
         "Vary": "Origin",
     }
@@ -1665,6 +1665,18 @@ def _extract_street(address: str) -> str:
     return address.split(",", 1)[0].strip() if "," in address else address.strip()
 
 
+def _looks_like_house_num(token: str) -> bool:
+    return bool(token) and any(c.isdigit() for c in token) and len(token) <= 8
+
+
+def _street_name_only(street: str) -> str:
+    """Strip any leading house number from a street string, e.g. '2100 E FLORIDA AVE' → 'E FLORIDA AVE'."""
+    parts = street.strip().split(None, 1)
+    if len(parts) >= 2 and (parts[0].isdigit() or _looks_like_house_num(parts[0])):
+        return parts[1].strip()
+    return street.strip()
+
+
 def _generate_decoy_streets(real_address: str, all_addresses: list[str], count: int = 3) -> list[str]:
     """Pick `count` distinct street strings that differ from `real_address`."""
     import random
@@ -1865,10 +1877,17 @@ def _claimant_quiz(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
     except Exception:  # noqa: BLE001
         other_addresses = []
 
-    real_street = _extract_street(address)
-    decoys = _generate_decoy_streets(address, other_addresses, count=3)
+    real_street = _street_name_only(_extract_street(address))
+    decoys = [_street_name_only(_extract_street(a)) for a in _generate_decoy_streets(address, other_addresses, count=3)]
+    # Filter empty strings and deduplicate in case stripping left collisions
+    seen: set[str] = {real_street.lower()}
+    clean_decoys = []
+    for d in decoys:
+        if d and d.lower() not in seen:
+            clean_decoys.append(d)
+            seen.add(d.lower())
 
-    options = [real_street] + decoys
+    options = [real_street] + clean_decoys
     random.shuffle(options)
 
     return {

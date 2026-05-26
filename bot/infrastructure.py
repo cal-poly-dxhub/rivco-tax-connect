@@ -503,7 +503,7 @@ class RiversideTaxRefundStack(Stack):
             default_cors_preflight_options=apigw.CorsOptions(
                 allow_origins=apigw.Cors.ALL_ORIGINS,
                 allow_methods=apigw.Cors.ALL_METHODS,
-                allow_headers=["Content-Type", "Authorization"],
+                allow_headers=["Content-Type", "Authorization", "X-Claimant-Token"],
             ),
             deploy_options=apigw.StageOptions(
                 throttling_rate_limit=2,
