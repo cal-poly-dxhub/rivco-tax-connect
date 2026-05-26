@@ -311,9 +311,9 @@ class RiversideTaxRefundStack(Stack):
                 expiration=Duration.days(expire_days),
             )],
             cors=[
-                s3.CorsRule(  # Claimant upload
+                s3.CorsRule(  # Claimant upload — presigned URLs are already scoped/signed/time-limited
                     allowed_methods=[s3.HttpMethods.PUT],
-                    allowed_origins=[portal_origin],
+                    allowed_origins=["*"],
                     allowed_headers=["*"],
                     max_age=3600,
                 ),
