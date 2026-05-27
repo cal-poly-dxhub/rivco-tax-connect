@@ -286,7 +286,7 @@ def _record_verification_success(customer_name: str) -> None:
 
 # ── Tool dispatch ──────────────────────────────────────────────
 
-def _tool_tax_lookup(_session_id: str, input_: dict) -> str:
+def _tool_tax_lookup(_session_id: str, input_: dict, connection_id: str = "") -> str:
     """Two-step verified lookup with per-name lockout after 5 failures."""
     customer_name = input_["customer_name"]
 
@@ -318,6 +318,10 @@ def _tool_tax_lookup(_session_id: str, input_: dict) -> str:
         result = json.loads(result_str)
     except (json.JSONDecodeError, TypeError):
         return result_str
+
+    # Push street options as a structured frame so the client can render buttons.
+    if connection_id and result.get("address_verification") == "street" and result.get("street_options"):
+        _ws_send(connection_id, {"type": "street_options", "options": result["street_options"]})
 
     is_attempt = bool(input_.get("customer_street") or input_.get("customer_number"))
     if is_attempt and result.get("verification_failed"):
@@ -360,9 +364,9 @@ def _tool_send_email(input_: dict) -> str:
     return f"Email sent to {to}."
 
 
-def _dispatch_tool(session_id: str, name: str, input_: dict) -> str:
+def _dispatch_tool(session_id: str, name: str, input_: dict, connection_id: str = "") -> str:
     if name == "tax_lookup":
-        return _tool_tax_lookup(session_id, input_)
+        return _tool_tax_lookup(session_id, input_, connection_id)
     if name == "request_agent":
         return _tool_request_agent(session_id, input_)
     if name == "send_email":
@@ -555,7 +559,7 @@ def _run_claude_loop(session_id: str, connection_id: str, messages: list[dict]) 
                 continue
             _ws_send(connection_id, {"type": "tool_use", "name": block["name"]})
             try:
-                result = _dispatch_tool(session_id, block["name"], block.get("input", {}))
+                result = _dispatch_tool(session_id, block["name"], block.get("input", {}), connection_id)
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": block["id"],

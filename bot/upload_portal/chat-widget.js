@@ -129,6 +129,32 @@
     `;
   }
 
+  function renderStreetOptions(options) {
+    const group = document.createElement("div");
+    group.className = "rcac-street-options";
+    group.setAttribute("role", "group");
+    group.setAttribute("aria-label", "Street options");
+    options.forEach((street) => {
+      const btn = document.createElement("button");
+      btn.className = "rcac-street-btn";
+      btn.type = "button";
+      btn.textContent = street;
+      btn.addEventListener("click", () => {
+        // Disable all buttons to prevent double-submission.
+        group.querySelectorAll(".rcac-street-btn").forEach((b) => {
+          b.disabled = true;
+        });
+        btn.classList.add("rcac-street-btn--selected");
+        addBubble("user", street);
+        sendMessage(street);
+        input.disabled = true;
+      });
+      group.appendChild(btn);
+    });
+    messagesEl.appendChild(group);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
   // ── WebSocket lifecycle ──────────────────────────────────────
   function ensureSocket() {
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
@@ -159,6 +185,11 @@
           break;
         case "tool_use":
           // optional: show a transient "looking that up..." hint
+          break;
+        case "street_options":
+          if (Array.isArray(frame.options) && frame.options.length) {
+            renderStreetOptions(frame.options);
+          }
           break;
         case "handoff":
           if (frame.reference) showHandoff(frame.reference);

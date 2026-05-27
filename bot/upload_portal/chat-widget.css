@@ -158,3 +158,39 @@
 }
 
 #rcac-chat-form button[type="submit"]:hover { background: #1a4575; }
+
+/* ── Street quiz select buttons ─────────────────────────────── */
+.rcac-street-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-self: flex-start;
+  max-width: 90%;
+}
+
+.rcac-street-btn {
+  background: #fff;
+  color: #123456;
+  border: 1.5px solid #123456;
+  border-radius: 20px;
+  padding: 8px 16px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s, color 0.15s;
+}
+
+.rcac-street-btn:hover:not(:disabled) {
+  background: #eaf0f8;
+}
+
+.rcac-street-btn--selected {
+  background: #123456;
+  color: #fff;
+}
+
+.rcac-street-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
