@@ -444,7 +444,7 @@ export default function NewClaimPage() {
         }),
       });
 
-      setSubmissionId(sid);
+      setSubmissionId(reservedId || sid);
       setPhase("success");
     } catch (e) {
       const msg = e instanceof ApiError
