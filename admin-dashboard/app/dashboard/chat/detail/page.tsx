@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { useRouter, useSearchParams } from "next/navigation"
+import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -13,9 +13,13 @@ import { useAuthGate } from "@/hooks/use-auth-gate"
 import { useApi } from "@/hooks/use-api"
 
 export default function ChatSessionPage() {
-  const searchParams = useSearchParams()
-  const id = searchParams.get("id") || ""
+  const [id, setId] = useState("")
   const router = useRouter()
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    setId(params.get("id") || "")
+  }, [])
   const { ready } = useAuthGate({ requireSuperAdmin: true })
   const { data, error: loadError, loading, reload, setData } = useApi<ChatSessionDetail>(
     `/admin/chat-sessions/${id}`,
