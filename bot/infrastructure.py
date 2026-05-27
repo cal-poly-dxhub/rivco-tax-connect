@@ -1,9 +1,12 @@
 import json
+import jsii
 import os
 import re
+import shutil
+import subprocess
 import yaml
 from aws_cdk import (
-    Stack, Duration, RemovalPolicy, CfnOutput, BundlingOptions, BundlingFileAccess,
+    Stack, Duration, RemovalPolicy, CfnOutput, BundlingOptions, ILocalBundling,
     aws_s3 as s3,
     aws_s3_deployment as s3deploy,
     aws_lambda as _lambda,
@@ -24,6 +27,28 @@ from aws_cdk import (
     custom_resources as cr,
 )
 from constructs import Construct
+
+@jsii.implements(ILocalBundling)
+class _LocalBundling:
+    def try_bundle(self, output_dir: str, *, image, asset_hash=None, bundling_file_access=None,
+                   command=None, entrypoint=None, environment=None, local=None, network=None,
+                   output_type=None, platform=None, security_opt=None, user=None,
+                   volumes=None, volumes_from=None, working_directory=None) -> bool:
+        source = os.path.join(os.path.dirname(__file__), "runtime")
+        req = os.path.join(source, "requirements.txt")
+        if os.path.exists(req):
+            subprocess.check_call(
+                ["pip", "install", "-r", req, "-t", output_dir, "--quiet"]
+            )
+        for item in os.listdir(source):
+            s = os.path.join(source, item)
+            d = os.path.join(output_dir, item)
+            if os.path.isdir(s):
+                shutil.copytree(s, d, dirs_exist_ok=True)
+            else:
+                shutil.copy2(s, d)
+        return True
+
 
 def load_config():
     with open('config.yaml') as f:
@@ -85,12 +110,7 @@ class NovaSonicConnectStack(Stack):
                 "bot/runtime",
                 bundling=BundlingOptions(
                     image=_lambda.Runtime.PYTHON_3_12.bundling_image,
-                    platform="linux/amd64",
-                    bundling_file_access=BundlingFileAccess.VOLUME_COPY,
-                    command=[
-                        "bash", "-c",
-                        "pip install -r requirements.txt -t /asset-output && cp -au . /asset-output"
-                    ],
+                    local=_LocalBundling(),
                 ),
             ),
             role=role,
@@ -443,7 +463,13 @@ class NovaSonicConnectStack(Stack):
 
         portal_origin = f"http://{proj}-portal-{self.account}.s3-website-{self.region}.amazonaws.com"
 
-        # S3 bucket for uploaded documents (encrypted, lifecycle, no public access)
+        # S3 bucket for uploaded documents (encrypted, tiered lifecycle, no public access)
+        ret = cfg.get('retention', {})
+        hot_days = ret.get('hot_days', 90)
+        warm_days = ret.get('warm_days', 365)
+        cold_days = ret.get('cold_days', 1825)
+        expire_days = ret.get('expire_days', 2555)
+
         uploads_bucket = s3.Bucket(
             self, "UploadsBucket",
             bucket_name=f"{proj}-uploads-{self.account}",
@@ -451,7 +477,23 @@ class NovaSonicConnectStack(Stack):
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
             removal_policy=RemovalPolicy.DESTROY,
             auto_delete_objects=True,
-            lifecycle_rules=[s3.LifecycleRule(expiration=Duration.days(90))],
+            lifecycle_rules=[s3.LifecycleRule(
+                transitions=[
+                    s3.Transition(
+                        storage_class=s3.StorageClass.GLACIER_INSTANT_RETRIEVAL,
+                        transition_after=Duration.days(hot_days),
+                    ),
+                    s3.Transition(
+                        storage_class=s3.StorageClass.GLACIER,
+                        transition_after=Duration.days(warm_days),
+                    ),
+                    s3.Transition(
+                        storage_class=s3.StorageClass.DEEP_ARCHIVE,
+                        transition_after=Duration.days(cold_days),
+                    ),
+                ],
+                expiration=Duration.days(expire_days),
+            )],
             cors=[
                 s3.CorsRule(  # Claimant upload
                     allowed_methods=[s3.HttpMethods.PUT],
@@ -658,6 +700,9 @@ class NovaSonicConnectStack(Stack):
             "POST", apigw.LambdaIntegration(upload_fn),
         )
         upload_api.root.add_resource("form-schemas").add_method(
+            "GET", apigw.LambdaIntegration(upload_fn),
+        )
+        upload_api.root.add_resource("doc-requirements").add_method(
             "GET", apigw.LambdaIntegration(upload_fn),
         )
 

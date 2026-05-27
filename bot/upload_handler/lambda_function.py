@@ -373,6 +373,8 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return _handle_package(event, headers)
     if resource == "/form-schemas" and method == "GET":
         return _handle_public_form_schemas(event, headers)
+    if resource == "/doc-requirements" and method == "GET":
+        return _handle_public_doc_requirements(event, headers)
     if resource == "/status" and method == "GET":
         return _handle_status(event, headers)
     if resource == "/upload" and method == "POST":
@@ -1365,4 +1367,94 @@ def _handle_public_form_schemas(event: dict[str, Any], headers: dict[str, str]) 
         "refund_types": requested,
         "schemas": schemas,
         "merged_fields": merged_fields,
+    })}
+
+
+def _evaluate_doc_condition(condition: dict[str, Any], params: dict[str, str]) -> bool:
+    """Evaluate a single condition against query params."""
+    field = condition.get("field", "")
+    op = condition.get("operator", "eq")
+    expected = condition.get("value")
+    actual_raw = params.get(field, "")
+
+    if not actual_raw:
+        return False
+
+    try:
+        actual_num = float(actual_raw)
+    except (ValueError, TypeError):
+        actual_num = None
+
+    try:
+        expected_num = float(expected) if expected is not None else None
+    except (ValueError, TypeError):
+        expected_num = None
+
+    if op == "gt" and actual_num is not None and expected_num is not None:
+        return actual_num > expected_num
+    if op == "gte" and actual_num is not None and expected_num is not None:
+        return actual_num >= expected_num
+    if op == "lt" and actual_num is not None and expected_num is not None:
+        return actual_num < expected_num
+    if op == "lte" and actual_num is not None and expected_num is not None:
+        return actual_num <= expected_num
+    if op == "eq":
+        if actual_num is not None and expected_num is not None:
+            return actual_num == expected_num
+        return actual_raw.lower() == str(expected).lower()
+    if op == "in":
+        vals = [str(v).lower() for v in expected] if isinstance(expected, list) else []
+        return actual_raw.lower() in vals
+    if op == "not_in":
+        vals = [str(v).lower() for v in expected] if isinstance(expected, list) else []
+        return actual_raw.lower() not in vals
+    return False
+
+
+def _handle_public_doc_requirements(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    """Return document requirements for the requested refund types.
+
+    Public endpoint. Accepts:
+      ?types=STALE_WARRANT,PAYROLL
+      &amount=1500          (optional, for condition evaluation)
+      &entity_type=individual  (optional)
+      &claimant_status=deceased (optional)
+
+    Evaluates conditions on each doc to determine if it applies.
+    """
+    qs = event.get("queryStringParameters") or {}
+    raw = (qs.get("types") or "").strip()
+    if not raw:
+        return _err(400, "types query parameter required", headers)
+    requested = [t.strip().upper() for t in raw.split(",") if t.strip()]
+
+    docs_by_id: dict[str, dict[str, Any]] = {}
+    either_of_all: list[list[str]] = []
+
+    for rt in requested:
+        req = _get_doc_req(rt)
+        for d in req.get("docs", []):
+            if d.get("internal"):
+                continue
+            conditions = d.get("conditions")
+            if conditions:
+                if not all(_evaluate_doc_condition(c, qs) for c in conditions):
+                    continue
+            fid = d["id"]
+            if fid not in docs_by_id:
+                docs_by_id[fid] = {
+                    "id": fid,
+                    "label": d.get("label", fid),
+                    "required": d.get("required", False),
+                }
+            elif d.get("required"):
+                docs_by_id[fid]["required"] = True
+        for group in req.get("either_of", []):
+            if group not in either_of_all:
+                either_of_all.append(group)
+
+    return {"statusCode": 200, "headers": headers, "body": json.dumps({
+        "refund_types": requested,
+        "docs": list(docs_by_id.values()),
+        "either_of": either_of_all,
     })}

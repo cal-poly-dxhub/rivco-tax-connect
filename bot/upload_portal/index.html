@@ -315,6 +315,36 @@
                 line-height: 1.6;
             }
 
+            /* ── File upload fields ── */
+            .doc-upload {
+                border: 1px solid var(--border-light);
+                padding: 0.75rem 1rem;
+                margin-bottom: 0.75rem;
+                display: flex;
+                align-items: center;
+                gap: 1rem;
+            }
+            .doc-upload .doc-label {
+                flex: 1;
+                font-size: 0.85rem;
+                font-weight: 600;
+            }
+            .doc-upload .doc-label .req-badge {
+                font-size: 0.7rem;
+                color: var(--red);
+                font-weight: 700;
+                margin-left: 0.3rem;
+            }
+            .doc-upload input[type="file"] {
+                font-size: 0.8rem;
+                max-width: 220px;
+            }
+            .doc-upload .doc-status {
+                font-size: 0.75rem;
+                color: var(--green);
+                min-width: 20px;
+            }
+
             /* ── Print ── */
             @media print {
                 body { background: #fff; }
@@ -365,8 +395,17 @@
                 </label>
             </div>
 
+            <div id="docsSection" style="display:none">
+                <div class="section-header">Supporting Documents</div>
+                <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;">
+                    Upload the following documents to support your claim. Accepted formats: PDF, JPG, PNG (max 10MB each).
+                </p>
+                <div id="docFields"></div>
+            </div>
+
             <div id="submitSection" style="display:none">
-                <button type="button" class="primary" id="submitBtn">Submit Claim</button>
+                <button type="button" class="secondary print-hide" id="printPdfBtn" style="width:100%; margin-bottom:0.75rem; display:none;">Print this claim as official form (PDF)</button>
+                <button type="button" class="primary" id="submitBtn">Submit Claim Digitally</button>
                 <div id="status" class="status" role="alert" style="display:none; margin-top:0.75rem;"></div>
             </div>
 
@@ -386,6 +425,7 @@
             </div>
         </div>
 
+        <script src="lib/pdf-lib.min.js" defer></script>
         <script src="config.js"></script>
         <script>
         (function () {
@@ -406,6 +446,8 @@
             var legalBlock = document.getElementById("legalBlock");
             var banner = document.getElementById("banner");
             var signSection = document.getElementById("signSection");
+            var docsSection = document.getElementById("docsSection");
+            var docFields = document.getElementById("docFields");
             var submitSection = document.getElementById("submitSection");
             var doneSection = document.getElementById("doneSection");
             var statusEl = document.getElementById("status");
@@ -571,7 +613,9 @@
 
                 signSection.style.display = "";
                 submitSection.style.display = "";
+                document.getElementById("printPdfBtn").style.display = "";
                 initSignature();
+                loadDocRequirements();
             }
 
             function escHtml(s) {
@@ -641,6 +685,247 @@
                 statusEl.textContent = msg;
             }
 
+            /* ── Doc requirements ── */
+            var requiredDocs = [];
+
+            function loadDocRequirements() {
+                var docUrl = API_URL + "/doc-requirements?types=" + encodeURIComponent(types.join(","));
+                var maxAmount = Math.max.apply(null, amounts.map(Number).filter(function(n) { return !isNaN(n); })) || 0;
+                if (maxAmount) docUrl += "&amount=" + maxAmount;
+
+                docsSection.style.display = "";
+
+                fetch(docUrl)
+                    .then(function(r) { return r.ok ? r.json() : null; })
+                    .then(function(data) {
+                        if (data && data.docs && data.docs.length > 0) {
+                            requiredDocs = data.docs;
+                            data.docs.forEach(function(doc) {
+                                var row = document.createElement("div");
+                                row.className = "doc-upload";
+                                row.innerHTML =
+                                    '<div class="doc-label">' + escHtml(doc.label) +
+                                    (doc.required ? '<span class="req-badge">Required</span>' : '') +
+                                    '</div>' +
+                                    '<input type="file" id="doc_' + doc.id + '" data-doc-id="' + doc.id + '" accept=".pdf,.jpg,.jpeg,.png,.heic">' +
+                                    '<span class="doc-status" id="doc_status_' + doc.id + '"></span>';
+                                docFields.appendChild(row);
+                            });
+                        }
+                        // Always show scanned form upload option
+                        var scannedRow = document.createElement("div");
+                        scannedRow.className = "doc-upload";
+                        scannedRow.style.borderStyle = "dashed";
+                        scannedRow.innerHTML =
+                            '<div class="doc-label">Completed form (scanned or photographed)' +
+                            '<br><span style="font-size:0.72rem; color:var(--text-muted); font-weight:400;">' +
+                            'If you printed and filled out the paper form, upload the signed copy here instead of signing digitally above.</span>' +
+                            '</div>' +
+                            '<input type="file" id="doc_scanned-form" data-doc-id="scanned-form" accept=".pdf,.jpg,.jpeg,.png,.heic">' +
+                            '<span class="doc-status" id="doc_status_scanned-form"></span>';
+                        docFields.appendChild(scannedRow);
+                    })
+                    .catch(function() {
+                        // Even if API fails, show scanned form upload
+                        var scannedRow = document.createElement("div");
+                        scannedRow.className = "doc-upload";
+                        scannedRow.style.borderStyle = "dashed";
+                        scannedRow.innerHTML =
+                            '<div class="doc-label">Completed form (scanned or photographed)' +
+                            '<br><span style="font-size:0.72rem; color:var(--text-muted); font-weight:400;">' +
+                            'If you printed and filled out the paper form, upload the signed copy here.</span>' +
+                            '</div>' +
+                            '<input type="file" id="doc_scanned-form" data-doc-id="scanned-form" accept=".pdf,.jpg,.jpeg,.png,.heic">' +
+                            '<span class="doc-status" id="doc_status_scanned-form"></span>';
+                        docFields.appendChild(scannedRow);
+                    });
+            }
+
+            /* ── Print as official form PDF (generated from schema) ── */
+            async function generateFilledPdf() {
+                var PDFDocument = PDFLib.PDFDocument;
+                var rgb = PDFLib.rgb;
+                var StandardFonts = PDFLib.StandardFonts;
+
+                var pdfDoc = await PDFDocument.create();
+                var font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+                var fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+                var PAGE_W = 612, PAGE_H = 792, MARGIN = 50;
+                var navy = rgb(0, 0.184, 0.529);
+                var black = rgb(0, 0, 0);
+                var gray = rgb(0.4, 0.4, 0.4);
+                var y, page;
+
+                function newPage() { page = pdfDoc.addPage([PAGE_W, PAGE_H]); y = PAGE_H - MARGIN; }
+                function checkSpace(needed) { if (y - needed < MARGIN + 30) newPage(); }
+                newPage();
+
+                // Document header
+                page.drawText("County of Riverside", { x: MARGIN, y: y, size: 16, font: fontBold, color: navy });
+                y -= 18;
+                page.drawText("Office of the Auditor-Controller", { x: MARGIN, y: y, size: 10, font: font, color: gray });
+                y -= 16;
+                var titleText = document.getElementById("docTitle").textContent || "Unclaimed Refund Claim";
+                page.drawText(titleText, { x: MARGIN, y: y, size: 12, font: fontBold, color: black });
+                y -= 6;
+                page.drawLine({ start: { x: MARGIN, y: y }, end: { x: PAGE_W - MARGIN, y: y }, thickness: 2, color: navy });
+                y -= 16;
+                page.drawText("Refund types: " + types.join(", "), { x: MARGIN, y: y, size: 8, font: font, color: gray });
+                y -= 6;
+                page.drawText("Date: " + new Date().toLocaleDateString(), { x: PAGE_W - MARGIN - 120, y: y + 6, size: 8, font: font, color: gray });
+                y -= 18;
+
+                // Helper to get field values from DOM
+                function val(fieldId) {
+                    var el = document.getElementById("f_" + fieldId);
+                    if (!el) return "";
+                    return (el.value || "").trim();
+                }
+                function radioVal(fieldId) {
+                    var result = "";
+                    document.querySelectorAll('[name="' + fieldId + '"]').forEach(function(r) {
+                        if (r.checked) result = r.value === "true" ? "Yes" : "No";
+                    });
+                    return result;
+                }
+
+                // Walk the rendered form sections and output each field
+                var allSections = formSections.children;
+                for (var si = 0; si < allSections.length; si++) {
+                    var sectionEl = allSections[si];
+                    var headerEl = sectionEl.querySelector(".section-header");
+                    if (headerEl) {
+                        checkSpace(28);
+                        page.drawText(headerEl.textContent.toUpperCase(), { x: MARGIN, y: y, size: 9, font: fontBold, color: navy });
+                        y -= 3;
+                        page.drawLine({ start: { x: MARGIN, y: y }, end: { x: PAGE_W - MARGIN, y: y }, thickness: 1, color: navy });
+                        y -= 14;
+                    }
+
+                    // Table fields (warrant info)
+                    var tableInputs = sectionEl.querySelectorAll(".field-table input[data-field-id]");
+                    if (tableInputs.length > 0) {
+                        checkSpace(30);
+                        var colW = (PAGE_W - MARGIN * 2) / tableInputs.length;
+                        // Header row
+                        tableInputs.forEach(function(inp, idx) {
+                            var lbl = inp.dataset.fieldId.replace(/_/g, " ").toUpperCase();
+                            var th = sectionEl.querySelectorAll(".field-table th");
+                            if (th[idx]) lbl = th[idx].textContent.replace("*", "").trim();
+                            page.drawText(lbl, { x: MARGIN + idx * colW + 4, y: y, size: 7, font: fontBold, color: gray });
+                        });
+                        y -= 12;
+                        // Value row with borders
+                        tableInputs.forEach(function(inp, idx) {
+                            var x0 = MARGIN + idx * colW;
+                            page.drawRectangle({ x: x0, y: y - 16, width: colW, height: 16, borderColor: black, borderWidth: 0.5 });
+                            page.drawText(inp.value || "", { x: x0 + 4, y: y - 12, size: 10, font: font, color: black });
+                        });
+                        y -= 24;
+                    }
+
+                    // Line fields
+                    var lineFields = sectionEl.querySelectorAll(".line-field");
+                    lineFields.forEach(function(lf) {
+                        var inp = lf.querySelector("[data-field-id]");
+                        if (!inp) return;
+                        var fieldId = inp.dataset.fieldId;
+                        var labelEl = lf.querySelector("label");
+                        var label = labelEl ? labelEl.textContent.replace("*", "").trim() : fieldId.replace(/_/g, " ");
+                        var value = val(fieldId);
+
+                        checkSpace(20);
+                        page.drawText(label.toUpperCase(), { x: MARGIN, y: y, size: 7, font: fontBold, color: gray });
+                        y -= 12;
+                        page.drawText(value, { x: MARGIN, y: y, size: 10, font: font, color: black });
+                        y -= 3;
+                        page.drawLine({ start: { x: MARGIN, y: y }, end: { x: PAGE_W - MARGIN, y: y }, thickness: 0.5, color: black });
+                        y -= 12;
+                    });
+
+                    // Radio/checkbox fields
+                    var checkRows = sectionEl.querySelectorAll(".checkbox-row");
+                    checkRows.forEach(function(row) {
+                        var inp = row.querySelector("[data-field-id]");
+                        if (!inp) return;
+                        var fieldId = inp.dataset.fieldId;
+                        var span = row.querySelector("span");
+                        var label = span ? span.textContent : fieldId;
+                        var value = radioVal(fieldId);
+
+                        checkSpace(18);
+                        page.drawText(label, { x: MARGIN, y: y, size: 9, font: font, color: black });
+                        page.drawText(value ? "[" + value + "]" : "[ ]", { x: PAGE_W - MARGIN - 40, y: y, size: 9, font: fontBold, color: black });
+                        y -= 16;
+                    });
+                }
+
+                // Signature
+                checkSpace(70);
+                y -= 10;
+                page.drawText("SIGNATURE", { x: MARGIN, y: y, size: 9, font: fontBold, color: navy });
+                y -= 3;
+                page.drawLine({ start: { x: MARGIN, y: y }, end: { x: PAGE_W - MARGIN, y: y }, thickness: 1, color: navy });
+                y -= 6;
+
+                if (sigDrawn) {
+                    try {
+                        var sigDataUrl = sigCanvas.toDataURL("image/png");
+                        var b64 = sigDataUrl.split(",")[1];
+                        var bin = atob(b64);
+                        var sigArr = new Uint8Array(bin.length);
+                        for (var i = 0; i < bin.length; i++) sigArr[i] = bin.charCodeAt(i);
+                        var sigImage = await pdfDoc.embedPng(sigArr);
+                        var scaled = sigImage.scaleToFit(250, 35);
+                        page.drawImage(sigImage, { x: MARGIN, y: y - scaled.height, width: scaled.width, height: scaled.height });
+                        y -= scaled.height + 4;
+                    } catch(e) {}
+                }
+                page.drawLine({ start: { x: MARGIN, y: y }, end: { x: MARGIN + 280, y: y }, thickness: 0.5, color: black });
+                y -= 12;
+                page.drawText("Signature (Payee/Business Claimant)", { x: MARGIN, y: y, size: 7, font: font, color: gray });
+                y -= 20;
+
+                // Declaration
+                checkSpace(40);
+                var decl = "I declare, under penalty of perjury under the laws of the State of California, that the foregoing is true and correct. I have not received any part of the money, nor any benefits from said warrant.";
+                page.drawText(decl, { x: MARGIN, y: y, size: 7, font: font, color: black, maxWidth: PAGE_W - MARGIN * 2 });
+
+                // Footer on each page
+                var allPages = pdfDoc.getPages();
+                allPages.forEach(function(p, idx) {
+                    p.drawLine({ start: { x: MARGIN, y: MARGIN + 15 }, end: { x: PAGE_W - MARGIN, y: MARGIN + 15 }, thickness: 0.5, color: gray });
+                    p.drawText("County of Riverside · Office of the Auditor-Controller · 4080 Lemon Street, 6th Floor · Riverside, CA 92502-1326",
+                        { x: MARGIN, y: MARGIN + 5, size: 6, font: font, color: gray });
+                    p.drawText("Page " + (idx + 1) + " of " + allPages.length,
+                        { x: PAGE_W - MARGIN - 45, y: MARGIN + 5, size: 6, font: font, color: gray });
+                });
+
+                var filledBytes = await pdfDoc.save();
+                var blob = new Blob([filledBytes], { type: "application/pdf" });
+                var url = URL.createObjectURL(blob);
+                var a = document.createElement("a");
+                a.href = url;
+                a.download = "Riverside-County-Claim.pdf";
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(function() { URL.revokeObjectURL(url); }, 5000);
+            }
+
+            document.getElementById("printPdfBtn").addEventListener("click", function() {
+                var btn = this;
+                btn.disabled = true;
+                btn.textContent = "Generating PDF…";
+                generateFilledPdf()
+                    .then(function() { btn.disabled = false; btn.textContent = "Print this claim as official form (PDF)"; })
+                    .catch(function(err) {
+                        setStatus("err", "PDF generation failed: " + err.message);
+                        btn.disabled = false;
+                        btn.textContent = "Print this claim as official form (PDF)";
+                    });
+            });
+
             /* ── Submit ── */
             submitBtn.addEventListener("click", async function () {
                 if (!sigDrawn) {
@@ -665,6 +950,20 @@
                     return;
                 }
 
+                // Check required doc uploads
+                var missingDocs = [];
+                requiredDocs.forEach(function(doc) {
+                    if (!doc.required) return;
+                    var input = document.getElementById("doc_" + doc.id);
+                    if (input && (!input.files || input.files.length === 0)) {
+                        missingDocs.push(doc.label);
+                    }
+                });
+                if (missingDocs.length) {
+                    setStatus("err", "Please upload required documents: " + missingDocs.join(", "));
+                    return;
+                }
+
                 submitBtn.disabled = true;
                 setStatus("loading", "Submitting your claim…");
 
@@ -678,6 +977,20 @@
                     submittedAt: new Date().toISOString(),
                 })], { type: "application/json" });
 
+                // Collect all files to upload (form JSON + supporting docs)
+                var filesToUpload = [{ filename: "unified-form.json", contentType: "application/json" }];
+                var fileBlobs = [unifiedBlob];
+                var docInputs = document.querySelectorAll("[data-doc-id]");
+                docInputs.forEach(function(input) {
+                    if (input.files && input.files.length > 0) {
+                        var file = input.files[0];
+                        var ext = file.name.split(".").pop().toLowerCase();
+                        var safeName = input.dataset.docId + "." + ext;
+                        filesToUpload.push({ filename: safeName, contentType: file.type || "application/octet-stream" });
+                        fileBlobs.push(file);
+                    }
+                });
+
                 try {
                     var res = await fetch(API_URL + "/upload", {
                         method: "POST",
@@ -685,24 +998,27 @@
                         body: JSON.stringify({
                             name: name,
                             refundType: refundType,
-                            files: [{ filename: "unified-form.json", contentType: "application/json" }],
+                            files: filesToUpload,
                         }),
                     });
                     var data = await res.json();
                     if (!res.ok) throw new Error(data.error || "Request failed");
 
-                    await fetch(data.uploads[0].uploadUrl, {
-                        method: "PUT",
-                        headers: { "Content-Type": "application/json" },
-                        body: unifiedBlob,
-                    });
+                    // Upload each file to its presigned URL
+                    for (var i = 0; i < data.uploads.length; i++) {
+                        await fetch(data.uploads[i].uploadUrl, {
+                            method: "PUT",
+                            headers: { "Content-Type": filesToUpload[i].contentType },
+                            body: fileBlobs[i],
+                        });
+                    }
 
                     await fetch(API_URL + "/upload-complete", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({
                             submissionId: data.submissionId,
-                            filenames: ["unified-form.json"],
+                            filenames: filesToUpload.map(function(f) { return f.filename; }),
                         }),
                     });
 

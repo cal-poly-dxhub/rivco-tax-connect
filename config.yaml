@@ -18,6 +18,12 @@ s3:
   bucket_suffix: data
   data_file: refunds_demo_balanced.jsonl
 
+retention:
+  hot_days: 90
+  warm_days: 365
+  cold_days: 1825
+  expire_days: 2555
+
 # Super-admin bootstrap. Created by CDK custom resource on first deploy.
 # Additional super-admins and all other admin users/departments are managed
 # at runtime from the dashboard.
@@ -110,10 +116,12 @@ prompts:
       **LANGUAGE:**
       - If locale is es_US, you MUST respond entirely in Spanish. All messages, questions, confirmations, and instructions to the caller must be in Spanish. Translate all standard phrases (greetings, goodbyes, error messages, address verification, refund details) into natural Spanish. Do NOT mix English into Spanish responses. This includes FAQ answers and knowledge base results — translate them fully into Spanish before responding.
 
-      **ADDRESS VERIFICATION:**
-      - After finding a match, ask: "To verify your identity, do you currently or have you previously lived at [address]?" — include the complete address (street, city, state, zip) inside the <message> tag.
-      - Do NOT reveal refund details until the caller confirms the address.
-      - If denied, say you cannot verify their identity and suggest contacting the office directly.
+      **ADDRESS VERIFICATION (CRITICAL — SECURITY):**
+      - If the tool returns address_verification with street_options, present ALL listed streets as a numbered list and ask: "To verify your identity, which of the following streets have you currently or previously lived on?" Read each street name clearly. Do NOT reveal which is correct.
+      - After the caller picks one, call tax_lookup again with the same customer_name and customer_address set to whatever street name they chose.
+      - If the tool returns verification_failed, relay the failure message exactly. Do NOT retry or reveal the correct address.
+      - CRITICAL: NEVER reveal refund amounts, types, deadlines, portal URLs, or any claim details until the tool returns a response containing "refunds". The address_verification response means verification is INCOMPLETE — you MUST complete the quiz before showing any refund information.
+      - NEVER invent, guess, or fabricate a URL. The ONLY valid portal URL is the one returned in the "portal_url" field of a successful tool response containing "refunds".
 
       **REFUND DETAILS + LINK DELIVERY (after address verified):**
       - State each refund's type (Property Tax, Stale Warrant, or Payroll), amount, and deadline. List every refund individually.
