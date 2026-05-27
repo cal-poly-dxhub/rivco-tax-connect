@@ -401,39 +401,19 @@ export default function NewClaimPage() {
         ...files.map((f) => ({ filename: f.name, contentType: f.type || "application/octet-stream" })),
       ];
 
-      // POST /upload to get presigned URLs (or reuse reservedId)
-      let sid = reservedId;
-      let uploadSlots: UploadSlot[] = [];
-
-      if (sid) {
-        // Already reserved — just get upload URLs via /upload-continue if available,
-        // but since that requires a token we don't have yet, use /upload to create
-        // a new presigned set (the form data is separate from the DynamoDB record).
-        // We'll POST /upload with the same name/refundType so the S3 folder matches.
-        // NOTE: The reservation created the DynamoDB record; we still need S3 urls.
-        const uploadRes = await apiFetch<{ submissionId: string; uploads: UploadSlot[] }>(
-          "/upload",
-          {
-            method: "POST",
-            body: JSON.stringify({ name, refundType, address, files: fileList }),
-          },
-        );
-        // Use the pre-reserved submissionId for DynamoDB but upload to the new S3 folder.
-        // To keep it simple: we accept the submissionId from /upload (which is new).
-        // The reserved one is in DDB but we'll use the upload one going forward.
-        sid = uploadRes.submissionId;
-        uploadSlots = uploadRes.uploads;
-      } else {
-        const uploadRes = await apiFetch<{ submissionId: string; uploads: UploadSlot[] }>(
-          "/upload",
-          {
-            method: "POST",
-            body: JSON.stringify({ name, refundType, address, files: fileList }),
-          },
-        );
-        sid = uploadRes.submissionId;
-        uploadSlots = uploadRes.uploads;
-      }
+      // POST /upload to get presigned URLs, passing the reserved ID so the
+      // backend reuses it instead of generating a new one.
+      const uploadBody: Record<string, unknown> = { name, refundType, address, files: fileList };
+      if (reservedId) uploadBody.submissionId = reservedId;
+      const uploadRes = await apiFetch<{ submissionId: string; uploads: UploadSlot[] }>(
+        "/upload",
+        {
+          method: "POST",
+          body: JSON.stringify(uploadBody),
+        },
+      );
+      const sid = uploadRes.submissionId;
+      const uploadSlots: UploadSlot[] = uploadRes.uploads;
 
       // Upload files to S3 presigned URLs
       const unifiedSlot = uploadSlots.find((u) => u.filename === "unified-form.json");

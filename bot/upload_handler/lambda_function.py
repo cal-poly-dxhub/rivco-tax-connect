@@ -746,6 +746,11 @@ def _handle_upload(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
     confidence = (body.get("confidence") or "high").strip().lower()
     if confidence not in ("high", "low"):
         confidence = "high"
+    # Accept a pre-reserved submissionId from the claimant portal so the ID
+    # shown to the user before submit matches the one stored after submit.
+    submission_id = (body.get("submissionId") or "").strip()
+    if not submission_id:
+        submission_id = uuid.uuid4().hex[:12]
 
     if not name or not refund_type:
         return _err(400, "name and refundType are required", headers)
@@ -753,7 +758,6 @@ def _handle_upload(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
         return _err(400, "Provide 1-5 files", headers)
 
     urls = []
-    submission_id = uuid.uuid4().hex[:12]
     now = _now_iso()
 
     for f in files:
