@@ -323,6 +323,13 @@ def _tool_tax_lookup(_session_id: str, input_: dict, connection_id: str = "") ->
     if connection_id and result.get("address_verification") == "street" and result.get("street_options"):
         _ws_send(connection_id, {"type": "street_options", "options": result["street_options"]})
 
+    # Push number input frame so the client can render an inline number input.
+    if connection_id and result.get("address_verification") == "number":
+        try:
+            _ws_send(connection_id, {"type": "number_input"})
+        except Exception:
+            pass
+
     is_attempt = bool(input_.get("customer_street") or input_.get("customer_number"))
     if is_attempt and result.get("verification_failed"):
         failures, locked = _record_verification_failure(customer_name)

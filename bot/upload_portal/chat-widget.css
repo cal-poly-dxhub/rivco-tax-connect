@@ -159,38 +159,150 @@
 
 #rcac-chat-form button[type="submit"]:hover { background: #1a4575; }
 
-/* ── Street quiz select buttons ─────────────────────────────── */
+/* ── Address quiz ── */
 .rcac-street-options {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  align-self: flex-start;
-  max-width: 90%;
+  gap: 0.5rem;
+  margin: 0.5rem 0 0.25rem;
+  width: 100%;
+}
+
+.rcac-street-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #556575;
+  margin-bottom: 0.25rem;
+  font-family: "Montserrat", system-ui, sans-serif;
 }
 
 .rcac-street-btn {
   background: #fff;
-  color: #123456;
-  border: 1.5px solid #123456;
-  border-radius: 20px;
-  padding: 8px 16px;
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
+  border: 2px solid #d0d5db;
+  color: #1a1a2e;
+  padding: 0.6rem 1rem;
   text-align: left;
-  transition: background 0.15s, color 0.15s;
+  font-size: 0.875rem;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.15s, border-color 0.15s, font-weight 0.05s;
+  width: 100%;
+  font-weight: 400;
 }
 
-.rcac-street-btn:hover:not(:disabled) {
-  background: #eaf0f8;
+.rcac-street-btn:hover:not(:disabled):not(.rcac-street-btn--selected) {
+  border-color: #002f87;
+  background: #f8faff;
 }
 
 .rcac-street-btn--selected {
-  background: #123456;
-  color: #fff;
+  background: #f0f4ff;
+  border-color: #002f87;
+  color: #002f87;
+  font-weight: 700;
 }
 
 .rcac-street-btn:disabled {
-  opacity: 0.55;
-  cursor: default;
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Sliding number input */
+.rcac-number-slide {
+  overflow: hidden;
+  max-height: 0;
+  transition: max-height 0.3s ease;
+}
+
+.rcac-number-slide.open {
+  max-height: 120px;
+}
+
+.rcac-number-input-wrap {
+  padding-top: 0.75rem;
+  border-top: 1px solid #e8ecf0;
+  margin-top: 0.5rem;
+}
+
+.rcac-number-input-wrap label {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #556575;
+  font-family: "Montserrat", system-ui, sans-serif;
+  margin-bottom: 0.25rem;
+}
+
+.rcac-number-input-wrap input {
+  border: none;
+  border-bottom: 1.5px solid #002f87;
+  background: transparent;
+  outline: none;
+  padding: 0.35rem 0;
+  width: 100%;
+  font-size: 0.9rem;
+  color: #1a1a2e;
+  margin-bottom: 0.5rem;
+}
+
+.rcac-number-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.rcac-verify-btn {
+  background: #ffc629;
+  border: none;
+  color: #020d40;
+  font-weight: 700;
+  font-size: 0.75rem;
+  font-family: "Montserrat", system-ui, sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.4rem 1rem;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background 0.15s;
+}
+
+.rcac-verify-btn:hover:not(:disabled) { background: #fed23a; }
+.rcac-verify-btn:disabled { background: #e0e0e0; color: #999; cursor: not-allowed; }
+
+/* Inline number input (rendered after bot asks for number) */
+.rcac-inline-number {
+  background: #fff;
+  border: 1px solid #e0e4e9;
+  border-radius: 16px;
+  border-bottom-left-radius: 4px;
+  padding: 0.75rem 1rem;
+  max-width: 80%;
+  align-self: flex-start;
+}
+
+.rcac-inline-number label {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #556575;
+  font-family: "Montserrat", system-ui, sans-serif;
+  margin-bottom: 0.35rem;
+}
+
+.rcac-inline-number input {
+  border: none;
+  border-bottom: 1.5px solid #002f87;
+  background: transparent;
+  outline: none;
+  padding: 0.3rem 0;
+  width: 100%;
+  font-size: 0.9rem;
+  color: #1a1a2e;
+  margin-bottom: 0.5rem;
 }

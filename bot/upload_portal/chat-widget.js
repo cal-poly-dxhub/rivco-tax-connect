@@ -134,25 +134,135 @@
     group.className = "rcac-street-options";
     group.setAttribute("role", "group");
     group.setAttribute("aria-label", "Street options");
+
+    const label = document.createElement("div");
+    label.className = "rcac-street-label";
+    label.textContent = "Select your street:";
+    group.appendChild(label);
+
+    let selectedStreet = null;
+
+    // Sliding number-input section (hidden until a street is chosen).
+    const slideWrap = document.createElement("div");
+    slideWrap.className = "rcac-number-slide";
+
+    const numWrap = document.createElement("div");
+    numWrap.className = "rcac-number-input-wrap";
+
+    const numLabel = document.createElement("label");
+    numLabel.textContent = "House / Unit Number";
+
+    const numInput = document.createElement("input");
+    numInput.type = "text";
+    numInput.placeholder = "e.g. 789";
+    numInput.autocomplete = "off";
+    numInput.maxLength = 20;
+
+    const actions = document.createElement("div");
+    actions.className = "rcac-number-actions";
+
+    const verifyBtn = document.createElement("button");
+    verifyBtn.type = "button";
+    verifyBtn.className = "rcac-verify-btn";
+    verifyBtn.textContent = "Verify";
+    verifyBtn.addEventListener("click", () => {
+      const num = numInput.value.trim();
+      if (!num) return;
+      verifyBtn.disabled = true;
+      addBubble("user", num);
+      sendMessage(num);
+      input.disabled = true;
+    });
+
+    const cancelLink = document.createElement("a");
+    cancelLink.href = "#";
+    cancelLink.textContent = "Cancel";
+    cancelLink.style.cssText = "font-size:0.75rem; color:#556575; text-decoration:underline; cursor:pointer;";
+    cancelLink.addEventListener("click", (e) => {
+      e.preventDefault();
+      // Re-enable all street buttons and collapse the slide.
+      group.querySelectorAll(".rcac-street-btn").forEach((b) => {
+        b.disabled = false;
+        b.classList.remove("rcac-street-btn--selected");
+      });
+      slideWrap.classList.remove("open");
+      selectedStreet = null;
+    });
+
+    actions.appendChild(verifyBtn);
+    actions.appendChild(cancelLink);
+    numWrap.appendChild(numLabel);
+    numWrap.appendChild(numInput);
+    numWrap.appendChild(actions);
+    slideWrap.appendChild(numWrap);
+
     options.forEach((street) => {
       const btn = document.createElement("button");
       btn.className = "rcac-street-btn";
       btn.type = "button";
       btn.textContent = street;
       btn.addEventListener("click", () => {
-        // Disable all buttons to prevent double-submission.
+        // Visual selection state.
         group.querySelectorAll(".rcac-street-btn").forEach((b) => {
           b.disabled = true;
+          b.classList.remove("rcac-street-btn--selected");
         });
         btn.classList.add("rcac-street-btn--selected");
-        addBubble("user", street);
-        sendMessage(street);
-        input.disabled = true;
+        selectedStreet = street;
+
+        // Slide in the number input.
+        slideWrap.classList.add("open");
+        numInput.value = "";
+        numInput.focus();
       });
       group.appendChild(btn);
     });
+
+    group.appendChild(slideWrap);
     messagesEl.appendChild(group);
     messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function renderNumberInput() {
+    const wrap = document.createElement("div");
+    wrap.className = "rcac-inline-number";
+
+    const lbl = document.createElement("label");
+    lbl.textContent = "Enter your house / unit number:";
+
+    const numInput = document.createElement("input");
+    numInput.type = "text";
+    numInput.placeholder = "e.g. 789";
+    numInput.autocomplete = "off";
+    numInput.maxLength = 20;
+
+    const submitBtn = document.createElement("button");
+    submitBtn.type = "button";
+    submitBtn.className = "rcac-verify-btn";
+    submitBtn.textContent = "Submit";
+
+    const doSubmit = () => {
+      const num = numInput.value.trim();
+      if (!num) return;
+      submitBtn.disabled = true;
+      numInput.disabled = true;
+      addBubble("user", num);
+      sendMessage(num);
+      wrap.remove();
+      input.disabled = true;
+    };
+
+    submitBtn.addEventListener("click", doSubmit);
+    numInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") doSubmit();
+    });
+
+    wrap.appendChild(lbl);
+    wrap.appendChild(numInput);
+    wrap.appendChild(submitBtn);
+    messagesEl.appendChild(wrap);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    numInput.focus();
   }
 
   // ── WebSocket lifecycle ──────────────────────────────────────
@@ -190,6 +300,9 @@
           if (Array.isArray(frame.options) && frame.options.length) {
             renderStreetOptions(frame.options);
           }
+          break;
+        case "number_input":
+          renderNumberInput();
           break;
         case "handoff":
           if (frame.reference) showHandoff(frame.reference);
