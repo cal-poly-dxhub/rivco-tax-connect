@@ -42,6 +42,7 @@ SESSION_TTL_DAYS = 7
 OFFICE_PHONE = os.environ.get("OFFICE_PHONE", "(951) 955-3800")
 
 ANTHROPIC_VERSION = "bedrock-2023-05-31"
+CW_NAMESPACE = os.environ.get("PROJECT_NAME", "riverside-tax-refund-v2") + "/Chat"
 
 dynamodb = boto3.resource("dynamodb")
 table = dynamodb.Table(CHAT_TABLE)
@@ -50,6 +51,7 @@ ses = boto3.client("ses")
 ssm = boto3.client("ssm")
 ws_client = boto3.client("apigatewaymanagementapi", endpoint_url=WS_ENDPOINT)
 bedrock = boto3.client("bedrock-runtime", region_name=REGION)
+cloudwatch = boto3.client("cloudwatch", region_name=REGION)
 
 _prompt_cache: str | None = None
 
@@ -333,6 +335,13 @@ def _tool_tax_lookup(_session_id: str, input_: dict, connection_id: str = "") ->
     is_attempt = bool(input_.get("customer_street") or input_.get("customer_number"))
     if is_attempt and result.get("verification_failed"):
         failures, locked = _record_verification_failure(customer_name)
+        try:
+            cloudwatch.put_metric_data(
+                Namespace=CW_NAMESPACE,
+                MetricData=[{"MetricName": "VerificationFailure", "Value": 1, "Unit": "Count"}],
+            )
+        except Exception:
+            pass
         result["attempts_remaining"] = max(0, MAX_VERIFICATION_FAILURES - failures)
         if locked:
             result["locked"] = True

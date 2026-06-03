@@ -12,6 +12,7 @@ from aws_cdk import (
     aws_lambda as _lambda,
     aws_lambda_event_sources as lambda_events,
     aws_iam as iam,
+    aws_kms as kms,
     aws_logs as logs,
     aws_apigateway as apigw,
     aws_apigatewayv2 as apigwv2,
@@ -22,8 +23,11 @@ from aws_cdk import (
     aws_codebuild as codebuild,
     aws_cloudfront as cloudfront,
     aws_cloudfront_origins as cloudfront_origins,
+    aws_guardduty as guardduty,
     aws_ses as ses,
     aws_ssm as ssm,
+    aws_wafv2 as wafv2,
+    aws_cloudwatch as cloudwatch,
     custom_resources as cr,
 )
 from constructs import Construct
@@ -72,6 +76,15 @@ class RiversideTaxRefundStack(Stack):
         cfg = load_config()
         proj = cfg['project']['name']
 
+        # ── Shared KMS key for all S3 buckets ───────────────────────────
+        s3_key = kms.Key(
+            self, "S3Key",
+            alias=f"alias/{proj}-s3",
+            description=f"{proj} — S3 encryption key",
+            enable_key_rotation=True,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+
         # S3 bucket
         bucket = s3.Bucket(
             self, "DataBucket",
@@ -79,6 +92,8 @@ class RiversideTaxRefundStack(Stack):
             removal_policy=RemovalPolicy.DESTROY,
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
             auto_delete_objects=True,
+            encryption=s3.BucketEncryption.KMS,
+            encryption_key=s3_key,
         )
 
         # Ship the demo refund dataset as part of the deploy. The file is
@@ -239,6 +254,11 @@ class RiversideTaxRefundStack(Stack):
             actions=["ses:SendEmail", "ses:SendRawEmail"],
             resources=["*"],
         ))
+        chat_fn.add_to_role_policy(iam.PolicyStatement(
+            actions=["cloudwatch:PutMetricData"],
+            resources=["*"],
+        ))
+        chat_fn.add_environment("PROJECT_NAME", proj)
 
         # ── WebSocket API Gateway for the chat widget ───────────────────
         ws_api = apigwv2.WebSocketApi(
@@ -289,7 +309,8 @@ class RiversideTaxRefundStack(Stack):
         uploads_bucket = s3.Bucket(
             self, "UploadsBucket",
             bucket_name=f"{proj}-uploads-{self.account}",
-            encryption=s3.BucketEncryption.S3_MANAGED,
+            encryption=s3.BucketEncryption.KMS,
+            encryption_key=s3_key,
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
             removal_policy=RemovalPolicy.DESTROY,
             auto_delete_objects=True,
@@ -609,7 +630,8 @@ class RiversideTaxRefundStack(Stack):
             removal_policy=RemovalPolicy.DESTROY,
             auto_delete_objects=True,
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
-            encryption=s3.BucketEncryption.S3_MANAGED,
+            encryption=s3.BucketEncryption.KMS,
+            encryption_key=s3_key,
         )
 
         admin_oac = cloudfront.S3OriginAccessControl(
@@ -739,7 +761,8 @@ class RiversideTaxRefundStack(Stack):
             removal_policy=RemovalPolicy.DESTROY,
             auto_delete_objects=True,
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
-            encryption=s3.BucketEncryption.S3_MANAGED,
+            encryption=s3.BucketEncryption.KMS,
+            encryption_key=s3_key,
         )
 
         claimant_oac = cloudfront.S3OriginAccessControl(
@@ -915,3 +938,188 @@ class RiversideTaxRefundStack(Stack):
             batch_size=10,
             retry_attempts=2,
         ))
+
+        # ── GuardDuty Malware Protection for uploaded documents ─────────
+        # Scans every object written to the uploads bucket. The detector is
+        # account-scoped; we create one and tag the uploads bucket as a
+        # protected resource.
+        gd_detector = guardduty.CfnDetector(
+            self, "GuardDutyDetector",
+            enable=True,
+            features=[guardduty.CfnDetector.CFNFeatureConfigurationProperty(
+                name="S3_DATA_EVENTS",
+                status="ENABLED",
+            )],
+        )
+        guardduty.CfnMalwareProtectionPlan(
+            self, "MalwareProtection",
+            protected_resource=guardduty.CfnMalwareProtectionPlan.ProtectedResourceProperty(
+                s3_bucket=guardduty.CfnMalwareProtectionPlan.S3BucketProperty(
+                    bucket_name=uploads_bucket.bucket_name,
+                    object_prefixes=["submissions/"],
+                ),
+            ),
+            actions=guardduty.CfnMalwareProtectionPlan.CFNActionsProperty(
+                tagging=guardduty.CfnMalwareProtectionPlan.CFNTaggingProperty(
+                    status="ENABLED",
+                ),
+            ),
+            role=iam.Role(
+                self, "MalwareProtectionRole",
+                assumed_by=iam.ServicePrincipal("malware-protection-plan.guardduty.amazonaws.com"),
+                inline_policies={
+                    "ScanPolicy": iam.PolicyDocument(statements=[
+                        iam.PolicyStatement(
+                            actions=["s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectTagging",
+                                     "s3:PutObjectTagging", "s3:PutObjectVersionTagging"],
+                            resources=[uploads_bucket.arn_for_objects("*")],
+                        ),
+                        iam.PolicyStatement(
+                            actions=["s3:ListBucket"],
+                            resources=[uploads_bucket.bucket_arn],
+                        ),
+                        iam.PolicyStatement(
+                            actions=["kms:GenerateDataKey", "kms:Decrypt"],
+                            resources=[s3_key.key_arn],
+                        ),
+                    ]),
+                },
+            ),
+        )
+
+        # ── WAF WebACL in front of API Gateway (REST) ───────────────────
+        # Blocks common web exploits and rate-limits per IP to 100 req/5min.
+        waf_acl = wafv2.CfnWebACL(
+            self, "ApiWaf",
+            name=f"{proj}-api-waf",
+            scope="REGIONAL",
+            default_action=wafv2.CfnWebACL.DefaultActionProperty(allow={}),
+            visibility_config=wafv2.CfnWebACL.VisibilityConfigProperty(
+                cloud_watch_metrics_enabled=True,
+                metric_name=f"{proj}-api-waf",
+                sampled_requests_enabled=True,
+            ),
+            rules=[
+                wafv2.CfnWebACL.RuleProperty(
+                    name="AWSManagedRulesCommonRuleSet",
+                    priority=10,
+                    statement=wafv2.CfnWebACL.StatementProperty(
+                        managed_rule_group_statement=wafv2.CfnWebACL.ManagedRuleGroupStatementProperty(
+                            vendor_name="AWS", name="AWSManagedRulesCommonRuleSet",
+                        ),
+                    ),
+                    override_action=wafv2.CfnWebACL.OverrideActionProperty(none={}),
+                    visibility_config=wafv2.CfnWebACL.VisibilityConfigProperty(
+                        cloud_watch_metrics_enabled=True,
+                        metric_name="CommonRuleSet",
+                        sampled_requests_enabled=True,
+                    ),
+                ),
+                wafv2.CfnWebACL.RuleProperty(
+                    name="AWSManagedRulesKnownBadInputsRuleSet",
+                    priority=20,
+                    statement=wafv2.CfnWebACL.StatementProperty(
+                        managed_rule_group_statement=wafv2.CfnWebACL.ManagedRuleGroupStatementProperty(
+                            vendor_name="AWS", name="AWSManagedRulesKnownBadInputsRuleSet",
+                        ),
+                    ),
+                    override_action=wafv2.CfnWebACL.OverrideActionProperty(none={}),
+                    visibility_config=wafv2.CfnWebACL.VisibilityConfigProperty(
+                        cloud_watch_metrics_enabled=True,
+                        metric_name="KnownBadInputs",
+                        sampled_requests_enabled=True,
+                    ),
+                ),
+                wafv2.CfnWebACL.RuleProperty(
+                    name="RateLimit",
+                    priority=30,
+                    statement=wafv2.CfnWebACL.StatementProperty(
+                        rate_based_statement=wafv2.CfnWebACL.RateBasedStatementProperty(
+                            limit=100,
+                            aggregate_key_type="IP",
+                            evaluation_window_sec=300,
+                        ),
+                    ),
+                    action=wafv2.CfnWebACL.RuleActionProperty(block={}),
+                    visibility_config=wafv2.CfnWebACL.VisibilityConfigProperty(
+                        cloud_watch_metrics_enabled=True,
+                        metric_name="RateLimit",
+                        sampled_requests_enabled=True,
+                    ),
+                ),
+            ],
+        )
+        wafv2.CfnWebACLAssociation(
+            self, "ApiWafAssociation",
+            resource_arn=f"arn:aws:apigateway:{self.region}::/restapis/{upload_api.rest_api_id}/stages/prod",
+            web_acl_arn=waf_acl.attr_arn,
+        )
+
+        # ── CloudWatch Alarms ────────────────────────────────────────────
+        alarm_topic_arn = (cfg.get("monitoring") or {}).get("alarm_sns_topic_arn", "")
+
+        def _alarm(construct_id, metric, threshold, description, comparison=None, periods=1):
+            kwargs = dict(
+                alarm_name=f"{proj}-{construct_id}",
+                alarm_description=description,
+                metric=metric,
+                threshold=threshold,
+                evaluation_periods=periods,
+                comparison_operator=comparison or cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+            )
+            alarm = cloudwatch.Alarm(self, construct_id, **kwargs)
+            if alarm_topic_arn:
+                import aws_cdk.aws_sns as sns
+                import aws_cdk.aws_cloudwatch_actions as cw_actions
+                topic = sns.Topic.from_topic_arn(self, f"Topic-{construct_id}", alarm_topic_arn)
+                alarm.add_alarm_action(cw_actions.SnsAction(topic))
+            return alarm
+
+        # Lambda errors
+        for fn_obj, name in [
+            (fn, "runtime"), (chat_fn, "chat"), (upload_fn, "upload"), (notif_fn, "notif"),
+        ]:
+            _alarm(
+                f"lambda-{name}-errors",
+                fn_obj.metric_errors(period=Duration.minutes(5)),
+                threshold=3,
+                description=f"{name} Lambda error rate ≥ 3 in 5 min",
+            )
+
+        # API Gateway 4xx / 5xx
+        _alarm(
+            "api-4xx",
+            upload_api.metric_client_error(period=Duration.minutes(5)),
+            threshold=20,
+            description="Upload API 4xx errors ≥ 20 in 5 min",
+        )
+        _alarm(
+            "api-5xx",
+            upload_api.metric_server_error(period=Duration.minutes(5)),
+            threshold=5,
+            description="Upload API 5xx errors ≥ 5 in 5 min",
+        )
+
+        # Too many failed verifications (custom metric emitted by chat handler)
+        _alarm(
+            "failed-verifications",
+            cloudwatch.Metric(
+                namespace=f"{proj}/Chat",
+                metric_name="VerificationFailure",
+                period=Duration.minutes(10),
+                statistic="Sum",
+            ),
+            threshold=10,
+            description="≥ 10 identity verification failures in 10 min",
+        )
+
+        # Ingestion failures (DynamoDB stream errors on the notification handler)
+        _alarm(
+            "ingestion-failures",
+            notif_fn.metric_errors(period=Duration.minutes(5)),
+            threshold=1,
+            description="Notification/ingestion Lambda any error",
+        )
+
+        CfnOutput(self, "WafAclArn", value=waf_acl.attr_arn)
