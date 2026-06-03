@@ -43,16 +43,21 @@ _DEFAULT_DOC_REQS: dict[str, dict[str, Any]] = {
     "STALE_WARRANT": {
         "docs": [
             {"id": "ap13-affidavit", "label": "Signed AP13 affidavit", "required": True, "internal": True},
+            {"id": "government-id", "label": "Government-issued photo ID (driver's license, passport, or state ID)", "required": True},
+            {"id": "proof-of-entitlement", "label": "Proof of entitlement (original warrant, bank statement, or documentation showing you are the payee)", "required": True},
         ],
     },
     "PAYROLL": {
         "docs": [
             {"id": "ap13-affidavit", "label": "Signed AP13 affidavit", "required": True, "internal": True},
+            {"id": "government-id", "label": "Government-issued photo ID (driver's license, passport, or state ID)", "required": True},
         ],
     },
     "PROPERTY_TAX": {
         "docs": [
             {"id": "property-tax-claim", "label": "Signed property tax claim", "required": True, "internal": True},
+            {"id": "government-id", "label": "Government-issued photo ID (driver's license, passport, or state ID)", "required": True},
+            {"id": "proof-of-ownership", "label": "Proof of property ownership (deed, title, or current tax bill)", "required": True},
         ],
     },
 }

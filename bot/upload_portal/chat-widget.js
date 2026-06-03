@@ -29,6 +29,8 @@
   let activeAssistantBubble = null;
   let pendingFlush = "";
   let flushScheduled = false;
+  let pendingHouseNumber = null;
+  let suppressDeltas = false;
 
   // ── DOM scaffold ─────────────────────────────────────────────
   const root = document.createElement("div");
@@ -154,7 +156,7 @@
 
     const numInput = document.createElement("input");
     numInput.type = "text";
-    numInput.placeholder = "e.g. 789";
+    numInput.value = "123";
     numInput.autocomplete = "off";
     numInput.maxLength = 20;
 
@@ -167,10 +169,13 @@
     verifyBtn.textContent = "Verify";
     verifyBtn.addEventListener("click", () => {
       const num = numInput.value.trim();
-      if (!num) return;
+      if (!num || !selectedStreet) return;
       verifyBtn.disabled = true;
-      addBubble("user", num);
-      sendMessage(num);
+      // Stash the house number; send the street first so the server calls
+      // tax_lookup(name, street). The number_input frame will auto-submit it.
+      pendingHouseNumber = num;
+      addBubble("user", selectedStreet);
+      sendMessage(selectedStreet);
       input.disabled = true;
     });
 
@@ -180,13 +185,13 @@
     cancelLink.style.cssText = "font-size:0.75rem; color:#556575; text-decoration:underline; cursor:pointer;";
     cancelLink.addEventListener("click", (e) => {
       e.preventDefault();
-      // Re-enable all street buttons and collapse the slide.
       group.querySelectorAll(".rcac-street-btn").forEach((b) => {
         b.disabled = false;
         b.classList.remove("rcac-street-btn--selected");
       });
       slideWrap.classList.remove("open");
       selectedStreet = null;
+      pendingHouseNumber = null;
     });
 
     actions.appendChild(verifyBtn);
@@ -202,15 +207,12 @@
       btn.type = "button";
       btn.textContent = street;
       btn.addEventListener("click", () => {
-        // Visual selection state.
         group.querySelectorAll(".rcac-street-btn").forEach((b) => {
           b.disabled = true;
           b.classList.remove("rcac-street-btn--selected");
         });
         btn.classList.add("rcac-street-btn--selected");
         selectedStreet = street;
-
-        // Slide in the number input.
         slideWrap.classList.add("open");
         numInput.value = "";
         numInput.focus();
@@ -289,31 +291,47 @@
       }
       switch (frame.type) {
         case "delta":
-          if (!activeAssistantBubble) activeAssistantBubble = addBubble("assistant", "");
-          pendingFlush += frame.text;
-          scheduleFlush();
+          if (!suppressDeltas) {
+            if (!activeAssistantBubble) activeAssistantBubble = addBubble("assistant", "");
+            pendingFlush += frame.text;
+            scheduleFlush();
+          }
           break;
         case "tool_use":
           // optional: show a transient "looking that up..." hint
           break;
         case "street_options":
           if (Array.isArray(frame.options) && frame.options.length) {
+            // Suppress any Claude commentary that accompanies the quiz frames.
+            suppressDeltas = true;
+            activeAssistantBubble = null;
             renderStreetOptions(frame.options);
           }
           break;
         case "number_input":
-          renderNumberInput();
+          suppressDeltas = true;
+          activeAssistantBubble = null;
+          if (pendingHouseNumber) {
+            const num = pendingHouseNumber;
+            pendingHouseNumber = null;
+            addBubble("user", num);
+            sendMessage(num);
+          } else {
+            renderNumberInput();
+          }
           break;
         case "handoff":
           if (frame.reference) showHandoff(frame.reference);
           break;
         case "done":
           activeAssistantBubble = null;
+          suppressDeltas = false;
           input.disabled = false;
           input.focus();
           break;
         case "error":
           activeAssistantBubble = null;
+          suppressDeltas = false;
           addBubble("system", `⚠ ${frame.message || "Something went wrong."}`);
           input.disabled = false;
           break;
@@ -337,7 +355,7 @@
   }
 
   function renderWelcome() {
-    addBubble("assistant", "Welcome to the Riverside County Auditor-Controller's Office. I can help with unclaimed refunds, stale-dated warrants, payroll questions, and property tax. How can I help today?");
+    addBubble("assistant", "Welcome to the Riverside County Auditor-Controller's Office. I can help with unclaimed refunds, stale-dated warrants, payroll questions, and property tax. To get started, what's your name?");
   }
 
   function startOver() {
