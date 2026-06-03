@@ -960,8 +960,12 @@ class RiversideTaxRefundStack(Stack):
                         resources=[uploads_bucket.arn_for_objects("*")],
                     ),
                     iam.PolicyStatement(
-                        actions=["s3:ListBucket"],
+                        actions=["s3:ListBucket", "s3:GetBucketNotification", "s3:PutBucketNotification"],
                         resources=[uploads_bucket.bucket_arn],
+                    ),
+                    iam.PolicyStatement(
+                        actions=["events:PutRule", "events:DeleteRule", "events:PutTargets", "events:RemoveTargets"],
+                        resources=["*"],
                     ),
                     iam.PolicyStatement(
                         actions=["kms:GenerateDataKey", "kms:Decrypt"],
