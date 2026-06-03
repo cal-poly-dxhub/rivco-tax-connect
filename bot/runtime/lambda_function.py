@@ -83,7 +83,8 @@ def build_portal_url(records: list[dict[str, Any]], confidence: str = '') -> str
     pt = next((r for r in records if r['refund_type'] == 'PROPERTY_TAX'), None)
     if pt:
         params.update({k: pt[k] for k in ('assessment', 'taxyear') if k in pt})
-    return f"{UPLOAD_PORTAL_URL}?{urlencode(params)}"
+    base = UPLOAD_PORTAL_URL.rstrip('/') + '/new'
+    return f"{base}?{urlencode(params)}"
 
 
 _ROAD_SUFFIXES = frozenset({
