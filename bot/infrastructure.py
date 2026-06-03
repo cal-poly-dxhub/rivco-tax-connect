@@ -311,6 +311,7 @@ class RiversideTaxRefundStack(Stack):
             bucket_name=f"{proj}-uploads-{self.account}",
             encryption=s3.BucketEncryption.KMS,
             encryption_key=s3_key,
+            bucket_key_enabled=True,
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
             removal_policy=RemovalPolicy.DESTROY,
             auto_delete_objects=True,
@@ -388,7 +389,6 @@ class RiversideTaxRefundStack(Stack):
             memory_size=128,
             environment={
                 "UPLOAD_BUCKET": uploads_bucket.bucket_name,
-                "UPLOAD_KMS_KEY_ID": s3_key.key_arn,
                 "ALLOWED_ORIGIN": portal_origin,
                 "TABLE_NAME": submissions_table.table_name,
                 "ADMIN_CONFIG_TABLE": admin_config_table.table_name,
