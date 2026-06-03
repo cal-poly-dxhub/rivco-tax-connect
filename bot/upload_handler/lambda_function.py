@@ -11,6 +11,7 @@ s3 = boto3.client("s3")
 dynamodb = boto3.resource("dynamodb")
 cognito = boto3.client("cognito-idp")
 BUCKET = os.environ["UPLOAD_BUCKET"]
+UPLOAD_KMS_KEY_ID = os.environ.get("UPLOAD_KMS_KEY_ID", "")
 TABLE_NAME = os.environ.get("TABLE_NAME", "")
 ADMIN_CONFIG_TABLE = os.environ.get("ADMIN_CONFIG_TABLE", "")
 CHAT_TABLE_NAME = os.environ.get("CHAT_TABLE", "")
@@ -772,11 +773,11 @@ def _handle_upload(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
             return _err(400, f"Unsupported file type: {content_type}", headers)
 
         key = f"{submission_id}/{filename}"
-        presigned = s3.generate_presigned_url(
-            "put_object",
-            Params={"Bucket": BUCKET, "Key": key, "ContentType": content_type},
-            ExpiresIn=900,
-        )
+        put_params: dict = {"Bucket": BUCKET, "Key": key, "ContentType": content_type}
+        if UPLOAD_KMS_KEY_ID:
+            put_params["ServerSideEncryption"] = "aws:kms"
+            put_params["SSEKMSKeyId"] = UPLOAD_KMS_KEY_ID
+        presigned = s3.generate_presigned_url("put_object", Params=put_params, ExpiresIn=900)
         urls.append({"filename": filename, "uploadUrl": presigned, "key": key})
 
     s3.put_object(

@@ -388,6 +388,7 @@ class RiversideTaxRefundStack(Stack):
             memory_size=128,
             environment={
                 "UPLOAD_BUCKET": uploads_bucket.bucket_name,
+                "UPLOAD_KMS_KEY_ID": s3_key.key_arn,
                 "ALLOWED_ORIGIN": portal_origin,
                 "TABLE_NAME": submissions_table.table_name,
                 "ADMIN_CONFIG_TABLE": admin_config_table.table_name,
