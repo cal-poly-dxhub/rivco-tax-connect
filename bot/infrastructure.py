@@ -630,8 +630,7 @@ class RiversideTaxRefundStack(Stack):
             removal_policy=RemovalPolicy.DESTROY,
             auto_delete_objects=True,
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
-            encryption=s3.BucketEncryption.KMS,
-            encryption_key=s3_key,
+            encryption=s3.BucketEncryption.S3_MANAGED,
         )
 
         admin_oac = cloudfront.S3OriginAccessControl(
@@ -761,8 +760,7 @@ class RiversideTaxRefundStack(Stack):
             removal_policy=RemovalPolicy.DESTROY,
             auto_delete_objects=True,
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
-            encryption=s3.BucketEncryption.KMS,
-            encryption_key=s3_key,
+            encryption=s3.BucketEncryption.S3_MANAGED,
         )
 
         claimant_oac = cloudfront.S3OriginAccessControl(
@@ -951,9 +949,30 @@ class RiversideTaxRefundStack(Stack):
                 status="ENABLED",
             )],
         )
+        malware_role = iam.Role(
+            self, "MalwareProtectionRole",
+            assumed_by=iam.ServicePrincipal("malware-protection-plan.guardduty.amazonaws.com"),
+            inline_policies={
+                "ScanPolicy": iam.PolicyDocument(statements=[
+                    iam.PolicyStatement(
+                        actions=["s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectTagging",
+                                 "s3:PutObjectTagging", "s3:PutObjectVersionTagging"],
+                        resources=[uploads_bucket.arn_for_objects("*")],
+                    ),
+                    iam.PolicyStatement(
+                        actions=["s3:ListBucket"],
+                        resources=[uploads_bucket.bucket_arn],
+                    ),
+                    iam.PolicyStatement(
+                        actions=["kms:GenerateDataKey", "kms:Decrypt"],
+                        resources=[s3_key.key_arn],
+                    ),
+                ]),
+            },
+        )
         guardduty.CfnMalwareProtectionPlan(
             self, "MalwareProtection",
-            protected_resource=guardduty.CfnMalwareProtectionPlan.ProtectedResourceProperty(
+            protected_resource=guardduty.CfnMalwareProtectionPlan.CFNProtectedResourceProperty(
                 s3_bucket=guardduty.CfnMalwareProtectionPlan.S3BucketProperty(
                     bucket_name=uploads_bucket.bucket_name,
                     object_prefixes=["submissions/"],
@@ -964,27 +983,7 @@ class RiversideTaxRefundStack(Stack):
                     status="ENABLED",
                 ),
             ),
-            role=iam.Role(
-                self, "MalwareProtectionRole",
-                assumed_by=iam.ServicePrincipal("malware-protection-plan.guardduty.amazonaws.com"),
-                inline_policies={
-                    "ScanPolicy": iam.PolicyDocument(statements=[
-                        iam.PolicyStatement(
-                            actions=["s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectTagging",
-                                     "s3:PutObjectTagging", "s3:PutObjectVersionTagging"],
-                            resources=[uploads_bucket.arn_for_objects("*")],
-                        ),
-                        iam.PolicyStatement(
-                            actions=["s3:ListBucket"],
-                            resources=[uploads_bucket.bucket_arn],
-                        ),
-                        iam.PolicyStatement(
-                            actions=["kms:GenerateDataKey", "kms:Decrypt"],
-                            resources=[s3_key.key_arn],
-                        ),
-                    ]),
-                },
-            ),
+            role=malware_role.role_arn,
         )
 
         # ── WAF WebACL in front of API Gateway (REST) ───────────────────
