@@ -805,13 +805,20 @@ def _build_notifications(stack, cfg, proj, submissions_table, admin_config_table
 
 def _build_security(stack, cfg, proj, upload_api, uploads_bucket, s3_key, chat_fn, upload_fn, notif_fn, fn):
     """GuardDuty Malware Protection, WAF, CloudWatch alarms."""
-    guardduty.CfnDetector(
-        stack, "GuardDutyDetector",
-        enable=True,
-        features=[guardduty.CfnDetector.CFNFeatureConfigurationProperty(
-            name="S3_DATA_EVENTS", status="ENABLED",
-        )],
-    )
+    # GuardDuty allows only one detector per account/region; a parallel stack
+    # in the same account must NOT try to create a second one. Set
+    # `security.manage_guardduty_detector: false` when reusing a detector
+    # already created by another stack. The MalwareProtectionPlan below is
+    # bucket-scoped and safe to create independently.
+    sec_cfg = cfg.get("security") or {}
+    if sec_cfg.get("manage_guardduty_detector", True):
+        guardduty.CfnDetector(
+            stack, "GuardDutyDetector",
+            enable=True,
+            features=[guardduty.CfnDetector.CFNFeatureConfigurationProperty(
+                name="S3_DATA_EVENTS", status="ENABLED",
+            )],
+        )
     malware_role = iam.Role(
         stack, "MalwareProtectionRole",
         assumed_by=iam.ServicePrincipal("malware-protection-plan.guardduty.amazonaws.com"),

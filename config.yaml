@@ -50,6 +50,12 @@ admin_dashboard:
   github_repo: rivco-tax-connect
   github_branch: feat/dynamic-departments
 
+# Account-level resources that may already exist when deploying a parallel
+# stack. Default behavior is to create them (`true`); set to `false` to
+# reuse an existing one.
+security:
+  manage_guardduty_detector: false
+
 # Bedrock Claude — drives the web chat agent.
 bedrock:
   # Inference profile ID (cross-region) for the chat model.
