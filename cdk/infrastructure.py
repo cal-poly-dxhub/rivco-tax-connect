@@ -760,7 +760,10 @@ def _build_notifications(stack, cfg, proj, submissions_table, admin_config_table
     notif_cfg = cfg.get("notifications") or {}
     notif_sender = notif_cfg.get("sender", "")
 
-    if notif_sender:
+    # `manage_ses_identity: false` lets a parallel stack reuse a sender that
+    # was verified by another stack or out-of-band. CloudFormation can't import
+    # an existing SES identity so re-creating it would fail with "already exists".
+    if notif_sender and notif_cfg.get("manage_ses_identity", True):
         ses.EmailIdentity(
             stack, "NotificationSenderIdentity",
             identity=ses.Identity.email(notif_sender),

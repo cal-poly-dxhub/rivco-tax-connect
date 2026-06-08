@@ -39,6 +39,10 @@ notifications:
   # emails. CDK creates an SES identity; you must click the verification
   # link AWS sends before notifications can actually deliver.
   sender: gflusser+super@amazon.com
+  # Set to false when this sender is already verified out-of-band (e.g. by a
+  # parallel stack in the same account). CloudFormation cannot import an
+  # existing SES identity, so re-creating it fails with "already exists".
+  manage_ses_identity: false
 
 # Admin dashboard (Next.js) build config. CodeBuild pulls from this repo/branch.
 admin_dashboard:
