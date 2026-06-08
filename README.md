@@ -30,18 +30,20 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full diagram, flow walkthrough, a
 ```
 .
 ├── app.py                          # CDK entry point
-├── bot/
+├── cdk/
 │   ├── infrastructure.py           # The whole stack — one CDK file
+│   ├── chat_system_prompt.md       # Bedrock Claude system prompt (loaded into SSM on deploy)
 │   ├── runtime/                    # Tax-lookup Lambda (jellyfish + decoy quiz)
 │   ├── chat_handler/               # WebSocket Lambda — Bedrock Claude with tool use
 │   ├── upload_handler/             # REST API Lambda — presigned URLs, admin CRUD
 │   ├── notification_handler/       # DynamoDB stream → SES email
 │   └── upload_portal/              # Static portal site (unified claim form + chat widget)
 ├── admin-dashboard/                # Next.js admin UI (CodeBuild → S3 → CloudFront)
+├── claimant-portal/                # Next.js claimant return portal (CodeBuild → S3)
 ├── forms/source/ap13-affidavit.pdf # Reference AP-13 PDF
 ├── refunds_demo_balanced.jsonl     # Demo refund dataset (gitignored)
 ├── auditor-controller-webpage.html # Mock auditor-controller.org site (gitignored)
-├── config.yaml                     # Project config, AWS region, system prompt, branch
+├── config.yaml                     # Project config (region, super-admin, branch, model id)
 ├── ARCHITECTURE.md                 # Full architecture diagram + design notes
 ├── DEPLOYMENT_GUIDE.md             # Deploy / verify / troubleshoot
 └── INTEGRATION_TESTS.md            # Manual test scenarios
@@ -88,7 +90,7 @@ After deploy, drop these tags into any HTML page that should host the chat:
 
 ## Tech stack
 
-- **AWS CDK** (Python) — single-stack architecture in `bot/infrastructure.py`
+- **AWS CDK** (Python) — single-stack architecture in `cdk/infrastructure.py`
 - **AWS Lambda** (Python 3.12) — runtime, chat handler, upload handler, notification handler
 - **Amazon Bedrock** — Claude Haiku 4.5 (`anthropic.claude-haiku-4-5`)
 - **API Gateway** — WebSocket (chat) + REST (uploads + admin)

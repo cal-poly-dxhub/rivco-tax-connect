@@ -51,11 +51,11 @@ First deploy takes ~10 min. Subsequent deploys without code changes are ~2 min.
 What happens:
 
 1. S3 buckets, DynamoDB tables, Cognito user pool, IAM roles
-2. Two Python Lambdas bundle locally — `bot/runtime` (the tax-lookup tool with jellyfish + decoy quiz) and `bot/chat_handler` (the WebSocket handler with `anthropic[bedrock]`). Local bundling means no Docker dependency
+2. Two Python Lambdas bundle locally — `cdk/runtime` (the tax-lookup tool with jellyfish + decoy quiz) and `cdk/chat_handler` (the WebSocket handler with `anthropic[bedrock]`). Local bundling means no Docker dependency
 3. WebSocket API Gateway + REST API Gateway routes get wired
-4. SSM parameter is created with the system prompt from `config.yaml`
+4. SSM parameter is created with the system prompt from `cdk/chat_system_prompt.md`
 5. `BucketDeployment` uploads `refunds_demo_balanced.jsonl` to the data bucket
-6. `BucketDeployment` ships the upload portal (`bot/upload_portal/` including `index.html`, the chat widget, the unified-form JS) to the portal S3 site
+6. `BucketDeployment` ships the upload portal (`cdk/upload_portal/` including `index.html`, the chat widget, the unified-form JS) to the portal S3 site
 7. CodeBuild starts and builds the Next.js admin dashboard from your GitHub branch
 8. Stack outputs print: dashboard URL, chat WebSocket URL, super-admin temp password, etc.
 
@@ -117,9 +117,9 @@ aws dynamodb query \
 
 ## Troubleshooting
 
-**`SSM PutParameter failed` during deploy.** The system prompt is over 4 KB and the parameter tier is set to `Standard`. Either trim the prompt below 4096 characters or change `bot/infrastructure.py`'s `prompt_param` tier to `ssm.ParameterTier.ADVANCED` (already the default).
+**`SSM PutParameter failed` during deploy.** The system prompt is over 4 KB and the parameter tier is set to `Standard`. Either trim the prompt below 4096 characters or change `cdk/infrastructure.py`'s `prompt_param` tier to `ssm.ParameterTier.ADVANCED` (already the default).
 
-**`pip install ... returned non-zero exit status 1` during synth.** A package in `bot/runtime/requirements.txt` or `bot/chat_handler/requirements.txt` doesn't have a manylinux wheel for the version pinned. Bump the package version. The `_LocalBundling` class enforces `--platform manylinux2014_x86_64 --only-binary=:all:` so the bundle works on Lambda.
+**`pip install ... returned non-zero exit status 1` during synth.** A package in `cdk/runtime/requirements.txt` or `cdk/chat_handler/requirements.txt` doesn't have a manylinux wheel for the version pinned. Bump the package version. The `_LocalBundling` class enforces `--platform manylinux2014_x86_64 --only-binary=:all:` so the bundle works on Lambda.
 
 **`Bedrock 403 AccessDeniedException`.** Bedrock model access not enabled in your account/region. Console → Bedrock → Model access → request access to `anthropic.claude-haiku-4-5`. Approval is instant.
 

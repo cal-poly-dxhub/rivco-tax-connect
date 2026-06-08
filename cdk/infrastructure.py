@@ -157,10 +157,18 @@ def _build_chat(stack, cfg, proj, fn):
         sort_key=dynamodb.Attribute(name="gsi1sk", type=dynamodb.AttributeType.STRING),
     )
 
+    # System prompt lives next to the CDK code (not in config.yaml) so it can
+    # be edited as plain markdown. SSM still gets the value on every deploy;
+    # the parameter itself remains the live-editable source of truth at
+    # runtime, so post-deploy edits should go through SSM, not by re-running
+    # `cdk deploy` (which would clobber them).
+    _prompt_path = os.path.join(os.path.dirname(__file__), "chat_system_prompt.md")
+    with open(_prompt_path) as _pf:
+        _prompt_text = _pf.read()
     prompt_param = ssm.StringParameter(
         stack, "ChatSystemPrompt",
         parameter_name=f"/{proj}/chat/system-prompt",
-        string_value=cfg["prompts"]["ai_orchestration"],
+        string_value=_prompt_text,
         description="Bedrock Claude system prompt for the auditor chat agent",
         tier=ssm.ParameterTier.ADVANCED,
     )
