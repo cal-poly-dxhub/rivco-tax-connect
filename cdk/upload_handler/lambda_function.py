@@ -760,8 +760,8 @@ def _handle_upload(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
 
     if not name or not refund_type:
         return _err(400, "name and refundType are required", headers)
-    if not files or len(files) > 5:
-        return _err(400, "Provide 1-5 files", headers)
+    if not files or len(files) > 15:
+        return _err(400, "Provide 1-15 files", headers)
 
     urls = []
     now = _now_iso()
