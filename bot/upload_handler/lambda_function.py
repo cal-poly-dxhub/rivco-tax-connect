@@ -865,6 +865,7 @@ def _admin_get_config(headers: dict[str, str]) -> dict[str, Any]:
             users.append({
                 "username": item["username"], "email": item.get("email", ""),
                 "groups": item.get("groups") or [],
+                "notifyEmail": item.get("notifyEmail", True),
                 "createdAt": item.get("createdAt", ""),
             })
         elif pk.startswith("TYPELABEL#"):
@@ -892,6 +893,7 @@ def _admin_get_config(headers: dict[str, str]) -> dict[str, Any]:
         users.append({
             "username": uname, "email": attrs.get("email", ""),
             "groups": [g["GroupName"] for g in groups_resp.get("Groups", [])],
+            "notifyEmail": True,
             "createdAt": cu.get("UserCreateDate").isoformat() if cu.get("UserCreateDate") else "",
         })
 
@@ -980,6 +982,7 @@ def _admin_create_user(event: dict[str, Any], headers: dict[str, str]) -> dict[s
         return _err(400, "Invalid JSON", headers)
     email = (body.get("email") or "").strip().lower()
     groups = list(body.get("groups") or [])
+    notify_email = bool(body.get("notifyEmail", True))
     if "@" not in email:
         return _err(400, "valid email required", headers)
     username = _username_from_email(email)
@@ -1014,10 +1017,11 @@ def _admin_create_user(event: dict[str, Any], headers: dict[str, str]) -> dict[s
         )
     admin_table.put_item(Item={
         "pk": f"USER#{username}", "username": username, "email": email,
-        "groups": groups, "createdAt": _now_iso(),
+        "groups": groups, "notifyEmail": notify_email, "createdAt": _now_iso(),
     })
     return {"statusCode": 201, "headers": headers,
-            "body": json.dumps({"username": username, "email": email, "groups": groups})}
+            "body": json.dumps({"username": username, "email": email, "groups": groups,
+                                "notifyEmail": notify_email})}
 
 
 def _get_or_materialize_user(username: str) -> dict[str, Any] | None:
@@ -1082,9 +1086,11 @@ def _admin_update_user(event: dict[str, Any], username: str, headers: dict[str, 
     else:
         desired = set(existing.get("groups") or [])
 
-    updates = {"groups": sorted(desired)}
+    updates: dict[str, Any] = {"groups": sorted(desired)}
     if new_email:
         updates["email"] = new_email
+    if "notifyEmail" in body:
+        updates["notifyEmail"] = bool(body["notifyEmail"])
     expr = ", ".join(f"#{k} = :{k}" for k in updates)
     admin_table.update_item(
         Key={"pk": f"USER#{username}"},
