@@ -410,6 +410,15 @@
                         <span class="doc-status" id="doc_status_scanned-form"></span>
                     </div>
                 </div>
+                <div style="margin-top:1.25rem; border-top:1px dashed var(--border-light); padding-top:1rem;">
+                    <p style="font-size:0.78rem; font-weight:700; font-family:'Montserrat',sans-serif; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-muted); margin-bottom:0.5rem;">Optional: Other supporting documents</p>
+                    <p style="font-size:0.78rem; color:var(--text-muted); margin-bottom:0.75rem;">Attach any additional evidence you'd like staff to review (correspondence, payment records, etc.). You can select multiple files at once.</p>
+                    <div class="doc-upload" style="border-style:dashed">
+                        <div class="doc-label">Additional documents</div>
+                        <input type="file" id="doc_other" data-doc-id="other" accept=".pdf,.jpg,.jpeg,.png,.heic" multiple>
+                        <span class="doc-status" id="doc_status_other"></span>
+                    </div>
+                </div>
             </div>
 
             <div id="submitSection" style="display:none">
@@ -969,13 +978,18 @@
                 var fileBlobs = [unifiedBlob];
                 var docInputs = document.querySelectorAll("[data-doc-id]");
                 docInputs.forEach(function(input) {
-                    if (input.files && input.files.length > 0) {
-                        var file = input.files[0];
+                    if (!input.files || input.files.length === 0) return;
+                    var docId = input.dataset.docId;
+                    // Multi-file inputs (e.g. "other") need per-file suffixes so
+                    // multiple uploads don't collide on the same S3 key.
+                    var multi = input.multiple && input.files.length > 1;
+                    Array.prototype.forEach.call(input.files, function(file, idx) {
                         var ext = file.name.split(".").pop().toLowerCase();
-                        var safeName = input.dataset.docId + "." + ext;
+                        var base = multi ? docId + "-" + (idx + 1) : docId;
+                        var safeName = base + "." + ext;
                         filesToUpload.push({ filename: safeName, contentType: file.type || "application/octet-stream" });
                         fileBlobs.push(file);
-                    }
+                    });
                 });
 
                 try {
