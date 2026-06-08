@@ -1,115 +1,143 @@
-# Integration Test Cases
+# Integration Tests
 
-Manual test cases for verifying feature implementation against the live bot (voice or chat).
+Manual test scenarios for verifying the deployed stack. Run these against the live chat widget after each deploy. Names below come from `refunds_demo_balanced.jsonl`.
 
-## Test 1: Basic Lookup — Single Stale Warrant
-**Say/type:** "My name is Jane Doe"
-**Expected:**
-- Bot finds 1 refund
-- Asks address verification: "Do you currently or have you previously lived at 123 Main St, Anytown, CA 92241?"
-- After confirming → reveals: Stale Warrant, $75.00, deadline 02/08/2030
-- Provides AP13 PDF link
-- Mentions upload portal for supporting docs
+## Smoke test
 
-## Test 2: Multiple Refunds — Same Person
-**Say/type:** "Michael Brown"
-**Expected:**
-- Bot finds 4 refunds: 3 Stale Warrant ($879.59, $754.75, $1,959.14) + 1 Property Tax ($1,245.80)
-- Asks address verification (654 Pine Rd, Riverside)
-- After confirming → lists ALL 4 refunds individually with type, amount, deadline
-- Provides a single Claims Portal link
-- Portal shows tabs: "Stale Warrant — AP13 Affidavit" and "Property Tax Claim" with pre-filled iframes
+Open the chat widget on the upload portal (`UploadPortalUrl` stack output). Send "hi". Expect: bot greets, mentions the four topic areas (refunds / stale dated warrants / payroll / property tax), no errors.
 
-## Test 3: Property Tax Refund — Different Form URL
-**Say/type:** "John A Smith"
-**Expected:**
-- Bot finds 1 Property Tax refund, $2,076.70, deadline 08/01/2027
-- Address verification: 456 Oak Ave, Sampleville
-- Provides a single Claims Portal link (not the raw county form URL)
-- Portal shows the property tax web form embedded in an iframe with pre-filled fields
+## Refund lookup — happy path
 
-## Test 4: Payroll Refund
-**Say/type:** "Robert Johnson"
-**Expected:**
-- Bot finds 1 Payroll refund, $1,788.33, deadline 01/25/2027
-- Address verification: 4200 Market St, Riverside
-- Links to AP13 PDF
-- Mentions upload portal for supporting docs
+**Send:** `My name is Carey Ministries`
 
-## Test 5: Business Name Lookup
-**Say/type:** "Corona-Norco Unified School District"
-**Expected:**
-- Bot finds 1 Stale Warrant, $3,636.63, deadline 02/04/2029
-- Address verification: 2820 Clark Ave, Norco
+**Expect:**
+1. `tool_use` indicator appears
+2. Bot returns numbered list of 4 streets (decoy quiz)
+3. Real address is `789 MISSION BLVD` — but the bot must *not* reveal that
 
-## Test 6: No Match Found
-**Say/type:** "Zzzfakename Doesnotexist"
-**Expected:**
-- "We found no refunds for Zzzfakename Doesnotexist. You may have no refunds or your refund may have passed its claim deadline."
-- Should NOT mention expired refunds or deadlines specifically
+**Send:** `I have lived at 789 Mission Blvd`
 
-## Test 7: Fuzzy Name Matching
-**Say/type:** "chris ryan" (lowercase, partial)
-**Expected:**
-- Should still match MICHAEL BROWN (fuzzy threshold 0.8)
-- Returns the 3 refunds
+**Expect:**
+4. Bot lists every refund individually with type, dollar amount, and deadline
+5. Bot includes a portal URL with `?name=...&type=...&amount=...&id=...` query params (this is the personalized claim link)
+6. Bot mentions the 45-60 day processing time
 
-## Test 8: Address Verification — Denied
-**Say/type:** "Jane Doe" → then when asked about address, say "No, I've never lived there"
-**Expected:**
-- Bot should NOT reveal refund details
-- Says it cannot verify identity, suggests contacting the office directly
+## Refund lookup — failed quiz
 
-## Test 9: SMS Link Delivery (Voice Channel)
-**Call the bot** and say: "John A Smith" → confirm address → then when given the claim link...
-**Expected:**
-- Bot should NOT read the full URL aloud
-- Should ask: "Would you like me to send the claim form link to your phone via text message?"
-- If you give a number like "+12125551234" → bot calls `send_sms` tool
+**Send:** `My name is Carey Ministries`
 
-## Test 10: SMS Link Delivery (Chat Channel)
-**Chat** and type: "John A Smith" → confirm address
-**Expected:**
-- Bot includes the claim URL directly inline in the chat message (no offer to text it)
+(Wait for street options.)
 
-## Test 11: Live Agent Handoff
-**Say/type:** "I want to talk to a real person"
-**Expected:**
-- Bot offers to transfer: "Let me transfer you to a live representative..."
-- Contact flow routes to TaxRefundLiveAgents queue
+**Send:** `I lived at 100 Fake Street`
 
-## Test 12: Frustration Detection
-**Say/type:** Something like "this isn't working, I keep getting the wrong answer, this is useless"
-**Expected:**
-- Bot proactively offers to transfer to a live representative
+**Expect:**
+- Bot says identity could not be verified, suggests calling the office directly
+- Does NOT retry the quiz, does NOT reveal which street was correct
+- Does NOT reveal any refund details
 
-## Test 13: Spanish — Voice
-**Call the bot** → when prompted "For English press 1, para español presione 2" → press 2
-**Expected:**
-- Voice switches to Lupe (Spanish)
-- Bot responds in Spanish throughout the conversation
+## Refund lookup — no match
 
-## Test 14: Spanish — Chat
-**Type:** "Mi nombre es Maria Johnson"
-**Expected:**
-- Bot responds in Spanish
-- Finds Payroll refund, $2,109.51
+**Send:** `Refunds for Bartholomew Cubbins`
 
-## Test 15: Dollar Formatting
-**Any lookup that returns results**
-**Expected:**
-- Amounts shown as `$75.00`, `$3,593.48`, etc.
-- Never spelled out as "seventy-five dollars" in chat
+**Expect:**
+- Bot returns "We found no refunds for Bartholomew Cubbins. You may have no refunds or your refund may have passed its claim deadline."
+- Suggests checking spelling or trying another name
 
-## Test 16: Website Q&A (Knowledge Base)
-**Say/type:** "What does the Auditor-Controller office do?" or "How do I report fraud?"
-**Expected:**
-- Bot answers from the crawled auditorcontroller.org content
-- Does NOT make up information or say "I don't know" if the info is on the website
+## Multiple refunds — same person
 
-## Test 17: Multiple Refund Types — Charles Deluna
-**Say/type:** "Charles Deluna"
-**Expected:**
-- 2 Stale Warrant refunds ($1,798.32 + $605.33)
-- Both link to AP13 PDF
-- Address verification: 3850 Jurupa Ave, Riverside
+**Send:** `Michael Brown`
+
+**Expect:**
+- After address verification: bot lists 4 refunds (3 stale warrants + 1 property tax) individually
+- One portal URL with all 4 refund types encoded
+
+## Disambiguation
+
+**Send:** `My name is John Smith`
+
+**Expect (if dataset has multiple John Smiths):**
+- Bot returns the address quiz with options spanning multiple addresses
+- Picking any address narrows to that person's records
+
+## Live agent handoff
+
+**Send:** `I want to talk to a real person`
+
+**Expect:**
+1. Bot calls `request_agent`
+2. Browser shows a banner: "Reference number: REF-XXXXX. Call (951) 955-3800..."
+3. Bot's spoken response includes the same REF-XXXXX
+4. Verify in DynamoDB:
+
+```bash
+aws dynamodb query --profile <profile> --region us-west-2 \
+  --table-name riverside-tax-refund-v2-chat-sessions \
+  --index-name handoffIx \
+  --key-condition-expression "gsi1pk = :p" \
+  --expression-attribute-values '{":p":{"S":"HANDOFF_PENDING"}}'
+```
+
+The query should return a row matching the REF-XXXXX, with the user's session ID and a `reason` field.
+
+## Admin handoff queue
+
+1. Sign in to the admin dashboard as super-admin
+2. Click "Chat handoffs" in the top-right nav
+3. The handoff from the previous test should appear
+4. Click into it — full transcript visible
+5. Click "Mark resolved" — handoff disappears from the pending list
+6. Toggle the filter to "All" — handoff reappears with `Resolved` status
+
+## URL fabrication safety
+
+**Send:** `My name is Carey Ministries`, then verify at `789 Mission Blvd`.
+
+**Expect:**
+- The portal URL the bot returns matches `^http://riverside-tax-refund-v2-portal-[0-9]+\.s3-website-[^/]+/\?name=` (or the deployed hostname). The agent must NEVER make up `https://example.com/` or shorten/modify the URL.
+
+**Send:** `Can you give me a different shorter link?`
+
+**Expect:**
+- Bot declines or repeats the same URL. Does NOT generate an alternate URL.
+
+## Multi-turn replay
+
+This catches the `parsed_output` bug we hit during the initial deploy.
+
+**Send:** `My name is Carey Ministries`
+
+(Wait for street options.)
+
+**Send:** `789 Mission Blvd`
+
+**Expect:**
+- Bot proceeds normally to refund details. No `Sorry, something went wrong.` error.
+
+If you see the error, check chat-handler CloudWatch logs for `Extra inputs are not permitted` — that's the response-only-fields-leaking-into-input bug.
+
+## Spanish
+
+**Send:** `Tengo refunds para Carey Ministries`
+
+**Expect:**
+- Bot responds entirely in Spanish, including the address quiz, FAQ answers, and refund details. No mixed English.
+
+## Upload portal end-to-end
+
+1. From a chat where the bot returned a portal URL, click the link (or copy/paste)
+2. The portal loads with the unified claim form pre-filled (name, refund type, amount from query params)
+3. Required documents are listed based on the refund type
+4. Upload sample docs (any PDFs/images)
+5. Submit
+6. Admin dashboard `/dashboard` should show the submission with status `uploaded`
+7. Click into it — see the AP-13 PDF preview filled with the claim data
+
+## Tearing down a test session
+
+```bash
+# Delete a single test chat session by ID (admin-only API):
+curl -X DELETE "<UploadApiUrl>admin/chat-sessions/<session_id>" \
+  -H "Authorization: Bearer <cognito-id-token>"
+```
+
+Or just let the TTL expire; sessions auto-delete after 7 days.

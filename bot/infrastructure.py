@@ -1,35 +1,70 @@
 import json
+import jsii
 import os
 import re
+import shutil
+import subprocess
 import yaml
 from aws_cdk import (
-    Stack, Duration, RemovalPolicy, CfnOutput, BundlingOptions, BundlingFileAccess,
+    Stack, Duration, RemovalPolicy, CfnOutput, BundlingOptions, ILocalBundling,
     aws_s3 as s3,
     aws_s3_deployment as s3deploy,
     aws_lambda as _lambda,
     aws_lambda_event_sources as lambda_events,
     aws_iam as iam,
-    aws_lex as lex,
-    aws_connect as connect,
-    aws_wisdom as wisdom,
     aws_logs as logs,
-    aws_bedrockagentcore as agentcore,
     aws_apigateway as apigw,
+    aws_apigatewayv2 as apigwv2,
+    aws_apigatewayv2_integrations as apigwv2_int,
     aws_dynamodb as dynamodb,
     aws_cognito as cognito,
     aws_codebuild as codebuild,
     aws_cloudfront as cloudfront,
     aws_cloudfront_origins as cloudfront_origins,
     aws_ses as ses,
+    aws_ssm as ssm,
     custom_resources as cr,
 )
 from constructs import Construct
+
+@jsii.implements(ILocalBundling)
+class _LocalBundling:
+    """Bundle a Lambda asset locally without Docker.
+
+    pip-installs the asset's requirements.txt (if any) into the output dir,
+    then copies every other file from the source dir alongside it. Idempotent.
+    """
+    def __init__(self, source_dir: str) -> None:
+        self._source = source_dir
+
+    def try_bundle(self, output_dir: str, *, image=None, asset_hash=None,
+                   bundling_file_access=None, command=None, entrypoint=None,
+                   environment=None, local=None, network=None, output_type=None,
+                   platform=None, security_opt=None, user=None, volumes=None,
+                   volumes_from=None, working_directory=None) -> bool:
+        req = os.path.join(self._source, "requirements.txt")
+        if os.path.exists(req):
+            subprocess.check_call(
+                ["pip", "install", "-r", req, "-t", output_dir, "--quiet",
+                 "--platform", "manylinux2014_x86_64",
+                 "--only-binary=:all:", "--implementation", "cp",
+                 "--python-version", "3.12", "--upgrade"]
+            )
+        for item in os.listdir(self._source):
+            s = os.path.join(self._source, item)
+            d = os.path.join(output_dir, item)
+            if os.path.isdir(s):
+                shutil.copytree(s, d, dirs_exist_ok=True)
+            else:
+                shutil.copy2(s, d)
+        return True
+
 
 def load_config():
     with open('config.yaml') as f:
         return yaml.safe_load(f)
 
-class NovaSonicConnectStack(Stack):
+class RiversideTaxRefundStack(Stack):
     def __init__(self, scope: Construct, id: str, **kwargs) -> None:
         super().__init__(scope, id, **kwargs)
 
@@ -42,6 +77,24 @@ class NovaSonicConnectStack(Stack):
             bucket_name=f"{proj}-{cfg['s3']['bucket_suffix']}-{self.account}",
             removal_policy=RemovalPolicy.DESTROY,
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            auto_delete_objects=True,
+        )
+
+        # Ship the demo refund dataset as part of the deploy. The file is
+        # gitignored (large, demo-only), so it must exist locally at synth
+        # time. We stage it into a tmpdir-style location to keep the asset
+        # source minimal — Source.asset(".") would tar up the entire repo.
+        _data_stage = os.path.join(os.path.dirname(__file__), "..", "cdk.out", ".data-stage")
+        os.makedirs(_data_stage, exist_ok=True)
+        _data_src = os.path.join(os.path.dirname(__file__), "..", cfg['s3']['data_file'])
+        if os.path.exists(_data_src):
+            shutil.copy2(_data_src, os.path.join(_data_stage, cfg['s3']['data_file']))
+        s3deploy.BucketDeployment(
+            self, "DataBucketDeployment",
+            sources=[s3deploy.Source.asset(_data_stage)],
+            destination_bucket=bucket,
+            retain_on_delete=False,
+            prune=False,
         )
 
         # Lambda role
@@ -52,21 +105,6 @@ class NovaSonicConnectStack(Stack):
             managed_policies=[iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSLambdaBasicExecutionRole")],
         )
         bucket.grant_read(role)
-        # SMS sending — scoped to direct phone publish only (no topic ARNs).
-        # Invocation chain security: Q in Connect agent → MCP gateway → Lambda.
-        role.add_to_policy(iam.PolicyStatement(
-            actions=["sns:Publish"],
-            resources=["*"],
-        ))
-        # Q in Connect session data injection (channel-aware prompts)
-        role.add_to_policy(iam.PolicyStatement(
-            actions=["wisdom:UpdateSessionData"],
-            resources=[f"arn:aws:wisdom:{self.region}:{self.account}:*"],
-        ))
-        role.add_to_policy(iam.PolicyStatement(
-            actions=["connect:DescribeContact", "connect:UpdateContactAttributes"],
-            resources=[f"arn:aws:connect:{self.region}:{self.account}:instance/*/contact/*"],
-        ))
 
         # Lambda environment (UPLOAD_PORTAL_URL added after portal_bucket is created below)
         env = {
@@ -85,12 +123,7 @@ class NovaSonicConnectStack(Stack):
                 "bot/runtime",
                 bundling=BundlingOptions(
                     image=_lambda.Runtime.PYTHON_3_12.bundling_image,
-                    platform="linux/amd64",
-                    bundling_file_access=BundlingFileAccess.VOLUME_COPY,
-                    command=[
-                        "bash", "-c",
-                        "pip install -r requirements.txt -t /asset-output && cp -au . /asset-output"
-                    ],
+                    local=_LocalBundling(os.path.join(os.path.dirname(__file__), "runtime")),
                 ),
             ),
             role=role,
@@ -98,352 +131,121 @@ class NovaSonicConnectStack(Stack):
             memory_size=cfg['lambda']['memory_mb'],
             environment=env,
         )
-        fn.add_permission("LexInvoke", principal=iam.ServicePrincipal("lexv2.amazonaws.com"), source_account=self.account)
+        # ── DynamoDB chat session table ─────────────────────────────────
+        # Single-table for chat sessions:
+        #   pk = SESSION#<id>  sk = META          → session record
+        #   pk = SESSION#<id>  sk = MSG#<ts>      → one row per message
+        #   pk = SESSION#<id>  sk = HANDOFF       → present when user asked for agent
+        # GSI handoffIx exposes pending handoffs to the admin dashboard.
+        chat_table = dynamodb.Table(
+            self, "ChatSessions",
+            table_name=f"{proj}-chat-sessions",
+            partition_key=dynamodb.Attribute(name="pk", type=dynamodb.AttributeType.STRING),
+            sort_key=dynamodb.Attribute(name="sk", type=dynamodb.AttributeType.STRING),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            stream=dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
+            time_to_live_attribute="ttl",
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+        chat_table.add_global_secondary_index(
+            index_name="handoffIx",
+            partition_key=dynamodb.Attribute(name="gsi1pk", type=dynamodb.AttributeType.STRING),
+            sort_key=dynamodb.Attribute(name="gsi1sk", type=dynamodb.AttributeType.STRING),
+        )
 
-        # Lex bot role
-        bot_role = iam.Role(self, "BotRole", assumed_by=iam.CompositePrincipal(
-            iam.ServicePrincipal("lexv2.amazonaws.com"),
-            iam.ServicePrincipal("lexv2.aws.internal"),
-        ))
-        bot_role.add_to_policy(iam.PolicyStatement(
-            actions=["wisdom:*", "qconnect:*"],
-            resources=[
-                f"arn:aws:wisdom:{self.region}:{self.account}:*",
-                f"arn:aws:qconnect:{self.region}:{self.account}:*",
-            ],
-        ))
-        bot_role.add_to_policy(iam.PolicyStatement(
+        # ── Chat agent system prompt (SSM Parameter for runtime edits) ──
+        prompt_param = ssm.StringParameter(
+            self, "ChatSystemPrompt",
+            parameter_name=f"/{proj}/chat/system-prompt",
+            string_value=cfg["prompts"]["ai_orchestration"],
+            description="Bedrock Claude system prompt for the auditor chat agent",
+            # Advanced tier — Standard caps at 4KB; the prompt with the
+            # decoy-quiz instructions is ~4.4KB. Advanced costs ~$0.05/mo.
+            tier=ssm.ParameterTier.ADVANCED,
+        )
+
+        # ── Chat handler Lambda (Bedrock Claude + WebSocket streaming) ──
+        chat_fn = _lambda.Function(
+            self, "ChatHandler",
+            function_name=f"{proj}-chat-handler",
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            handler="lambda_function.lambda_handler",
+            code=_lambda.Code.from_asset(
+                "bot/chat_handler",
+                bundling=BundlingOptions(
+                    image=_lambda.Runtime.PYTHON_3_12.bundling_image,
+                    local=_LocalBundling(os.path.join(os.path.dirname(__file__), "chat_handler")),
+                ),
+            ),
+            timeout=Duration.minutes(5),
+            memory_size=1024,
+            environment={
+                "CHAT_TABLE": chat_table.table_name,
+                "BEDROCK_MODEL_ID": cfg["bedrock"]["model_id"],
+                "TAX_LOOKUP_FN": fn.function_name,
+                "AI_PROMPT_PARAM": prompt_param.parameter_name,
+                "SES_SENDER": (cfg.get("notifications") or {}).get("sender", ""),
+            },
+        )
+        chat_table.grant_read_write_data(chat_fn)
+        prompt_param.grant_read(chat_fn)
+        fn.grant_invoke(chat_fn)
+        chat_fn.add_to_role_policy(iam.PolicyStatement(
             actions=["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+            resources=[f"arn:aws:bedrock:*::foundation-model/*",
+                       f"arn:aws:bedrock:*:{self.account}:inference-profile/*"],
+        ))
+        chat_fn.add_to_role_policy(iam.PolicyStatement(
+            actions=["ses:SendEmail", "ses:SendRawEmail"],
             resources=["*"],
         ))
 
-        # Wisdom (Q in Connect) Assistant
-        assistant = wisdom.CfnAssistant(
-            self, "Assistant",
-            name=cfg['wisdom']['assistant_name'],
-            type="AGENT",
-        )
-
-        # --- Task 7: Website Q&A Knowledge Base (custom, content uploaded by post_deploy.py) ---
-        kb = wisdom.CfnKnowledgeBase(
-            self, "WebsiteKB",
-            name=f"{proj}-auditor-website",
-            knowledge_base_type="CUSTOM",
-            description="Riverside County Auditor-Controller website content for general Q&A",
-        )
-
-        kb_assoc = wisdom.CfnAssistantAssociation(
-            self, "WebsiteKBAssociation",
-            assistant_id=assistant.attr_assistant_id,
-            association_type="KNOWLEDGE_BASE",
-            association={"knowledgeBaseId": kb.attr_knowledge_base_id},
-        )
-
-        # --- Task 5: Shared intent definitions for both locales ---
-        def make_intents(assistant_arn):
-            return [
-                {
-                    "name": "FallbackIntent",
-                    "parentIntentSignature": "AMAZON.FallbackIntent",
-                    "initialResponseSetting": {
-                        "nextStep": {"dialogAction": {"type": "InvokeDialogCodeHook"}},
-                        "codeHook": {
-                            "enableCodeHookInvocation": True,
-                            "isActive": True,
-                            "postCodeHookSpecification": {
-                                "successNextStep": {"dialogAction": {"type": "EndConversation"}},
-                                "failureNextStep": {"dialogAction": {"type": "EndConversation"}},
-                                "timeoutNextStep": {"dialogAction": {"type": "EndConversation"}},
-                            }
-                        }
-                    },
-                },
-                {
-                    "name": "QInConnectIntent",
-                    "parentIntentSignature": "AMAZON.QInConnectIntent",
-                    "dialogCodeHook": {"enabled": True},
-                    "fulfillmentCodeHook": {
-                        "enabled": False,
-                        "isActive": True,
-                        "postFulfillmentStatusSpecification": {
-                            "successResponse": {
-                                "messageGroupsList": [{
-                                    "message": {
-                                        "plainTextMessage": {"value": "((x-amz-lex:q-in-connect-response))"}
-                                    }
-                                }],
-                                "allowInterrupt": True,
-                            },
-                            "successNextStep": {"dialogAction": {"type": "EndConversation"}},
-                            "failureNextStep": {"dialogAction": {"type": "EndConversation"}},
-                            "timeoutNextStep": {"dialogAction": {"type": "EndConversation"}},
-                        }
-                    },
-                    "qInConnectIntentConfiguration": {
-                        "qInConnectAssistantConfiguration": {
-                            "assistantArn": assistant_arn
-                        }
-                    },
-                }
-            ]
-
-        nlu = cfg['lex']['nlu_threshold']
-
-        # Lex bot — en_US + es_US locales
-        bot = lex.CfnBot(
-            self, "Bot",
-            name=cfg['lex']['bot_name'],
-            role_arn=bot_role.role_arn,
-            data_privacy={"ChildDirected": False},
-            idle_session_ttl_in_seconds=300,
-            auto_build_bot_locales=True,
-            bot_locales=[
-                {
-                    "localeId": "en_US",
-                    "nluConfidenceThreshold": nlu,
-                    "intents": make_intents(assistant.attr_assistant_arn),
-                },
-                {
-                    "localeId": "es_US",
-                    "nluConfidenceThreshold": nlu,
-                    "intents": make_intents(assistant.attr_assistant_arn),
-                },
-            ],
-        )
-        bot.add_dependency(assistant)
-
-        # Bot version — both locales
-        bot_version = lex.CfnBotVersion(
-            self, "BotVersion",
-            bot_id=bot.attr_id,
-            bot_version_locale_specification=[
-                {"localeId": "en_US", "botVersionLocaleDetails": {"sourceBotVersion": "DRAFT"}},
-                {"localeId": "es_US", "botVersionLocaleDetails": {"sourceBotVersion": "DRAFT"}},
-            ],
-        )
-
-        # CloudWatch log group for Lex conversation logs
-        lex_log_group = logs.LogGroup(
-            self, "LexLogGroup",
-            log_group_name=f"/aws/lex/{cfg['lex']['bot_name']}",
-            removal_policy=RemovalPolicy.DESTROY,
-        )
-
-        # Bot alias — both locales with Lambda code hooks
-        lambda_hook = {
-            "enabled": True,
-            "codeHookSpecification": {
-                "lambdaCodeHook": {
-                    "lambdaArn": fn.function_arn,
-                    "codeHookInterfaceVersion": "1.0",
-                }
-            }
-        }
-
-        alias = lex.CfnBotAlias(
-            self, "BotAlias",
-            bot_alias_name=cfg['lex']['alias_name'],
-            bot_id=bot.attr_id,
-            bot_version=bot_version.attr_bot_version,
-            bot_alias_locale_settings=[
-                {"localeId": "en_US", "botAliasLocaleSetting": lambda_hook},
-                {"localeId": "es_US", "botAliasLocaleSetting": lambda_hook},
-            ],
-            conversation_log_settings=lex.CfnBotAlias.ConversationLogSettingsProperty(
-                text_log_settings=[lex.CfnBotAlias.TextLogSettingProperty(
-                    enabled=True,
-                    destination=lex.CfnBotAlias.TextLogDestinationProperty(
-                        cloud_watch=lex.CfnBotAlias.CloudWatchLogGroupLogDestinationProperty(
-                            cloud_watch_log_group_arn=lex_log_group.log_group_arn,
-                            log_prefix="conversation",
-                        )
-                    ),
-                )],
+        # ── WebSocket API Gateway for the chat widget ───────────────────
+        ws_api = apigwv2.WebSocketApi(
+            self, "ChatWebSocket",
+            api_name=f"{proj}-chat-ws",
+            connect_route_options=apigwv2.WebSocketRouteOptions(
+                integration=apigwv2_int.WebSocketLambdaIntegration("ConnectInt", chat_fn),
+            ),
+            disconnect_route_options=apigwv2.WebSocketRouteOptions(
+                integration=apigwv2_int.WebSocketLambdaIntegration("DisconnectInt", chat_fn),
+            ),
+            default_route_options=apigwv2.WebSocketRouteOptions(
+                integration=apigwv2_int.WebSocketLambdaIntegration("DefaultInt", chat_fn),
             ),
         )
-        alias.add_dependency(bot_version)
-
-        # Connect instance
-        instance = connect.CfnInstance(
-            self, "ConnectInstance",
-            instance_alias=proj,
-            identity_management_type="CONNECT_MANAGED",
-            attributes=connect.CfnInstance.AttributesProperty(
-                inbound_calls=True,
-                outbound_calls=True,
-                contactflow_logs=True,
-            ),
+        ws_api.add_route(
+            "sendMessage",
+            integration=apigwv2_int.WebSocketLambdaIntegration("SendInt", chat_fn),
         )
-
-        # --- Task 4: Live Agent Handoff — Hours, Queue, Routing Profile ---
-        hours = connect.CfnHoursOfOperation(
-            self, "HoursOfOperation",
-            instance_arn=instance.attr_arn,
-            name="TaxRefundHours",
-            time_zone="America/Los_Angeles",
-            config=[{
-                "day": day,
-                "startTime": {"hours": 8, "minutes": 0},
-                "endTime": {"hours": 17, "minutes": 0},
-            } for day in ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY"]],
+        ws_stage = apigwv2.WebSocketStage(
+            self, "ChatWsStage",
+            web_socket_api=ws_api,
+            stage_name="prod",
+            auto_deploy=True,
         )
-
-        queue = connect.CfnQueue(
-            self, "LiveAgentQueue",
-            instance_arn=instance.attr_arn,
-            name="TaxRefundLiveAgents",
-            hours_of_operation_arn=hours.attr_hours_of_operation_arn,
-            description="Queue for live agent handoff from tax refund bot",
+        chat_fn.add_environment(
+            "WS_ENDPOINT",
+            f"https://{ws_api.api_id}.execute-api.{self.region}.amazonaws.com/{ws_stage.stage_name}",
         )
-
-        routing_profile = connect.CfnRoutingProfile(
-            self, "AgentRoutingProfile",
-            instance_arn=instance.attr_arn,
-            name="TaxRefundAgentProfile",
-            description="Routing profile for tax refund live agents",
-            default_outbound_queue_arn=queue.attr_queue_arn,
-            media_concurrencies=[
-                {"channel": "VOICE", "concurrency": 1},
-                {"channel": "CHAT", "concurrency": 5},
-            ],
-            queue_configs=[
-                {
-                    "delay": 0,
-                    "priority": 1,
-                    "queueReference": {
-                        "channel": "VOICE",
-                        "queueArn": queue.attr_queue_arn,
-                    },
-                },
-                {
-                    "delay": 0,
-                    "priority": 1,
-                    "queueReference": {
-                        "channel": "CHAT",
-                        "queueArn": queue.attr_queue_arn,
-                    },
-                },
-            ],
-        )
-
-        # Associate Lambda with Connect instance (required for Lex code hooks within Connect)
-        lambda_assoc = connect.CfnIntegrationAssociation(
-            self, "LambdaAssociation",
-            instance_id=instance.attr_arn,
-            integration_type="LAMBDA_FUNCTION",
-            integration_arn=fn.function_arn,
-        )
-
-        # Associate Wisdom assistant with Connect via custom resource
-        # (WISDOM_ASSISTANT is not a valid IntegrationType for CfnIntegrationAssociation)
-        wisdom_assoc_cr = cr.AwsCustomResource(
-            self, "WisdomAssociation",
-            on_create=cr.AwsSdkCall(
-                service="Connect",
-                action="createIntegrationAssociation",
-                parameters={
-                    "InstanceId": instance.attr_id,
-                    "IntegrationType": "WISDOM_ASSISTANT",
-                    "IntegrationArn": assistant.attr_assistant_arn,
-                },
-                physical_resource_id=cr.PhysicalResourceId.from_response("IntegrationAssociationId"),
-            ),
-            on_delete=cr.AwsSdkCall(
-                service="Connect",
-                action="deleteIntegrationAssociation",
-                parameters={
-                    "InstanceId": instance.attr_id,
-                    "IntegrationAssociationId": cr.PhysicalResourceIdReference(),
-                },
-            ),
-            policy=cr.AwsCustomResourcePolicy.from_statements([
-                iam.PolicyStatement(
-                    actions=[
-                        "connect:CreateIntegrationAssociation",
-                        "connect:DeleteIntegrationAssociation",
-                        "connect:ListIntegrationAssociations",
-                    ],
-                    resources=[instance.attr_arn, f"{instance.attr_arn}/*"],
-                ),
-                iam.PolicyStatement(
-                    actions=["wisdom:GetAssistant", "wisdom:TagResource"],
-                    resources=[assistant.attr_assistant_arn],
-                ),
-            ]),
-        )
-
-        # Contact flow ARNs needed for post-deploy script
-        bot_alias_arn = f"arn:aws:lex:{self.region}:{self.account}:bot-alias/{bot.attr_id}/{alias.attr_bot_alias_id}"
-
-        # Associate Lex bot with Connect instance (required for ConnectParticipantWithLexBot)
-        lex_assoc = connect.CfnIntegrationAssociation(
-            self, "LexBotAssociation",
-            instance_id=instance.attr_arn,
-            integration_type="LEX_BOT",
-            integration_arn=bot_alias_arn,
-        )
-
-        # --- AgentCore MCP Gateway for tax_lookup tool ---
-        gateway_role = iam.Role(
-            self, "GatewayRole",
-            role_name=f"{proj}-gateway-role",
-            assumed_by=iam.ServicePrincipal("bedrock-agentcore.amazonaws.com"),
-        )
-        fn.grant_invoke(gateway_role)
-
-        # Load tool schemas from file
-        with open("bot/tool-schema.json") as f:
-            tool_schemas = json.load(f)
-
-        gateway = agentcore.CfnGateway(
-            self, "McpGateway",
-            name=f"{proj}-mcp-gateway",
-            protocol_type="MCP",
-            authorizer_type="NONE",
-            role_arn=gateway_role.role_arn,
-            description="MCP gateway for tax refund lookup tool",
-        )
-
-        gateway_target = agentcore.CfnGatewayTarget(
-            self, "McpGatewayTarget",
-            gateway_identifier=gateway.attr_gateway_identifier,
-            name="tax-lookup-target",
-            target_configuration={
-                "mcp": {
-                    "lambda": {
-                        "lambdaArn": fn.function_arn,
-                        "toolSchema": {
-                            "inlinePayload": tool_schemas,
-                        },
-                    }
-                }
-            },
-            credential_provider_configurations=[{
-                "credentialProviderType": "GATEWAY_IAM_ROLE",
-            }],
-        )
-
-        CfnOutput(self, "GatewayArn", value=gateway.attr_gateway_arn)
-        CfnOutput(self, "GatewayId", value=gateway.attr_gateway_identifier)
-        CfnOutput(self, "GatewayUrl", value=gateway.attr_gateway_url)
+        ws_stage.grant_management_api_access(chat_fn)
 
         CfnOutput(self, "BucketName", value=bucket.bucket_name)
         CfnOutput(self, "LambdaArn", value=fn.function_arn)
-        CfnOutput(self, "BotId", value=bot.attr_id)
-        CfnOutput(self, "BotAliasId", value=alias.attr_bot_alias_id)
-        CfnOutput(self, "BotAliasArn", value=bot_alias_arn)
-        CfnOutput(self, "AssistantArn", value=assistant.attr_assistant_arn)
-        CfnOutput(self, "ConnectInstanceId", value=instance.attr_id)
-        CfnOutput(self, "ConnectInstanceArn", value=instance.attr_arn)
-        CfnOutput(self, "QueueArn", value=queue.attr_queue_arn)
-        CfnOutput(self, "RoutingProfileArn", value=routing_profile.attr_routing_profile_arn)
-        CfnOutput(self, "KnowledgeBaseId", value=kb.attr_knowledge_base_id)
+        CfnOutput(self, "ChatTableName", value=chat_table.table_name)
+        CfnOutput(self, "ChatWebSocketUrl", value=f"wss://{ws_api.api_id}.execute-api.{self.region}.amazonaws.com/{ws_stage.stage_name}")
 
         # --- Task 10: Secure Document Upload Portal ---
 
         portal_origin = f"http://{proj}-portal-{self.account}.s3-website-{self.region}.amazonaws.com"
 
-        # S3 bucket for uploaded documents (encrypted, lifecycle, no public access)
+        # S3 bucket for uploaded documents (encrypted, tiered lifecycle, no public access)
+        ret = cfg.get('retention', {})
+        hot_days = ret.get('hot_days', 90)
+        warm_days = ret.get('warm_days', 365)
+        cold_days = ret.get('cold_days', 1825)
+        expire_days = ret.get('expire_days', 2555)
+
         uploads_bucket = s3.Bucket(
             self, "UploadsBucket",
             bucket_name=f"{proj}-uploads-{self.account}",
@@ -451,7 +253,23 @@ class NovaSonicConnectStack(Stack):
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
             removal_policy=RemovalPolicy.DESTROY,
             auto_delete_objects=True,
-            lifecycle_rules=[s3.LifecycleRule(expiration=Duration.days(90))],
+            lifecycle_rules=[s3.LifecycleRule(
+                transitions=[
+                    s3.Transition(
+                        storage_class=s3.StorageClass.GLACIER_INSTANT_RETRIEVAL,
+                        transition_after=Duration.days(hot_days),
+                    ),
+                    s3.Transition(
+                        storage_class=s3.StorageClass.GLACIER,
+                        transition_after=Duration.days(warm_days),
+                    ),
+                    s3.Transition(
+                        storage_class=s3.StorageClass.DEEP_ARCHIVE,
+                        transition_after=Duration.days(cold_days),
+                    ),
+                ],
+                expiration=Duration.days(expire_days),
+            )],
             cors=[
                 s3.CorsRule(  # Claimant upload
                     allowed_methods=[s3.HttpMethods.PUT],
@@ -512,10 +330,12 @@ class NovaSonicConnectStack(Stack):
                 "ALLOWED_ORIGIN": portal_origin,
                 "TABLE_NAME": submissions_table.table_name,
                 "ADMIN_CONFIG_TABLE": admin_config_table.table_name,
+                "CHAT_TABLE": chat_table.table_name,
             },
         )
         submissions_table.grant_read_write_data(upload_fn)
         admin_config_table.grant_read_write_data(upload_fn)
+        chat_table.grant_read_write_data(upload_fn)
         uploads_bucket.grant_put(upload_fn)
         uploads_bucket.grant_write(upload_fn)
         uploads_bucket.grant_read(upload_fn)
@@ -660,6 +480,9 @@ class NovaSonicConnectStack(Stack):
         upload_api.root.add_resource("form-schemas").add_method(
             "GET", apigw.LambdaIntegration(upload_fn),
         )
+        upload_api.root.add_resource("doc-requirements").add_method(
+            "GET", apigw.LambdaIntegration(upload_fn),
+        )
 
         # Admin-only: require Cognito JWT
         upload_api.root.add_resource("package").add_method(
@@ -710,7 +533,11 @@ class NovaSonicConnectStack(Stack):
             ),
         )
 
-        config_js = f'window.API_URL = "{upload_api.url.rstrip("/")}";\n'
+        ws_url = f"wss://{ws_api.api_id}.execute-api.{self.region}.amazonaws.com/{ws_stage.stage_name}"
+        config_js = (
+            f'window.API_URL = "{upload_api.url.rstrip("/")}";\n'
+            f'window.WS_ENDPOINT = "{ws_url}";\n'
+        )
         s3deploy.BucketDeployment(
             self, "PortalDeployment",
             sources=[
@@ -722,7 +549,6 @@ class NovaSonicConnectStack(Stack):
 
         # Wire upload portal URL into main Lambda so the bot can reference it
         fn.add_environment("UPLOAD_PORTAL_URL", portal_bucket.bucket_website_url)
-        fn.add_environment("ASSISTANT_ID", assistant.attr_assistant_id)
 
         CfnOutput(self, "UploadPortalUrl", value=portal_bucket.bucket_website_url)
         CfnOutput(self, "UploadApiUrl", value=upload_api.url)
