@@ -17,7 +17,7 @@ import {
 import { signOut } from "@/lib/cognito"
 import { api } from "@/lib/api"
 import { ThemeToggle } from "@/components/theme-toggle"
-import { AdminConfig, Department, AdminUser, REFUND_TYPES, DocReq, DocReqsResponse, FormField, FormSchema, FormSchemasResponse } from "@/lib/types"
+import { AdminConfig, Department, AdminUser, RefundType, LEGACY_REFUND_TYPES, DocReq, DocReqsResponse, FormField, FormSchema, FormSchemasResponse } from "@/lib/types"
 import { useAuthGate } from "@/hooks/use-auth-gate"
 import { useApi } from "@/hooks/use-api"
 
@@ -51,7 +51,7 @@ export default function AdminConfigPage() {
             <TabsList>
               <TabsTrigger value="departments">Departments</TabsTrigger>
               <TabsTrigger value="users">Users</TabsTrigger>
-              <TabsTrigger value="labels">Refund-type labels</TabsTrigger>
+              <TabsTrigger value="refund-types">Refund types</TabsTrigger>
               <TabsTrigger value="docs">Document requirements</TabsTrigger>
               <TabsTrigger value="schemas">Form schemas</TabsTrigger>
             </TabsList>
@@ -61,14 +61,14 @@ export default function AdminConfigPage() {
             <TabsContent value="users">
               <UsersTab cfg={cfg} reload={reload} />
             </TabsContent>
-            <TabsContent value="labels">
-              <LabelsTab cfg={cfg} reload={reload} />
+            <TabsContent value="refund-types">
+              <RefundTypesTab cfg={cfg} reload={reload} />
             </TabsContent>
             <TabsContent value="docs">
-              <DocsTab />
+              <DocsTab refundTypes={refundTypeKeys(cfg)} />
             </TabsContent>
             <TabsContent value="schemas">
-              <SchemasTab />
+              <SchemasTab refundTypes={refundTypeKeys(cfg)} />
             </TabsContent>
           </Tabs>
         )}
@@ -78,6 +78,15 @@ export default function AdminConfigPage() {
 }
 
 /* ─── Departments ─── */
+
+function refundTypeKeys(cfg: AdminConfig): string[] {
+  // Backend may be older and not yet return refundTypes — fall back to the
+  // legacy seed list so the dashboard still renders something usable.
+  if (cfg.refundTypes && cfg.refundTypes.length > 0) {
+    return cfg.refundTypes.map((rt) => rt.key)
+  }
+  return [...LEGACY_REFUND_TYPES]
+}
 
 function DepartmentsTab({ cfg, reload }: { cfg: AdminConfig; reload: () => void }) {
   const [editing, setEditing] = useState<Department | null>(null)
@@ -120,20 +129,21 @@ function DepartmentsTab({ cfg, reload }: { cfg: AdminConfig; reload: () => void 
         </TableBody>
       </Table>
 
-      {creating && <DepartmentForm onClose={() => setCreating(false)} onSaved={reload} />}
-      {editing && <DepartmentForm existing={editing} onClose={() => setEditing(null)} onSaved={reload} />}
+      {creating && <DepartmentForm cfg={cfg} onClose={() => setCreating(false)} onSaved={reload} />}
+      {editing && <DepartmentForm cfg={cfg} existing={editing} onClose={() => setEditing(null)} onSaved={reload} />}
     </div>
   )
 }
 
 function DepartmentForm({
-  existing, onClose, onSaved,
-}: { existing?: Department; onClose: () => void; onSaved: () => void }) {
+  cfg, existing, onClose, onSaved,
+}: { cfg: AdminConfig; existing?: Department; onClose: () => void; onSaved: () => void }) {
   const [key, setKey] = useState(existing?.key || "")
   const [label, setLabel] = useState(existing?.label || "")
   const [types, setTypes] = useState<string[]>(existing?.refund_types || [])
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState("")
+  const refundTypes = refundTypeKeys(cfg)
 
   async function save() {
     setBusy(true); setErr("")
@@ -173,7 +183,10 @@ function DepartmentForm({
           </div>
           <div className="flex flex-col gap-2">
             <Label>Refund types</Label>
-            {REFUND_TYPES.map((t) => (
+            {refundTypes.length === 0 && (
+              <p className="text-xs text-muted-foreground">No refund types defined yet — add some in the <strong>Refund types</strong> tab first.</p>
+            )}
+            {refundTypes.map((t) => (
               <label key={t} className="flex items-center gap-2 text-sm">
                 <input
                   type="checkbox"
@@ -332,62 +345,148 @@ function UserForm({
   )
 }
 
-/* ─── Refund-type labels ─── */
+/* ─── Refund types ─── */
 
-function LabelsTab({ cfg, reload }: { cfg: AdminConfig; reload: () => void }) {
-  const [edits, setEdits] = useState<Record<string, string>>({})
-  const [busy, setBusy] = useState<string>("")
+function RefundTypesTab({ cfg, reload }: { cfg: AdminConfig; reload: () => void }) {
+  const [creating, setCreating] = useState(false)
+  const [editing, setEditing] = useState<RefundType | null>(null)
+  const types = cfg.refundTypes || []
 
-  async function save(type: string) {
-    const label = (edits[type] ?? cfg.refundTypeLabels[type] ?? "").trim()
-    if (!label) return
-    setBusy(type)
+  async function remove(t: RefundType) {
+    if (!confirm(`Delete refund type "${t.key}"? This will also remove its document requirements and form schema.`)) return
+    const res = await api(`/admin/refund-types/${encodeURIComponent(t.key)}`, { method: "DELETE" })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      alert(data.error || "Delete failed")
+    }
+    reload()
+  }
+
+  return (
+    <div className="flex flex-col gap-3 pt-4">
+      <p className="text-sm text-muted-foreground">
+        Refund types drive every per-type form schema, document checklist, and department mapping.
+        Adding a new type lets you define its own form fields and required docs without a code change.
+      </p>
+      <div className="flex justify-end">
+        <Button onClick={() => setCreating(true)}>+ New refund type</Button>
+      </div>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Key</TableHead>
+            <TableHead>Display label</TableHead>
+            <TableHead></TableHead>
+            <TableHead></TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {types.map((t) => (
+            <TableRow key={t.key}>
+              <TableCell className="font-mono text-xs">{t.key}</TableCell>
+              <TableCell>{t.label}</TableCell>
+              <TableCell>
+                {t.isDefault && <Badge variant="outline" className="text-muted-foreground">Default</Badge>}
+              </TableCell>
+              <TableCell className="text-right">
+                <Button variant="ghost" size="sm" onClick={() => setEditing(t)}>Edit label</Button>
+                <Button variant="ghost" size="sm" onClick={() => remove(t)}>Delete</Button>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+      {creating && <RefundTypeForm onClose={() => setCreating(false)} onSaved={reload} />}
+      {editing && <RefundTypeForm existing={editing} onClose={() => setEditing(null)} onSaved={reload} />}
+    </div>
+  )
+}
+
+function RefundTypeForm({
+  existing, onClose, onSaved,
+}: { existing?: RefundType; onClose: () => void; onSaved: () => void }) {
+  const [key, setKey] = useState(existing?.key || "")
+  const [label, setLabel] = useState(existing?.label || "")
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState("")
+
+  async function save() {
+    setBusy(true); setErr("")
     try {
-      await api(`/admin/refund-types/${encodeURIComponent(type)}`, {
-        method: "PUT", body: JSON.stringify({ label }),
-      })
-      reload()
+      const path = existing
+        ? `/admin/refund-types/${encodeURIComponent(existing.key)}`
+        : `/admin/refund-types`
+      const body = existing ? { label } : { key: key.toUpperCase(), label }
+      const res = await api(path, { method: existing ? "PATCH" : "POST", body: JSON.stringify(body) })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setErr(data.error || `Save failed: ${res.status}`)
+        return
+      }
+      onSaved(); onClose()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
     } finally {
-      setBusy("")
+      setBusy(false)
     }
   }
 
   return (
-    <div className="flex flex-col gap-3 pt-4 max-w-md">
-      <p className="text-sm text-muted-foreground">
-        Rename how refund types appear in the dashboard.
-      </p>
-      {REFUND_TYPES.map((t) => (
-        <div key={t} className="flex items-center gap-2">
-          <span className="font-mono text-xs w-36">{t}</span>
-          <Input
-            value={edits[t] ?? cfg.refundTypeLabels[t] ?? ""}
-            onChange={(e) => setEdits({ ...edits, [t]: e.target.value })}
-            placeholder={t}
-          />
-          <Button size="sm" onClick={() => save(t)} disabled={busy === t}>Save</Button>
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>{existing ? "Edit refund type" : "New refund type"}</DialogTitle></DialogHeader>
+        <div className="flex flex-col gap-3">
+          {!existing && (
+            <div className="flex flex-col gap-2">
+              <Label>Key</Label>
+              <Input value={key} onChange={(e) => setKey(e.target.value.toUpperCase())} placeholder="BUSINESS_LICENSE" />
+              <p className="text-xs text-muted-foreground">Uppercase letters, digits, and underscores. Cannot be changed later.</p>
+            </div>
+          )}
+          <div className="flex flex-col gap-2">
+            <Label>Display label</Label>
+            <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Business License Refund" />
+          </div>
+          {err && <p className="text-destructive text-sm">{err}</p>}
         </div>
-      ))}
-    </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={save} disabled={busy}>{busy ? "Saving…" : "Save"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
 
 /* ─── Document requirements ─── */
 
-function DocsTab() {
+function DocsTab({ refundTypes }: { refundTypes: string[] }) {
   const { data, error: err, reload } = useApi<DocReqsResponse>("/admin/doc-requirements")
 
   if (err) return <p className="text-destructive text-sm pt-4">{err}</p>
   if (!data) return <p className="text-muted-foreground text-sm pt-4">Loading…</p>
+
+  if (refundTypes.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground pt-4">
+        No refund types defined yet — add some in the <strong>Refund types</strong> tab first.
+      </p>
+    )
+  }
 
   return (
     <div className="flex flex-col gap-6 pt-4">
       <p className="text-sm text-muted-foreground">
         Each refund type has a list of required documents. Mark a document <strong>internal</strong> to hide it from department admins (visible only to super-admin).
       </p>
-      {REFUND_TYPES.map((rt) => (
-        <DocTypeEditor key={rt} refundType={rt} initial={data[rt]} onSaved={reload} />
+      {refundTypes.map((rt) => (
+        <DocTypeEditor
+          key={rt}
+          refundType={rt}
+          initial={data[rt] || { docs: [], either_of: [] }}
+          onSaved={reload}
+        />
       ))}
     </div>
   )
@@ -508,16 +607,23 @@ function DocTypeEditor({
 
 const FIELD_TYPES = ["text", "email", "tel", "date", "number", "address", "textarea", "checkbox"] as const
 
-function SchemasTab() {
+function SchemasTab({ refundTypes }: { refundTypes: string[] }) {
   const { data: schemas, error: loadError, reload } = useApi<FormSchemasResponse>("/admin/form-schemas")
-  const [selected, setSelected] = useState<(typeof REFUND_TYPES)[number]>(REFUND_TYPES[0])
+  const [selected, setSelected] = useState<string>(refundTypes[0] || "")
   const [editing, setEditing] = useState<FormSchema | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState("")
   const error = saveError || loadError
 
   useEffect(() => {
-    if (schemas && schemas[selected]) {
+    // If the selected type was deleted from another tab, fall back to the first.
+    if (selected && !refundTypes.includes(selected) && refundTypes.length > 0) {
+      setSelected(refundTypes[0])
+    }
+  }, [refundTypes, selected])
+
+  useEffect(() => {
+    if (schemas && selected && schemas[selected]) {
       setEditing(deepClone(schemas[selected]))
     }
   }, [selected, schemas])
@@ -564,11 +670,19 @@ function SchemasTab() {
     setEditing({ ...editing, fields: next })
   }
 
+  if (refundTypes.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground pt-4">
+        No refund types defined yet — add some in the <strong>Refund types</strong> tab first.
+      </p>
+    )
+  }
+
   if (!schemas || !editing) {
     return <p className="text-sm text-muted-foreground pt-4">{error || "Loading…"}</p>
   }
 
-  const sectionOptions = ["common", ...REFUND_TYPES]
+  const sectionOptions = ["common", ...refundTypes]
 
   return (
     <div className="flex flex-col gap-4 pt-4">
@@ -576,10 +690,10 @@ function SchemasTab() {
         <Label>Refund type</Label>
         <select
           value={selected}
-          onChange={(e) => setSelected(e.target.value as (typeof REFUND_TYPES)[number])}
+          onChange={(e) => setSelected(e.target.value)}
           className="border rounded px-2 py-1 text-sm bg-background"
         >
-          {REFUND_TYPES.map((rt) => <option key={rt} value={rt}>{rt}</option>)}
+          {refundTypes.map((rt) => <option key={rt} value={rt}>{rt}</option>)}
         </select>
         <Button onClick={save} disabled={saving}>{saving ? "Saving…" : "Save schema"}</Button>
       </div>

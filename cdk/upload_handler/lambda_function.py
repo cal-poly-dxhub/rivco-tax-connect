@@ -70,6 +70,59 @@ _DEFAULT_DOC_REQS: dict[str, dict[str, Any]] = {
 _UNIFIED_FORM_FILENAME = "unified-form.json"
 _UNIFIED_FORM_FULFILLS = {"ap13-affidavit", "property-tax-claim"}
 
+# Default refund-type catalog. Used as the seed when the admin-config table has
+# no REFTYPE#<key> rows yet. Once any REFTYPE# row exists, the admin-config
+# table becomes the source of truth — adds and deletes there fully control the
+# active set (a fresh deploy can wipe these defaults entirely).
+_DEFAULT_REFUND_TYPES: dict[str, str] = {
+    "STALE_WARRANT": "Stale-Dated Warrant",
+    "PAYROLL": "Payroll",
+    "PROPERTY_TAX": "Property Tax",
+}
+
+# Refund-type key shape: uppercase letters/digits/underscores, 1-32 chars. Stored
+# in S3 keys, DynamoDB partition keys, and HTML data-* attrs, so keep it strict.
+_VALID_REFUND_TYPE_KEY = re.compile(r'^[A-Z][A-Z0-9_]{0,31}$')
+
+
+def _load_refund_types() -> dict[str, str]:
+    """Return {key: label} for every active refund type.
+
+    Reads REFTYPE#<key> rows from the admin-config table. If the table has no
+    REFTYPE rows at all, falls back to the legacy defaults so a fresh deploy
+    keeps working without an explicit setup step. Once any REFTYPE row exists,
+    the admin-config table is the sole source of truth.
+
+    Cached on the function object across one warm invocation; bust via
+    ``_bust_refund_type_cache()`` after a write.
+    """
+    cache = getattr(_load_refund_types, "cache", None)
+    if cache is not None:
+        return cache
+    if not admin_table:
+        _load_refund_types.cache = dict(_DEFAULT_REFUND_TYPES)  # type: ignore[attr-defined]
+        return _load_refund_types.cache
+    items = _scan_all(
+        admin_table,
+        FilterExpression="begins_with(pk, :p)",
+        ExpressionAttributeValues={":p": "REFTYPE#"},
+    )
+    if not items:
+        _load_refund_types.cache = dict(_DEFAULT_REFUND_TYPES)  # type: ignore[attr-defined]
+        return _load_refund_types.cache
+    out = {item["key"]: item.get("label", item["key"]) for item in items if item.get("key")}
+    _load_refund_types.cache = out  # type: ignore[attr-defined]
+    return out
+
+
+def _bust_refund_type_cache() -> None:
+    if hasattr(_load_refund_types, "cache"):
+        delattr(_load_refund_types, "cache")
+
+
+def _is_known_refund_type(refund_type: str) -> bool:
+    return refund_type in _load_refund_types()
+
 
 def _get_doc_req(refund_type: str) -> dict[str, Any]:
     """Return the doc requirement spec for a refund type, seeding from defaults if absent."""
@@ -855,9 +908,19 @@ def _handle_admin(event: dict[str, Any], headers: dict[str, str]) -> dict[str, A
             return _admin_update_user(event, parts[1], headers)
         if len(parts) == 2 and method == "DELETE":
             return _admin_delete_user(parts[1], headers)
-    # /admin/refund-types/<TYPE> (PUT to set label)
-    if parts[:1] == ["refund-types"] and len(parts) == 2 and method == "PUT":
-        return _admin_set_refund_type_label(event, parts[1], headers)
+    # /admin/refund-types
+    if parts[:1] == ["refund-types"]:
+        if len(parts) == 1 and method == "GET":
+            return _admin_list_refund_types(headers)
+        if len(parts) == 1 and method == "POST":
+            return _admin_create_refund_type(event, headers)
+        if len(parts) == 2 and method == "PUT":
+            # Legacy: set label only (kept for the existing dashboard route).
+            return _admin_set_refund_type_label(event, parts[1], headers)
+        if len(parts) == 2 and method == "PATCH":
+            return _admin_update_refund_type(event, parts[1], headers)
+        if len(parts) == 2 and method == "DELETE":
+            return _admin_delete_refund_type(parts[1], headers)
     # /admin/doc-requirements
     if parts[:1] == ["doc-requirements"]:
         if len(parts) == 1 and method == "GET":
@@ -934,10 +997,15 @@ def _admin_get_config(headers: dict[str, str]) -> dict[str, Any]:
             "createdAt": cu.get("UserCreateDate").isoformat() if cu.get("UserCreateDate") else "",
         })
 
+    refund_types = [
+        {"key": k, "label": v, "isDefault": k in _DEFAULT_REFUND_TYPES}
+        for k, v in sorted(_load_refund_types().items())
+    ]
     return {"statusCode": 200, "headers": headers, "body": json.dumps({
         "departments": sorted(departments, key=lambda d: d["key"]),
         "users": sorted(users, key=lambda u: u["username"]),
         "refundTypeLabels": refund_type_labels,
+        "refundTypes": refund_types,
     })}
 
 
@@ -1159,7 +1227,7 @@ def _admin_delete_user(username: str, headers: dict[str, str]) -> dict[str, Any]
 
 def _admin_set_refund_type_label(event: dict[str, Any], refund_type: str, headers: dict[str, str]) -> dict[str, Any]:
     refund_type = refund_type.upper()
-    if refund_type not in {"STALE_WARRANT", "PAYROLL", "PROPERTY_TAX"}:
+    if not _is_known_refund_type(refund_type):
         return _err(400, "Unknown refund type", headers)
     try:
         body = json.loads(event.get("body") or "{}")
@@ -1176,17 +1244,132 @@ def _admin_set_refund_type_label(event: dict[str, Any], refund_type: str, header
             "body": json.dumps({"refund_type": refund_type, "label": label})}
 
 
+def _seed_refund_type_rows() -> None:
+    """First-touch helper: write the legacy defaults as REFTYPE# rows so the
+    super-admin starts with an editable catalog instead of an empty table."""
+    if not admin_table:
+        return
+    now = _now_iso()
+    with admin_table.batch_writer() as batch:
+        for key, label in _DEFAULT_REFUND_TYPES.items():
+            batch.put_item(Item={
+                "pk": f"REFTYPE#{key}", "key": key, "label": label,
+                "createdAt": now, "updatedAt": now,
+            })
+    _bust_refund_type_cache()
+
+
+def _admin_list_refund_types(headers: dict[str, str]) -> dict[str, Any]:
+    """List all known refund types with metadata.
+
+    Falls through to the legacy seeds when no REFTYPE# rows exist yet, so the
+    dashboard can render a CRUD list immediately.
+    """
+    types = _load_refund_types()
+    out = [
+        {"key": k, "label": v, "isDefault": k in _DEFAULT_REFUND_TYPES}
+        for k, v in sorted(types.items())
+    ]
+    return {"statusCode": 200, "headers": headers,
+            "body": json.dumps({"refund_types": out})}
+
+
+def _admin_create_refund_type(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except json.JSONDecodeError:
+        return _err(400, "Invalid JSON", headers)
+    key = (body.get("key") or "").strip().upper()
+    label = (body.get("label") or "").strip()
+    if not _VALID_REFUND_TYPE_KEY.match(key):
+        return _err(400, "key must be uppercase letters/digits/underscores, 1-32 chars, starting with a letter", headers)
+    if not label:
+        return _err(400, "label is required", headers)
+    # Adding the first explicit row would otherwise drop the legacy seeds (the
+    # admin-config table becomes the source of truth once any REFTYPE# row
+    # exists), so persist the seeds alongside this new entry to preserve them.
+    if not _scan_all(admin_table, FilterExpression="begins_with(pk, :p)",
+                     ExpressionAttributeValues={":p": "REFTYPE#"}):
+        _seed_refund_type_rows()
+    if admin_table.get_item(Key={"pk": f"REFTYPE#{key}"}).get("Item"):
+        return _err(409, "Refund type already exists", headers)
+    admin_table.put_item(Item={
+        "pk": f"REFTYPE#{key}", "key": key, "label": label,
+        "createdAt": _now_iso(), "updatedAt": _now_iso(),
+    })
+    _bust_refund_type_cache()
+    return {"statusCode": 201, "headers": headers,
+            "body": json.dumps({"key": key, "label": label})}
+
+
+def _admin_update_refund_type(event: dict[str, Any], key: str, headers: dict[str, str]) -> dict[str, Any]:
+    key = key.upper()
+    if not _VALID_REFUND_TYPE_KEY.match(key):
+        return _err(400, "invalid key", headers)
+    if not _is_known_refund_type(key):
+        return _err(404, "Refund type not found", headers)
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except json.JSONDecodeError:
+        return _err(400, "Invalid JSON", headers)
+    label = (body.get("label") or "").strip()
+    if not label:
+        return _err(400, "label is required", headers)
+    # Materialize the legacy seeds the first time something is edited so the
+    # active set doesn't silently change shape.
+    if not _scan_all(admin_table, FilterExpression="begins_with(pk, :p)",
+                     ExpressionAttributeValues={":p": "REFTYPE#"}):
+        _seed_refund_type_rows()
+    admin_table.put_item(Item={
+        "pk": f"REFTYPE#{key}", "key": key, "label": label,
+        "updatedAt": _now_iso(),
+    })
+    # Mirror the label change into the legacy TYPELABEL# row so existing
+    # consumers (admin dashboard column headers, etc.) stay consistent.
+    admin_table.put_item(Item={
+        "pk": f"TYPELABEL#{key}", "refund_type": key,
+        "label": label, "updatedAt": _now_iso(),
+    })
+    _bust_refund_type_cache()
+    return {"statusCode": 200, "headers": headers,
+            "body": json.dumps({"key": key, "label": label})}
+
+
+def _admin_delete_refund_type(key: str, headers: dict[str, str]) -> dict[str, Any]:
+    key = key.upper()
+    if not _VALID_REFUND_TYPE_KEY.match(key):
+        return _err(400, "invalid key", headers)
+    if not _is_known_refund_type(key):
+        return _err(404, "Refund type not found", headers)
+    # If a department references this type, refuse — the admin should detach
+    # it first (or the department's status derivation would break).
+    in_use = [d["key"] for d in _load_departments() if key in (d.get("refund_types") or [])]
+    if in_use:
+        return _err(409, f"Refund type is used by department(s): {', '.join(in_use)}", headers)
+    # First delete materializes the seeds (so removing one default doesn't
+    # leave the other two implicitly active via the fallback).
+    if not _scan_all(admin_table, FilterExpression="begins_with(pk, :p)",
+                     ExpressionAttributeValues={":p": "REFTYPE#"}):
+        _seed_refund_type_rows()
+    admin_table.delete_item(Key={"pk": f"REFTYPE#{key}"})
+    # Clean up the related auxiliary rows so the type fully disappears.
+    admin_table.delete_item(Key={"pk": f"TYPELABEL#{key}"})
+    admin_table.delete_item(Key={"pk": f"DOCREQ#{key}"})
+    admin_table.delete_item(Key={"pk": f"FORMSCHEMA#{key}"})
+    _bust_refund_type_cache()
+    return {"statusCode": 200, "headers": headers,
+            "body": json.dumps({"key": key, "deleted": True})}
+
+
 def _admin_list_doc_requirements(headers: dict[str, str]) -> dict[str, Any]:
     """Return doc requirements for each known refund type, seeded from defaults."""
-    out = {}
-    for rt in ("STALE_WARRANT", "PAYROLL", "PROPERTY_TAX"):
-        out[rt] = _get_doc_req(rt)
+    out = {rt: _get_doc_req(rt) for rt in _load_refund_types()}
     return {"statusCode": 200, "headers": headers, "body": json.dumps(out)}
 
 
 def _admin_put_doc_requirements(event: dict[str, Any], refund_type: str, headers: dict[str, str]) -> dict[str, Any]:
     refund_type = refund_type.upper()
-    if refund_type not in {"STALE_WARRANT", "PAYROLL", "PROPERTY_TAX"}:
+    if not _is_known_refund_type(refund_type):
         return _err(400, "Unknown refund type", headers)
     try:
         body = json.loads(event.get("body") or "{}")
@@ -1308,13 +1491,13 @@ def _get_form_schema(refund_type: str) -> dict[str, Any]:
 
 def _admin_list_form_schemas(headers: dict[str, str]) -> dict[str, Any]:
     """Return schemas for every known refund type."""
-    out = {rt: _get_form_schema(rt) for rt in _DEFAULT_FORM_SCHEMAS.keys()}
+    out = {rt: _get_form_schema(rt) for rt in _load_refund_types()}
     return {"statusCode": 200, "headers": headers, "body": json.dumps(out)}
 
 
 def _admin_get_form_schema(refund_type: str, headers: dict[str, str]) -> dict[str, Any]:
     refund_type = refund_type.upper()
-    if refund_type not in _DEFAULT_FORM_SCHEMAS:
+    if not _is_known_refund_type(refund_type):
         return _err(400, "Unknown refund type", headers)
     return {"statusCode": 200, "headers": headers,
             "body": json.dumps(_get_form_schema(refund_type))}
@@ -1322,7 +1505,7 @@ def _admin_get_form_schema(refund_type: str, headers: dict[str, str]) -> dict[st
 
 def _admin_put_form_schema(event: dict[str, Any], refund_type: str, headers: dict[str, str]) -> dict[str, Any]:
     refund_type = refund_type.upper()
-    if refund_type not in _DEFAULT_FORM_SCHEMAS:
+    if not _is_known_refund_type(refund_type):
         return _err(400, "Unknown refund type", headers)
     try:
         body = json.loads(event.get("body") or "{}")
@@ -1361,7 +1544,12 @@ def _admin_put_form_schema(event: dict[str, Any], refund_type: str, headers: dic
     raw_title = body.get("title")
     if raw_title is not None and not isinstance(raw_title, str):
         return _err(400, "title must be a string", headers)
-    title = (raw_title or _DEFAULT_FORM_SCHEMAS[refund_type]["title"]).strip()
+    default_title = (
+        _DEFAULT_FORM_SCHEMAS.get(refund_type, {}).get("title")
+        or _load_refund_types().get(refund_type)
+        or refund_type
+    )
+    title = (raw_title or default_title).strip()
 
     admin_table.put_item(Item={
         "pk": f"FORMSCHEMA#{refund_type}",
@@ -1386,7 +1574,8 @@ def _handle_public_form_schemas(event: dict[str, Any], headers: dict[str, str]) 
     if not raw:
         return _err(400, "types query parameter required", headers)
     requested = [t.strip().upper() for t in raw.split(",") if t.strip()]
-    invalid = [t for t in requested if t not in _DEFAULT_FORM_SCHEMAS]
+    known = _load_refund_types()
+    invalid = [t for t in requested if t not in known]
     if invalid:
         return _err(400, f"Unknown refund types: {', '.join(invalid)}", headers)
 
