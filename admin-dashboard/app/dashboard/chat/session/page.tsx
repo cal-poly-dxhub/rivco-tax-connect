@@ -1,7 +1,7 @@
 "use client"
 
-import { useState, use } from "react"
-import { useRouter } from "next/navigation"
+import { useState, Suspense } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -12,13 +12,14 @@ import { ChatSessionDetail } from "@/lib/types"
 import { useAuthGate } from "@/hooks/use-auth-gate"
 import { useApi } from "@/hooks/use-api"
 
-export default function ChatSessionPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params)
+function ChatSessionPageInner() {
+  const searchParams = useSearchParams()
+  const id = searchParams.get("id") || ""
   const router = useRouter()
   const { ready } = useAuthGate({ requireSuperAdmin: true })
   const { data, error: loadError, loading, reload, setData } = useApi<ChatSessionDetail>(
     `/admin/chat-sessions/${id}`,
-    { enabled: ready, deps: [id] },
+    { enabled: ready && !!id, deps: [id] },
   )
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState("")
@@ -58,7 +59,6 @@ export default function ChatSessionPage({ params }: { params: Promise<{ id: stri
   }
 
   function renderContent(content: string): string {
-    // Stored as a JSON string when role is assistant (Claude content blocks).
     try {
       const parsed = JSON.parse(content)
       if (Array.isArray(parsed)) {
@@ -76,6 +76,17 @@ export default function ChatSessionPage({ params }: { params: Promise<{ id: stri
       // plain string
     }
     return content
+  }
+
+  if (!id) {
+    return (
+      <div className="min-h-svh p-6">
+        <div className="mx-auto max-w-3xl">
+          <p className="text-sm text-muted-foreground">Missing session id.</p>
+          <Link href="/dashboard/chat" className="text-sm underline">← Back to handoffs</Link>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -135,5 +146,13 @@ export default function ChatSessionPage({ params }: { params: Promise<{ id: stri
         )}
       </div>
     </div>
+  )
+}
+
+export default function ChatSessionPage() {
+  return (
+    <Suspense fallback={<p className="p-6 text-sm text-muted-foreground">Loading…</p>}>
+      <ChatSessionPageInner />
+    </Suspense>
   )
 }
