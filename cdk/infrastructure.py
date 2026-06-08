@@ -907,11 +907,16 @@ def _build_security(stack, cfg, proj, upload_api, uploads_bucket, s3_key, chat_f
             ),
         ],
     )
-    wafv2.CfnWebACLAssociation(
+    waf_assoc = wafv2.CfnWebACLAssociation(
         stack, "ApiWafAssociation",
         resource_arn=f"arn:aws:apigateway:{stack.region}::/restapis/{upload_api.rest_api_id}/stages/prod",
         web_acl_arn=waf_acl.attr_arn,
     )
+    # Explicit dependency: the WAF association references the `prod` stage by
+    # ARN string, so CFN can't infer that the stage must exist first. On a
+    # cold deploy the association tries to attach before the stage finishes
+    # creating and fails with "resource doesn't exist".
+    waf_assoc.node.add_dependency(upload_api.deployment_stage)
 
     alarm_topic_arn = (cfg.get("monitoring") or {}).get("alarm_sns_topic_arn", "")
 
