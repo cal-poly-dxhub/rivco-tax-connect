@@ -1,12 +1,12 @@
 project:
-  name: riverside-tax-refund-v2
+  name: riverside-tax-refund-v3
   description: Riverside County Tax Refund Lookup
 
 aws:
   region: us-west-2
 
 lambda:
-  function_name: riverside-tax-lookup
+  function_name: riverside-tax-lookup-v3
   timeout_seconds: 30
   memory_mb: 512
   environment:
@@ -44,7 +44,7 @@ notifications:
 admin_dashboard:
   github_owner: cal-poly-dxhub
   github_repo: rivco-tax-connect
-  github_branch: main
+  github_branch: feat/dynamic-departments
 
 # Bedrock Claude — drives the web chat agent.
 bedrock:
