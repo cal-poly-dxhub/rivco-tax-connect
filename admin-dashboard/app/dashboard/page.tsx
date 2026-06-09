@@ -202,7 +202,7 @@ export default function DashboardPage() {
             <TableRow>
               <TableHead>Name</TableHead>
               {perms?.isSuperAdmin && <TableHead>Type</TableHead>}
-              <TableHead>Departments</TableHead>
+              {perms?.isSuperAdmin && <TableHead>Departments</TableHead>}
               <TableHead>Status</TableHead>
               <TableHead>Submitted</TableHead>
               <TableHead></TableHead>
@@ -236,11 +236,13 @@ export default function DashboardPage() {
                       ))}
                     </TableCell>
                   )}
-                  <TableCell>
-                    {s.departments.length ? s.departments.map((d) => (
-                      <Badge key={d} variant="outline" className="mr-1">{d}</Badge>
-                    )) : <span className="text-muted-foreground">—</span>}
-                  </TableCell>
+                  {perms?.isSuperAdmin && (
+                    <TableCell>
+                      {s.departments.length ? s.departments.map((d) => (
+                        <Badge key={d} variant="outline" className="mr-1">{d}</Badge>
+                      )) : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                  )}
                   <TableCell onClick={(e) => e.stopPropagation()} className="space-y-1">
                     {visibleDepts.map((dept) => (
                       <div key={dept} className="flex items-center gap-2">
