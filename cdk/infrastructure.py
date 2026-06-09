@@ -426,6 +426,7 @@ def _build_upload_api(stack, cfg, proj, uploads_bucket, chat_table, portal_origi
             "cognito-idp:AdminRemoveUserFromGroup", "cognito-idp:AdminListGroupsForUser",
             "cognito-idp:AdminGetUser", "cognito-idp:ListUsers",
             "cognito-idp:ListUsersInGroup", "cognito-idp:CreateGroup", "cognito-idp:DeleteGroup",
+            "cognito-idp:GetGroup",
         ],
         resources=[user_pool.user_pool_arn],
     ))

@@ -437,6 +437,20 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     if event.get("httpMethod") == "OPTIONS":
         return {"statusCode": 200, "headers": headers, "body": ""}
 
+    # Wrap dispatch so unhandled exceptions still come back through API Gateway
+    # with CORS headers attached. Without this, the browser sees a CORS-policy
+    # block instead of the real 5xx and the actual error in CloudWatch is much
+    # harder to correlate.
+    try:
+        return _dispatch(event, headers)
+    except Exception as exc:  # noqa: BLE001
+        import traceback as _tb
+        print("[ERROR] unhandled exception:", repr(exc))
+        print(_tb.format_exc())
+        return _err(500, "Internal error — see CloudWatch logs", headers)
+
+
+def _dispatch(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
     resource = event.get("resource", "")
     method = event.get("httpMethod", "")
     if resource.startswith("/admin/"):
