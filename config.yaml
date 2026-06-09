@@ -31,18 +31,18 @@ retention:
 # stack creates a Cognito user with this email and a temporary password (see
 # `SuperAdminBootstrapPassword` in stack outputs).
 super_admin:
-  email: gflusser+super@amazon.com
+  email: gflusser+v3@amazon.com
 
 notifications:
   mode: ses         # "ses" (real email) or "log" (CloudWatch only)
   # REQUIRED if mode is "ses". This is the "From" address on notification
   # emails. CDK creates an SES identity; you must click the verification
   # link AWS sends before notifications can actually deliver.
-  sender: gflusser+super@amazon.com
+  sender: gflusser+v3@amazon.com
   # Set to false when this sender is already verified out-of-band (e.g. by a
   # parallel stack in the same account). CloudFormation cannot import an
   # existing SES identity, so re-creating it fails with "already exists".
-  manage_ses_identity: false
+  manage_ses_identity: true
 
 # Admin dashboard (Next.js) build config. CodeBuild pulls from this repo/branch.
 admin_dashboard:
