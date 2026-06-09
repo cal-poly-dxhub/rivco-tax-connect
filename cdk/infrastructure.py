@@ -573,13 +573,16 @@ def _build_admin_dashboard(stack, cfg, proj, upload_api, user_pool, user_pool_cl
             build_image=codebuild.LinuxBuildImage.STANDARD_7_0,
             compute_type=codebuild.ComputeType.SMALL,
         ),
-        artifacts=codebuild.Artifacts.s3(
-            bucket=admin_bucket, include_build_id=False, package_zip=False, name="/", encryption=False,
-        ),
+        # No `artifacts` here — we sync directly with `aws s3 sync --delete`
+        # in post_build. CodeBuild's default Artifacts.s3 only ADDs files;
+        # stale chunks from prior builds linger forever and get re-served
+        # from S3 even after the new index.html stops referencing them.
         environment_variables={
             "API_URL": codebuild.BuildEnvironmentVariable(value=upload_api.url.rstrip("/")),
             "USER_POOL_ID": codebuild.BuildEnvironmentVariable(value=user_pool.user_pool_id),
             "USER_POOL_CLIENT_ID": codebuild.BuildEnvironmentVariable(value=user_pool_client.user_pool_client_id),
+            "TARGET_BUCKET": codebuild.BuildEnvironmentVariable(value=admin_bucket.bucket_name),
+            "DISTRIBUTION_ID": codebuild.BuildEnvironmentVariable(value=admin_distribution.distribution_id),
         },
         build_spec=codebuild.BuildSpec.from_object({
             "version": "0.2",
@@ -594,8 +597,13 @@ def _build_admin_dashboard(stack, cfg, proj, upload_api, user_pool, user_pool_cl
                         "yarn build",
                     ],
                 },
+                "post_build": {
+                    "commands": [
+                        'aws s3 sync admin-dashboard/out/ s3://$TARGET_BUCKET/ --delete',
+                        'aws cloudfront create-invalidation --distribution-id $DISTRIBUTION_ID --paths "/*"',
+                    ],
+                },
             },
-            "artifacts": {"base-directory": "admin-dashboard/out", "files": ["**/*"]},
         }),
         logging=codebuild.LoggingOptions(
             cloud_watch=codebuild.CloudWatchLoggingOptions(
@@ -687,27 +695,37 @@ def _build_claimant_portal(stack, cfg, proj, upload_api, upload_fn, fn, admin_di
             build_image=codebuild.LinuxBuildImage.STANDARD_7_0,
             compute_type=codebuild.ComputeType.SMALL,
         ),
-        artifacts=codebuild.Artifacts.s3(
-            bucket=claimant_bucket, include_build_id=False, package_zip=False, name="/", encryption=False,
-        ),
+        # No `artifacts` — see admin_build for rationale. We sync with --delete
+        # in post_build so stale Next chunks from prior builds don't linger.
         environment_variables={
             "API_URL": codebuild.BuildEnvironmentVariable(value=upload_api.url.rstrip("/")),
+            "TARGET_BUCKET": codebuild.BuildEnvironmentVariable(value=claimant_bucket.bucket_name),
+            "DISTRIBUTION_ID": codebuild.BuildEnvironmentVariable(value=claimant_distribution.distribution_id),
         },
         build_spec=codebuild.BuildSpec.from_object({
             "version": "0.2",
             "phases": {
                 "install": {
                     "runtime-versions": {"nodejs": "22"},
-                    "commands": ["cd claimant-portal", "corepack enable", "yarn install --immutable"],
+                    "commands": [
+                        "corepack enable || npm install -g yarn",
+                        "cd claimant-portal",
+                        "if [ -f yarn.lock ]; then yarn install --immutable; else npm ci; fi",
+                    ],
                 },
                 "build": {
                     "commands": [
                         'printf \'window.__CLAIMANT_CONFIG__ = {"API_URL":"%s"};\\n\' "$API_URL" > public/config.js',
-                        "yarn build",
+                        'if [ -f yarn.lock ]; then yarn build; else npm run build; fi',
+                    ],
+                },
+                "post_build": {
+                    "commands": [
+                        'aws s3 sync claimant-portal/out/ s3://$TARGET_BUCKET/ --delete',
+                        'aws cloudfront create-invalidation --distribution-id $DISTRIBUTION_ID --paths "/*"',
                     ],
                 },
             },
-            "artifacts": {"base-directory": "claimant-portal/out", "files": ["**/*"]},
         }),
         logging=codebuild.LoggingOptions(
             cloud_watch=codebuild.CloudWatchLoggingOptions(
