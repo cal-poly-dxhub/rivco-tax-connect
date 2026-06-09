@@ -56,7 +56,7 @@ export default function ClaimStatusPage() {
 
   function handleUploadMore() {
     if (submissionId) {
-      router.push(`/new?submissionId=${submissionId}`);
+      router.push(`/claim/upload?id=${encodeURIComponent(submissionId)}`);
     }
   }
 

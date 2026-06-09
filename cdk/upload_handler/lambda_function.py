@@ -1979,6 +1979,9 @@ def _handle_claimant(event: dict[str, Any], headers: dict[str, str]) -> dict[str
     elif resource == "/claimant/continue" or proxy == "continue":
         if method == "POST":
             return _claimant_continue(event, headers)
+    elif resource == "/claimant/continue-complete" or proxy == "continue-complete":
+        if method == "POST":
+            return _claimant_continue_complete(event, headers)
 
     return _err(404, f"No claimant handler for {method} {resource or proxy}", headers)
 
@@ -2354,4 +2357,85 @@ def _claimant_continue(event: dict[str, Any], headers: dict[str, str]) -> dict[s
         "statusCode": 200,
         "headers": headers,
         "body": json.dumps({"uploads": uploads}),
+    }
+
+
+def _claimant_continue_complete(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    """POST /claimant/continue-complete  (requires X-Claimant-Token header)
+
+    Body: {"submissionId": "...", "filenames": ["foo.pdf", "bar.pdf"]}
+    Merges the new filenames into the submission's existing documents list and
+    recomputes per-department statuses. Unlike /upload-complete, this REPLACES
+    nothing — old docs stay, new ones are appended.
+    """
+    token = (event.get("headers") or {}).get("X-Claimant-Token") or \
+            (event.get("headers") or {}).get("x-claimant-token") or ""
+
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except json.JSONDecodeError:
+        return _err(400, "Invalid JSON", headers)
+
+    submission_id = (body.get("submissionId") or "").strip()
+    new_filenames = body.get("filenames") or []
+
+    if not submission_id:
+        return _err(400, "submissionId is required", headers)
+    if not re.fullmatch(r'[0-9a-f]{12}', submission_id):
+        return _err(400, "Invalid submission id", headers)
+    if not token:
+        return _err(401, "X-Claimant-Token header required", headers)
+    if not _verify_claimant_token(submission_id, token):
+        return _err(403, "Invalid or expired token", headers)
+    if not isinstance(new_filenames, list) or not new_filenames:
+        return _err(400, "filenames is required", headers)
+    if not table:
+        return _err(500, "DynamoDB not configured", headers)
+
+    item = _get_submission(submission_id)
+    if not item:
+        return _err(404, "Submission not found", headers)
+
+    # Merge: existing docs + new ones, deduped, preserving order.
+    existing_docs: list[str] = list(item.get("documents") or [])
+    seen = set(existing_docs)
+    for fn in new_filenames:
+        if fn and fn not in seen:
+            existing_docs.append(fn)
+            seen.add(fn)
+
+    refund_type_csv = item.get("refundType", "")
+    departments = item.get("departments") or _derive_departments(
+        [t.strip() for t in refund_type_csv.split(",") if t.strip()])
+
+    # Recompute partial→uploaded transitions on the merged doc set; preserve
+    # any dept that's already past `uploaded` (e.g. admin already approved).
+    new_statuses = _compute_statuses(departments, refund_type_csv, existing_docs)
+    existing_statuses = item.get("statuses") or {}
+    merged: dict[str, str] = {}
+    for dept in departments:
+        prev = existing_statuses.get(dept, "partial")
+        if prev in {"partial", "uploaded"}:
+            merged[dept] = new_statuses.get(dept, "partial")
+        else:
+            merged[dept] = prev
+
+    table.update_item(
+        Key=_sub_key(submission_id),
+        UpdateExpression="SET statuses = :s, documents = :d, updatedAt = :u",
+        ExpressionAttributeValues={
+            ":s": merged,
+            ":d": existing_docs,
+            ":u": _now_iso(),
+        },
+    )
+
+    return {
+        "statusCode": 200,
+        "headers": headers,
+        "body": json.dumps({
+            "submissionId": submission_id,
+            "documents": existing_docs,
+            "statuses": merged,
+        }),
     }
