@@ -204,7 +204,6 @@ export default function DashboardPage() {
               {perms?.isSuperAdmin && <TableHead>Type</TableHead>}
               <TableHead>Departments</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead>Tasks</TableHead>
               <TableHead>Submitted</TableHead>
               <TableHead></TableHead>
             </TableRow>
@@ -214,8 +213,6 @@ export default function DashboardPage() {
               const visibleDepts = deptFilter === "all"
                 ? Object.keys(s.statuses)
                 : Object.keys(s.statuses).filter((d) => d === deptFilter)
-              const allTasks = visibleDepts.flatMap((d) => s.tasksByDepartment[d] || [])
-              const taskDone = allTasks.filter((t) => t.done).length
               return (
                 <TableRow key={s.submissionId} className="cursor-pointer" onClick={() => setSelected(s)}>
                   <TableCell className="font-medium">
@@ -264,7 +261,6 @@ export default function DashboardPage() {
                       </div>
                     ))}
                   </TableCell>
-                  <TableCell className="text-sm">{taskDone}/{allTasks.length}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     {s.submittedAt ? new Date(s.submittedAt).toLocaleDateString() : "—"}
                   </TableCell>
@@ -342,23 +338,6 @@ function SubmissionDetail({ submission }: { submission: Submission }) {
           <div>
             <p className="text-muted-foreground text-xs">ID: {submission.submissionId}</p>
             <p className="text-muted-foreground text-xs">{Array.from(new Set(submission.refundType.split(","))).join(", ")}</p>
-          </div>
-          <div>
-            <p className="font-medium">Tasks</p>
-            <div className="mt-1 space-y-3">
-              {Object.entries(submission.tasksByDepartment).map(([dept, tasks]) => (
-                <div key={dept}>
-                  <p className="text-xs text-muted-foreground uppercase tracking-wide">{dept}</p>
-                  <ul className="space-y-1">
-                    {tasks.map((t, i) => (
-                      <li key={i} className={t.done ? "text-green-700" : "text-muted-foreground"}>
-                        {t.done ? "✓" : "○"} {t.label}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
-            </div>
           </div>
           <div>
             <p className="font-medium">Files {pkg && `(${pkg.files.length})`}</p>
