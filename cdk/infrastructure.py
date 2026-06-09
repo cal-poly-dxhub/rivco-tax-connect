@@ -599,8 +599,9 @@ def _build_admin_dashboard(stack, cfg, proj, upload_api, user_pool, user_pool_cl
                 },
                 "post_build": {
                     "commands": [
-                        'aws s3 sync admin-dashboard/out/ s3://$TARGET_BUCKET/ --delete',
-                        'aws cloudfront create-invalidation --distribution-id $DISTRIBUTION_ID --paths "/*"',
+                        'cd "$CODEBUILD_SRC_DIR"',
+                        'aws s3 sync admin-dashboard/out/ "s3://$TARGET_BUCKET/" --delete',
+                        'aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths "/*"',
                     ],
                 },
             },
@@ -616,7 +617,9 @@ def _build_admin_dashboard(stack, cfg, proj, upload_api, user_pool, user_pool_cl
         ),
     )
     admin_distribution.grant(admin_build.role, "cloudfront:CreateInvalidation")
-    admin_bucket.grant_write(admin_build)
+    # `aws s3 sync --delete` reads existing objects to compare ETags + lists
+    # the bucket; grant_write alone misses ListBucket/GetObject.
+    admin_bucket.grant_read_write(admin_build)
 
     trigger = cr.AwsCustomResource(
         stack, "TriggerAdminBuild",
@@ -721,8 +724,9 @@ def _build_claimant_portal(stack, cfg, proj, upload_api, upload_fn, fn, admin_di
                 },
                 "post_build": {
                     "commands": [
-                        'aws s3 sync claimant-portal/out/ s3://$TARGET_BUCKET/ --delete',
-                        'aws cloudfront create-invalidation --distribution-id $DISTRIBUTION_ID --paths "/*"',
+                        'cd "$CODEBUILD_SRC_DIR"',
+                        'aws s3 sync claimant-portal/out/ "s3://$TARGET_BUCKET/" --delete',
+                        'aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths "/*"',
                     ],
                 },
             },
@@ -738,7 +742,9 @@ def _build_claimant_portal(stack, cfg, proj, upload_api, upload_fn, fn, admin_di
         ),
     )
     claimant_distribution.grant(claimant_build.role, "cloudfront:CreateInvalidation")
-    claimant_bucket.grant_write(claimant_build)
+    # `aws s3 sync --delete` reads existing objects to compare ETags + lists
+    # the bucket; grant_write alone misses ListBucket/GetObject.
+    claimant_bucket.grant_read_write(claimant_build)
 
     claimant_trigger = cr.AwsCustomResource(
         stack, "TriggerClaimantBuild",
