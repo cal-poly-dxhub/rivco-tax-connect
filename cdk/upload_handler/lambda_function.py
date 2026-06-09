@@ -871,7 +871,16 @@ def _handle_upload(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
         }
         if address:
             item["address"] = address
-        _put_submission(item)
+        try:
+            _put_submission(item)
+            print(f"[upload] wrote sid={submission_id} name={name!r} types={refund_types} depts={departments}")
+        except Exception as e:  # noqa: BLE001
+            import traceback as _tb
+            print(f"[upload] FAILED to write sid={submission_id}: {e!r}")
+            print(_tb.format_exc())
+            raise
+    else:
+        print(f"[upload] WARN: no table configured; skipped DDB write for sid={submission_id}")
 
     return {
         "statusCode": 200,
@@ -2000,21 +2009,29 @@ def _claimant_reserve(event: dict[str, Any], headers: dict[str, str]) -> dict[st
     now = _now_iso()
     refund_types = [t.strip() for t in refund_type.split(",") if t.strip()]
     departments = _derive_departments(refund_types)
+    print(f"[reserve] sid={submission_id} name={name!r} types={refund_types} depts={departments}")
 
-    _put_submission(
-        {
-            "submissionId": submission_id,
-            "name": name,
-            "refundType": refund_type,
-            "departments": departments,
-            "statuses": {d: "draft" for d in departments},
-            "documents": [],
-            "submittedAt": now,
-            "updatedAt": now,
-        },
-        address=address,
-        initial_status="draft",
-    )
+    try:
+        _put_submission(
+            {
+                "submissionId": submission_id,
+                "name": name,
+                "refundType": refund_type,
+                "departments": departments,
+                "statuses": {d: "draft" for d in departments},
+                "documents": [],
+                "submittedAt": now,
+                "updatedAt": now,
+            },
+            address=address,
+            initial_status="draft",
+        )
+        print(f"[reserve] wrote sid={submission_id}")
+    except Exception as e:  # noqa: BLE001
+        import traceback as _tb
+        print(f"[reserve] FAILED to write sid={submission_id}: {e!r}")
+        print(_tb.format_exc())
+        raise
 
     return {
         "statusCode": 200,
