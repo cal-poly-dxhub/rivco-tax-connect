@@ -28,6 +28,18 @@ interface SchemasResponse {
   merged_fields: FormField[];
 }
 
+interface RequiredDoc {
+  id: string;
+  label: string;
+  required: boolean;
+}
+
+interface DocRequirementsResponse {
+  refund_types: string[];
+  docs: RequiredDoc[];
+  either_of: string[][];
+}
+
 // ── Header ─────────────────────────────────────────────────
 
 function PageHeader() {
@@ -247,9 +259,15 @@ export default function NewClaimPage() {
 
   // Full form
   const [schemas, setSchemas] = useState<SchemasResponse | null>(null);
+  const [docReqs, setDocReqs] = useState<RequiredDoc[]>([]);
   const [formValues, setFormValues] = useState<Record<string, string>>({});
   const [sigDataUrl, setSigDataUrl] = useState<string | null>(null);
-  const [files, setFiles] = useState<File[]>([]);
+  // Per-required-doc file (single each).
+  const [reqFiles, setReqFiles] = useState<Record<string, File | null>>({});
+  // Optional scanned-form fallback (single file).
+  const [scannedForm, setScannedForm] = useState<File | null>(null);
+  // Optional "other" attachments (multi-file).
+  const [otherFiles, setOtherFiles] = useState<File[]>([]);
   const [submissionId, setSubmissionId] = useState("");
   const [statusMsg, setStatusMsg] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
@@ -292,10 +310,17 @@ export default function NewClaimPage() {
   }, []);
 
   async function loadSchemas(types: string[]) {
-    const data = await apiFetch<SchemasResponse>(
-      `/form-schemas?types=${encodeURIComponent(types.join(","))}`,
-    );
+    const [data, reqs] = await Promise.all([
+      apiFetch<SchemasResponse>(
+        `/form-schemas?types=${encodeURIComponent(types.join(","))}`,
+      ),
+      apiFetch<DocRequirementsResponse>(
+        `/doc-requirements?types=${encodeURIComponent(types.join(","))}`,
+      ).catch(() => ({ refund_types: types, docs: [] as RequiredDoc[], either_of: [] as string[][] })),
+    ]);
     setSchemas(data);
+    setDocReqs(reqs.docs || []);
+    setReqFiles({});
     // Pre-fill amounts/ids from URL if available (bot handoff)
     const params = new URLSearchParams(window.location.search);
     const amounts = (params.get("amount") ?? "").split(",");
@@ -356,8 +381,9 @@ export default function NewClaimPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!sigDataUrl) {
-      setStatusMsg("Please sign the form before submitting.");
+    const usingScannedForm = !!scannedForm;
+    if (!sigDataUrl && !usingScannedForm) {
+      setStatusMsg("Please sign the form (or upload a scanned hand-filled form) before submitting.");
       return;
     }
     if (!schemas) return;
@@ -372,6 +398,15 @@ export default function NewClaimPage() {
     }
     if (missing.length > 0) {
       setStatusMsg(`Please fill required fields: ${missing.join(", ")}`);
+      return;
+    }
+
+    // Validate required documents
+    const missingDocs = docReqs
+      .filter((d) => d.required && !reqFiles[d.id])
+      .map((d) => d.label);
+    if (missingDocs.length > 0) {
+      setStatusMsg(`Please upload required documents: ${missingDocs.join(", ")}`);
       return;
     }
 
@@ -395,10 +430,33 @@ export default function NewClaimPage() {
         type: "application/json",
       });
 
-      // Build file list: unified form + any user attachments
+      // Build file list. The backend's _doc_prefix() maps "<docId>.<ext>" back
+      // to its requirement; multi-file inputs need per-file suffixes so two
+      // files don't collide on the same S3 key.
+      const ext = (f: File) => (f.name.split(".").pop() ?? "bin").toLowerCase();
+      const docFiles: { docId: string; file: File; safeName: string }[] = [];
+
+      Object.entries(reqFiles).forEach(([docId, f]) => {
+        if (f) docFiles.push({ docId, file: f, safeName: `${docId}.${ext(f)}` });
+      });
+      if (scannedForm) {
+        docFiles.push({
+          docId: "scanned-form",
+          file: scannedForm,
+          safeName: `scanned-form.${ext(scannedForm)}`,
+        });
+      }
+      otherFiles.forEach((f, i) => {
+        const base = otherFiles.length > 1 ? `other-${i + 1}` : "other";
+        docFiles.push({ docId: base, file: f, safeName: `${base}.${ext(f)}` });
+      });
+
       const fileList: { filename: string; contentType: string }[] = [
         { filename: "unified-form.json", contentType: "application/json" },
-        ...files.map((f) => ({ filename: f.name, contentType: f.type || "application/octet-stream" })),
+        ...docFiles.map((d) => ({
+          filename: d.safeName,
+          contentType: d.file.type || "application/octet-stream",
+        })),
       ];
 
       // POST /upload to get presigned URLs, passing the reserved ID so the
@@ -424,13 +482,13 @@ export default function NewClaimPage() {
           body: unifiedBlob,
         });
       }
-      for (const file of files) {
-        const slot = uploadSlots.find((u) => u.filename === file.name);
+      for (const d of docFiles) {
+        const slot = uploadSlots.find((u) => u.filename === d.safeName);
         if (slot) {
           await fetch(slot.uploadUrl, {
             method: "PUT",
-            headers: { "Content-Type": file.type || "application/octet-stream" },
-            body: file,
+            headers: { "Content-Type": d.file.type || "application/octet-stream" },
+            body: d.file,
           });
         }
       }
@@ -747,28 +805,104 @@ export default function NewClaimPage() {
                 });
               })()}
 
-              {/* File upload */}
+              {/* Supporting Documents */}
               <div className="mb-6">
                 <div
                   className="text-center text-xs font-bold uppercase tracking-widest py-2 mb-3 border-t border-b"
                   style={{ fontFamily: "Montserrat, sans-serif", borderColor: "var(--border)" }}
                 >
-                  Supporting Documents (optional)
+                  Supporting Documents
                 </div>
-                <input
-                  type="file"
-                  multiple
-                  accept=".pdf,.jpg,.jpeg,.png,.heic"
-                  onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
-                  className="text-sm w-full"
-                />
-                {files.length > 0 && (
-                  <ul className="mt-2 text-xs" style={{ color: "var(--text-muted)" }}>
-                    {files.map((f, i) => (
-                      <li key={i}>{f.name}</li>
-                    ))}
-                  </ul>
-                )}
+
+                {/* Required docs list — one labeled file box per requirement */}
+                {docReqs.map((doc) => (
+                  <div
+                    key={doc.id}
+                    className="border px-4 py-3 mb-3 flex flex-wrap items-center gap-3"
+                    style={{ borderColor: "var(--border-light)" }}
+                  >
+                    <div className="flex-1 min-w-[16rem] text-sm font-semibold">
+                      {doc.label}
+                      {doc.required && (
+                        <span
+                          className="ml-2 text-xs font-bold"
+                          style={{ color: "var(--red)" }}
+                        >
+                          Required
+                        </span>
+                      )}
+                    </div>
+                    <input
+                      type="file"
+                      accept=".pdf,.jpg,.jpeg,.png,.heic"
+                      onChange={(e) =>
+                        setReqFiles((prev) => ({
+                          ...prev,
+                          [doc.id]: e.target.files?.[0] ?? null,
+                        }))
+                      }
+                      className="text-sm"
+                    />
+                    {reqFiles[doc.id] && (
+                      <span className="text-xs" style={{ color: "var(--green, #2e7d32)" }}>
+                        ✓ {reqFiles[doc.id]?.name}
+                      </span>
+                    )}
+                  </div>
+                ))}
+
+                {/* Optional: scanned hand-filled paper form */}
+                <div
+                  className="border-2 border-dashed px-4 py-3 mb-3"
+                  style={{ borderColor: "var(--border-light)" }}
+                >
+                  <div className="text-xs font-bold uppercase tracking-wider mb-1" style={{ fontFamily: "Montserrat, sans-serif", color: "var(--text-muted)" }}>
+                    Optional: Hand-filled paper form
+                  </div>
+                  <p className="text-xs mb-2" style={{ color: "var(--text-muted)" }}>
+                    If you printed and filled this form by hand, upload a scan or photograph
+                    here instead of signing digitally below.
+                  </p>
+                  <input
+                    type="file"
+                    accept=".pdf,.jpg,.jpeg,.png,.heic"
+                    onChange={(e) => setScannedForm(e.target.files?.[0] ?? null)}
+                    className="text-sm"
+                  />
+                  {scannedForm && (
+                    <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
+                      ✓ {scannedForm.name}
+                    </div>
+                  )}
+                </div>
+
+                {/* Optional: other supporting documents */}
+                <div
+                  className="border-2 border-dashed px-4 py-3"
+                  style={{ borderColor: "var(--border-light)" }}
+                >
+                  <div className="text-xs font-bold uppercase tracking-wider mb-1" style={{ fontFamily: "Montserrat, sans-serif", color: "var(--text-muted)" }}>
+                    Optional: Other supporting documents
+                  </div>
+                  <p className="text-xs mb-2" style={{ color: "var(--text-muted)" }}>
+                    Attach any additional evidence you'd like staff to review (correspondence,
+                    payment records, etc.). You can select multiple files at once.
+                  </p>
+                  <input
+                    type="file"
+                    multiple
+                    accept=".pdf,.jpg,.jpeg,.png,.heic"
+                    onChange={(e) => setOtherFiles(Array.from(e.target.files ?? []))}
+                    className="text-sm"
+                  />
+                  {otherFiles.length > 0 && (
+                    <ul className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
+                      {otherFiles.map((f, i) => (
+                        <li key={i}>✓ {f.name}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               </div>
 
               {/* Signature */}

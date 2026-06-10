@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>riverside-county-auditor-controller-mock-chatbot</title>
+    <style>
+      :root { --navy: #0c2750; --gray: #f5f5f7; --border: #d4d4d8; --muted: #6b7280; --accent: #0c71ca; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background: var(--gray); color: #111; }
+      header {
+        background: var(--navy); color: #fff; padding: 1rem 1.25rem;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.95rem;
+      }
+      main { max-width: 720px; margin: 2rem auto 8rem; padding: 0 1rem; }
+      h2 { margin: 0 0 0.5rem; font-size: 1rem; }
+      .card {
+        background: #fff; border: 1px solid var(--border); border-radius: 8px;
+        padding: 1.25rem 1.5rem; box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+        margin-bottom: 1rem;
+      }
+      .card p, .card li { color: #333; font-size: 0.9rem; line-height: 1.55; }
+      .card p { margin: 0.4rem 0; }
+      .card ul { margin: 0.4rem 0; padding-left: 1.25rem; }
+      .card li { margin: 0.25rem 0; }
+      kbd {
+        background: var(--gray); border: 1px solid var(--border); border-bottom-width: 2px;
+        padding: 1px 6px; border-radius: 3px; font-family: ui-monospace, monospace;
+        font-size: 0.85em;
+      }
+      .pill {
+        display: inline-block; background: var(--gray); border: 1px solid var(--border);
+        padding: 1px 6px; border-radius: 3px; font-family: ui-monospace, monospace;
+        font-size: 0.85em;
+      }
+      footer { text-align: center; color: var(--muted); font-size: 0.75rem; padding: 2rem 1rem; }
+      em { color: var(--accent); font-style: normal; }
+    </style>
+  </head>
+  <body>
+    <header>riverside-county-auditor-controller-mock-chatbot</header>
+
+    <main>
+      <div class="card">
+        <h2>What this is</h2>
+        <p>An internal admin sandbox for the Riverside County Auditor-Controller chatbot. The widget on the right is the same one production claimants see embedded on auditorcontroller.org — it talks to the same WebSocket, the same Bedrock agent, and the same backend.</p>
+      </div>
+
+      <div class="card">
+        <h2>How to interact with the bot</h2>
+        <ul>
+          <li><strong>Give a name</strong> — try <em>"My name is Carey Ministries"</em> or just <em>"Carey Ministries"</em>. The bot fuzzy-matches against the demo dataset.</li>
+          <li><strong>Address quiz</strong> — after a name match, you'll see 4 street-name buttons. Pick the right one (the bot won't tell you which) to continue.</li>
+          <li><strong>House number</strong> — enter the street number and click <kbd>Verify</kbd>.</li>
+          <li><strong>Refunds reveal</strong> — once verified, the bot lists every refund on file with amount + deadline + a personalized claim-portal link.</li>
+          <li><strong>Live-agent handoff</strong> — type <em>"I'd like to talk to a person"</em> to exercise the reference-number flow. The handoff appears on the admin dashboard's <em>Chat handoffs</em> page.</li>
+          <li><strong>FAQ questions</strong> — try <em>"How long does it take to process a claim?"</em> or <em>"Is there a deadline?"</em>.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h2>The two buttons in the chat header</h2>
+        <ul>
+          <li><kbd>↻</kbd> <strong>Restart</strong> — fully resets the conversation. Clears the transcript, drops your verification status, and starts a new session ID. Use this between test scenarios so prior verification can't leak across.</li>
+          <li><kbd>×</kbd> <strong>Close</strong> — does <em>nothing useful on this page</em>. The widget normally closes back to a chat bubble; on the tester the bubble is hidden so closing leaves a blank page. Refresh to bring the chat back.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h2>What persists across page loads</h2>
+        <ul>
+          <li><strong>In this tab:</strong> the session ID stays in <span class="pill">sessionStorage</span>, so reloading the page (without hitting <kbd>↻</kbd>) keeps your conversation, identity verification, and lockout state intact on the server.</li>
+          <li><strong>Closing the tab:</strong> the session ID is cleared. A new tab gets a brand-new session.</li>
+          <li><strong>Server-side:</strong> conversation transcripts and verification state live in DynamoDB and persist regardless of what your browser does. Restart wipes the client-side reference but the old transcript is still on the admin dashboard.</li>
+          <li><strong>Lockouts:</strong> 5 wrong street/number guesses lock the session for 1 hour. Lockouts are server-side and tied to the submission, so opening a new tab won't bypass them.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h2>Things to watch for during testing</h2>
+        <ul>
+          <li>Same name twice should produce <em>identical</em> 4 street options — quiz decoys are deterministic per claimant.</li>
+          <li>The bot should never reveal refund details before identity is verified.</li>
+          <li>Wrong-street guesses should fail gracefully without telling you which was correct.</li>
+          <li>The portal link in the refunds reply should land on the v3 claimant portal (CloudFront URL, not the v2 stack).</li>
+        </ul>
+      </div>
+    </main>
+
+    <footer>County of Riverside · Office of the Auditor-Controller — internal testing</footer>
+
+    <!-- Production chat widget. config.js sets WS_ENDPOINT and RCAC_CHAT_AUTO_OPEN. -->
+    <link rel="stylesheet" href="./chat-widget.css" />
+    <script src="./config.js"></script>
+    <script src="./chat-widget.js" async></script>
+  </body>
+</html>

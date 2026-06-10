@@ -155,11 +155,9 @@ export default function DashboardPage() {
           <h1 className="font-medium">Riverside County — Admin Dashboard</h1>
           <div className="flex gap-2">
             <ThemeToggle />
+            <Link href="/dashboard/chat"><Button variant="outline">Chat handoffs</Button></Link>
             {perms?.isSuperAdmin && (
-              <>
-                <Link href="/dashboard/chat"><Button variant="outline">Chat handoffs</Button></Link>
-                <Link href="/dashboard/config"><Button variant="outline">Admin config</Button></Link>
-              </>
+              <Link href="/dashboard/config"><Button variant="outline">Admin config</Button></Link>
             )}
             <Button variant="outline" onClick={onSignOut}>Sign out</Button>
           </div>
@@ -202,9 +200,8 @@ export default function DashboardPage() {
             <TableRow>
               <TableHead>Name</TableHead>
               {perms?.isSuperAdmin && <TableHead>Type</TableHead>}
-              <TableHead>Departments</TableHead>
+              {perms?.isSuperAdmin && <TableHead>Departments</TableHead>}
               <TableHead>Status</TableHead>
-              <TableHead>Tasks</TableHead>
               <TableHead>Submitted</TableHead>
               <TableHead></TableHead>
             </TableRow>
@@ -214,8 +211,6 @@ export default function DashboardPage() {
               const visibleDepts = deptFilter === "all"
                 ? Object.keys(s.statuses)
                 : Object.keys(s.statuses).filter((d) => d === deptFilter)
-              const allTasks = visibleDepts.flatMap((d) => s.tasksByDepartment[d] || [])
-              const taskDone = allTasks.filter((t) => t.done).length
               return (
                 <TableRow key={s.submissionId} className="cursor-pointer" onClick={() => setSelected(s)}>
                   <TableCell className="font-medium">
@@ -239,11 +234,13 @@ export default function DashboardPage() {
                       ))}
                     </TableCell>
                   )}
-                  <TableCell>
-                    {s.departments.length ? s.departments.map((d) => (
-                      <Badge key={d} variant="outline" className="mr-1">{d}</Badge>
-                    )) : <span className="text-muted-foreground">—</span>}
-                  </TableCell>
+                  {perms?.isSuperAdmin && (
+                    <TableCell>
+                      {s.departments.length ? s.departments.map((d) => (
+                        <Badge key={d} variant="outline" className="mr-1">{d}</Badge>
+                      )) : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                  )}
                   <TableCell onClick={(e) => e.stopPropagation()} className="space-y-1">
                     {visibleDepts.map((dept) => (
                       <div key={dept} className="flex items-center gap-2">
@@ -264,7 +261,6 @@ export default function DashboardPage() {
                       </div>
                     ))}
                   </TableCell>
-                  <TableCell className="text-sm">{taskDone}/{allTasks.length}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     {s.submittedAt ? new Date(s.submittedAt).toLocaleDateString() : "—"}
                   </TableCell>
@@ -342,23 +338,6 @@ function SubmissionDetail({ submission }: { submission: Submission }) {
           <div>
             <p className="text-muted-foreground text-xs">ID: {submission.submissionId}</p>
             <p className="text-muted-foreground text-xs">{Array.from(new Set(submission.refundType.split(","))).join(", ")}</p>
-          </div>
-          <div>
-            <p className="font-medium">Tasks</p>
-            <div className="mt-1 space-y-3">
-              {Object.entries(submission.tasksByDepartment).map(([dept, tasks]) => (
-                <div key={dept}>
-                  <p className="text-xs text-muted-foreground uppercase tracking-wide">{dept}</p>
-                  <ul className="space-y-1">
-                    {tasks.map((t, i) => (
-                      <li key={i} className={t.done ? "text-green-700" : "text-muted-foreground"}>
-                        {t.done ? "✓" : "○"} {t.label}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
-            </div>
           </div>
           <div>
             <p className="font-medium">Files {pkg && `(${pkg.files.length})`}</p>

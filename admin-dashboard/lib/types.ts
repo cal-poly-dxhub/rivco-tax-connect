@@ -65,18 +65,23 @@ export type StatusResponse = {
 
 export type Department = { key: string; label: string; refund_types: string[] }
 export type AdminUser = { username: string; email: string; groups: string[]; notifyEmail: boolean; createdAt: string }
+export type RefundType = { key: string; label: string; isDefault: boolean }
 
 export type AdminConfig = {
   departments: Department[]
   users: AdminUser[]
   refundTypeLabels: Record<string, string>
+  refundTypes: RefundType[]
 }
 
 export const STATUSES: StatusValue[] = [
   "partial", "uploaded", "under-review", "approved", "denied",
 ]
 
-export const REFUND_TYPES = ["STALE_WARRANT", "PAYROLL", "PROPERTY_TAX"] as const
+// Legacy seed list — used as a fallback when the API's refundTypes is missing
+// (older backend) and as the authoritative set for any refund-type-specific
+// hard-coded UI logic (e.g. the AP-13 PDF overlay).
+export const LEGACY_REFUND_TYPES = ["STALE_WARRANT", "PAYROLL", "PROPERTY_TAX"] as const
 
 export type FormField = {
   id: string

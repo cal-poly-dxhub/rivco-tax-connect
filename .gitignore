@@ -9,12 +9,12 @@ cdk.out/
 .cdk.staging/
 
 # Dependencies installed in runtime
-bot/runtime/*.so
-bot/runtime/*.dist-info/
-bot/runtime/jellyfish/
-bot/runtime/bs4/
-bot/runtime/soupsieve/
-bot/runtime/typing_extensions.py
+cdk/runtime/*.so
+cdk/runtime/*.dist-info/
+cdk/runtime/jellyfish/
+cdk/runtime/bs4/
+cdk/runtime/soupsieve/
+cdk/runtime/typing_extensions.py
 
 # IDE
 .vscode/
@@ -51,8 +51,14 @@ RCAC-Logo-Final.png
 
 *.md
 !README.md
+!cdk/chat_system_prompt.md
 
 # Local-only chat-history scratch file at the repo root.
 /chat
 *.drawio
 .claude/worktrees/
+
+# Next.js build/install artifacts (chat-tester, claimant-portal, admin-dashboard)
+**/node_modules/
+**/.next/
+**/out/

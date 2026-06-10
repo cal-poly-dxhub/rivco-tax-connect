@@ -27,6 +27,7 @@ from aws_cdk import (
     aws_ses as ses,
     aws_ssm as ssm,
     aws_wafv2 as wafv2,
+    aws_secretsmanager as secretsmanager,
     aws_cloudwatch as cloudwatch,
     custom_resources as cr,
 )
@@ -157,10 +158,18 @@ def _build_chat(stack, cfg, proj, fn):
         sort_key=dynamodb.Attribute(name="gsi1sk", type=dynamodb.AttributeType.STRING),
     )
 
+    # System prompt lives next to the CDK code (not in config.yaml) so it can
+    # be edited as plain markdown. SSM still gets the value on every deploy;
+    # the parameter itself remains the live-editable source of truth at
+    # runtime, so post-deploy edits should go through SSM, not by re-running
+    # `cdk deploy` (which would clobber them).
+    _prompt_path = os.path.join(os.path.dirname(__file__), "chat_system_prompt.md")
+    with open(_prompt_path) as _pf:
+        _prompt_text = _pf.read()
     prompt_param = ssm.StringParameter(
         stack, "ChatSystemPrompt",
         parameter_name=f"/{proj}/chat/system-prompt",
-        string_value=cfg["prompts"]["ai_orchestration"],
+        string_value=_prompt_text,
         description="Bedrock Claude system prompt for the auditor chat agent",
         tier=ssm.ParameterTier.ADVANCED,
     )
@@ -418,6 +427,7 @@ def _build_upload_api(stack, cfg, proj, uploads_bucket, chat_table, portal_origi
             "cognito-idp:AdminRemoveUserFromGroup", "cognito-idp:AdminListGroupsForUser",
             "cognito-idp:AdminGetUser", "cognito-idp:ListUsers",
             "cognito-idp:ListUsersInGroup", "cognito-idp:CreateGroup", "cognito-idp:DeleteGroup",
+            "cognito-idp:GetGroup",
         ],
         resources=[user_pool.user_pool_arn],
     ))
@@ -564,13 +574,16 @@ def _build_admin_dashboard(stack, cfg, proj, upload_api, user_pool, user_pool_cl
             build_image=codebuild.LinuxBuildImage.STANDARD_7_0,
             compute_type=codebuild.ComputeType.SMALL,
         ),
-        artifacts=codebuild.Artifacts.s3(
-            bucket=admin_bucket, include_build_id=False, package_zip=False, name="/", encryption=False,
-        ),
+        # No `artifacts` here — we sync directly with `aws s3 sync --delete`
+        # in post_build. CodeBuild's default Artifacts.s3 only ADDs files;
+        # stale chunks from prior builds linger forever and get re-served
+        # from S3 even after the new index.html stops referencing them.
         environment_variables={
             "API_URL": codebuild.BuildEnvironmentVariable(value=upload_api.url.rstrip("/")),
             "USER_POOL_ID": codebuild.BuildEnvironmentVariable(value=user_pool.user_pool_id),
             "USER_POOL_CLIENT_ID": codebuild.BuildEnvironmentVariable(value=user_pool_client.user_pool_client_id),
+            "TARGET_BUCKET": codebuild.BuildEnvironmentVariable(value=admin_bucket.bucket_name),
+            "DISTRIBUTION_ID": codebuild.BuildEnvironmentVariable(value=admin_distribution.distribution_id),
         },
         build_spec=codebuild.BuildSpec.from_object({
             "version": "0.2",
@@ -585,8 +598,14 @@ def _build_admin_dashboard(stack, cfg, proj, upload_api, user_pool, user_pool_cl
                         "yarn build",
                     ],
                 },
+                "post_build": {
+                    "commands": [
+                        'cd "$CODEBUILD_SRC_DIR"',
+                        'aws s3 sync admin-dashboard/out/ "s3://$TARGET_BUCKET/" --delete',
+                        'aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths "/*"',
+                    ],
+                },
             },
-            "artifacts": {"base-directory": "admin-dashboard/out", "files": ["**/*"]},
         }),
         logging=codebuild.LoggingOptions(
             cloud_watch=codebuild.CloudWatchLoggingOptions(
@@ -599,7 +618,9 @@ def _build_admin_dashboard(stack, cfg, proj, upload_api, user_pool, user_pool_cl
         ),
     )
     admin_distribution.grant(admin_build.role, "cloudfront:CreateInvalidation")
-    admin_bucket.grant_write(admin_build)
+    # `aws s3 sync --delete` reads existing objects to compare ETags + lists
+    # the bucket; grant_write alone misses ListBucket/GetObject.
+    admin_bucket.grant_read_write(admin_build)
 
     trigger = cr.AwsCustomResource(
         stack, "TriggerAdminBuild",
@@ -678,27 +699,38 @@ def _build_claimant_portal(stack, cfg, proj, upload_api, upload_fn, fn, admin_di
             build_image=codebuild.LinuxBuildImage.STANDARD_7_0,
             compute_type=codebuild.ComputeType.SMALL,
         ),
-        artifacts=codebuild.Artifacts.s3(
-            bucket=claimant_bucket, include_build_id=False, package_zip=False, name="/", encryption=False,
-        ),
+        # No `artifacts` — see admin_build for rationale. We sync with --delete
+        # in post_build so stale Next chunks from prior builds don't linger.
         environment_variables={
             "API_URL": codebuild.BuildEnvironmentVariable(value=upload_api.url.rstrip("/")),
+            "TARGET_BUCKET": codebuild.BuildEnvironmentVariable(value=claimant_bucket.bucket_name),
+            "DISTRIBUTION_ID": codebuild.BuildEnvironmentVariable(value=claimant_distribution.distribution_id),
         },
         build_spec=codebuild.BuildSpec.from_object({
             "version": "0.2",
             "phases": {
                 "install": {
                     "runtime-versions": {"nodejs": "22"},
-                    "commands": ["cd claimant-portal", "corepack enable", "yarn install --immutable"],
+                    "commands": [
+                        "corepack enable || npm install -g yarn",
+                        "cd claimant-portal",
+                        "if [ -f yarn.lock ]; then yarn install --immutable; else npm ci; fi",
+                    ],
                 },
                 "build": {
                     "commands": [
                         'printf \'window.__CLAIMANT_CONFIG__ = {"API_URL":"%s"};\\n\' "$API_URL" > public/config.js',
-                        "yarn build",
+                        'if [ -f yarn.lock ]; then yarn build; else npm run build; fi',
+                    ],
+                },
+                "post_build": {
+                    "commands": [
+                        'cd "$CODEBUILD_SRC_DIR"',
+                        'aws s3 sync claimant-portal/out/ "s3://$TARGET_BUCKET/" --delete',
+                        'aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths "/*"',
                     ],
                 },
             },
-            "artifacts": {"base-directory": "claimant-portal/out", "files": ["**/*"]},
         }),
         logging=codebuild.LoggingOptions(
             cloud_watch=codebuild.CloudWatchLoggingOptions(
@@ -711,7 +743,9 @@ def _build_claimant_portal(stack, cfg, proj, upload_api, upload_fn, fn, admin_di
         ),
     )
     claimant_distribution.grant(claimant_build.role, "cloudfront:CreateInvalidation")
-    claimant_bucket.grant_write(claimant_build)
+    # `aws s3 sync --delete` reads existing objects to compare ETags + lists
+    # the bucket; grant_write alone misses ListBucket/GetObject.
+    claimant_bucket.grant_read_write(claimant_build)
 
     claimant_trigger = cr.AwsCustomResource(
         stack, "TriggerClaimantBuild",
@@ -734,7 +768,20 @@ def _build_claimant_portal(stack, cfg, proj, upload_api, upload_fn, fn, admin_di
     claimant_trigger.node.add_dependency(claimant_build)
 
     fn.add_environment("UPLOAD_PORTAL_URL", f"https://{claimant_distribution.distribution_domain_name}")
-    upload_fn.add_environment("CLAIMANT_SECRET", "CHANGEME-set-in-ssm")
+
+    # Real claimant-token signing secret. Secrets Manager generates the value
+    # once on first deploy and persists it across redeploys; the lambda fetches
+    # it at cold-start via boto3 (so the value never lands in the CFN template).
+    claimant_secret = secretsmanager.Secret(
+        stack, "ClaimantSecret",
+        description="HMAC key for signing claimant session tokens",
+        generate_secret_string=secretsmanager.SecretStringGenerator(
+            password_length=48,
+            exclude_punctuation=True,
+        ),
+    )
+    claimant_secret.grant_read(upload_fn)
+    upload_fn.add_environment("CLAIMANT_SECRET_ARN", claimant_secret.secret_arn)
     upload_fn.add_environment(
         "ALLOWED_ORIGINS",
         f"{portal_origin},"
@@ -752,7 +799,10 @@ def _build_notifications(stack, cfg, proj, submissions_table, admin_config_table
     notif_cfg = cfg.get("notifications") or {}
     notif_sender = notif_cfg.get("sender", "")
 
-    if notif_sender:
+    # `manage_ses_identity: false` lets a parallel stack reuse a sender that
+    # was verified by another stack or out-of-band. CloudFormation can't import
+    # an existing SES identity so re-creating it would fail with "already exists".
+    if notif_sender and notif_cfg.get("manage_ses_identity", True):
         ses.EmailIdentity(
             stack, "NotificationSenderIdentity",
             identity=ses.Identity.email(notif_sender),
@@ -794,13 +844,20 @@ def _build_notifications(stack, cfg, proj, submissions_table, admin_config_table
 
 def _build_security(stack, cfg, proj, upload_api, uploads_bucket, s3_key, chat_fn, upload_fn, notif_fn, fn):
     """GuardDuty Malware Protection, WAF, CloudWatch alarms."""
-    guardduty.CfnDetector(
-        stack, "GuardDutyDetector",
-        enable=True,
-        features=[guardduty.CfnDetector.CFNFeatureConfigurationProperty(
-            name="S3_DATA_EVENTS", status="ENABLED",
-        )],
-    )
+    # GuardDuty allows only one detector per account/region; a parallel stack
+    # in the same account must NOT try to create a second one. Set
+    # `security.manage_guardduty_detector: false` when reusing a detector
+    # already created by another stack. The MalwareProtectionPlan below is
+    # bucket-scoped and safe to create independently.
+    sec_cfg = cfg.get("security") or {}
+    if sec_cfg.get("manage_guardduty_detector", True):
+        guardduty.CfnDetector(
+            stack, "GuardDutyDetector",
+            enable=True,
+            features=[guardduty.CfnDetector.CFNFeatureConfigurationProperty(
+                name="S3_DATA_EVENTS", status="ENABLED",
+            )],
+        )
     malware_role = iam.Role(
         stack, "MalwareProtectionRole",
         assumed_by=iam.ServicePrincipal("malware-protection-plan.guardduty.amazonaws.com"),
@@ -889,11 +946,16 @@ def _build_security(stack, cfg, proj, upload_api, uploads_bucket, s3_key, chat_f
             ),
         ],
     )
-    wafv2.CfnWebACLAssociation(
+    waf_assoc = wafv2.CfnWebACLAssociation(
         stack, "ApiWafAssociation",
         resource_arn=f"arn:aws:apigateway:{stack.region}::/restapis/{upload_api.rest_api_id}/stages/prod",
         web_acl_arn=waf_acl.attr_arn,
     )
+    # Explicit dependency: the WAF association references the `prod` stage by
+    # ARN string, so CFN can't infer that the stage must exist first. On a
+    # cold deploy the association tries to attach before the stage finishes
+    # creating and fails with "resource doesn't exist".
+    waf_assoc.node.add_dependency(upload_api.deployment_stage)
 
     alarm_topic_arn = (cfg.get("monitoring") or {}).get("alarm_sns_topic_arn", "")
 
@@ -933,6 +995,61 @@ def _build_security(stack, cfg, proj, upload_api, uploads_bucket, s3_key, chat_f
            threshold=1, description="Notification/ingestion Lambda any error")
 
     CfnOutput(stack, "WafAclArn", value=waf_acl.attr_arn)
+
+
+# ── Optional: chat-tester admin tool ──────────────────────────────────────────
+# A throwaway page that hosts the production chat-widget for internal testing.
+# Static HTML + CSS + JS shipped via BucketDeployment — no CodeBuild, no
+# Next.js build step. Gated by `chat_tester.enabled: true` in config.yaml so
+# the whole thing comes out cleanly with one flag flip.
+
+def _build_chat_tester(stack, cfg, proj, ws_api, ws_stage):
+    """Self-contained admin chatbot tester (static S3 site hosting the widget)."""
+    tester_cfg = cfg.get("chat_tester") or {}
+    if not tester_cfg.get("enabled", False):
+        return None
+
+    bucket = s3.Bucket(
+        stack, "ChatTesterBucket",
+        bucket_name=f"{proj}-chat-tester-{stack.account}",
+        removal_policy=RemovalPolicy.DESTROY,
+        auto_delete_objects=True,
+        website_index_document="index.html",
+        public_read_access=True,
+        block_public_access=s3.BlockPublicAccess(
+            block_public_acls=False, block_public_policy=False,
+            ignore_public_acls=False, restrict_public_buckets=False,
+        ),
+    )
+
+    ws_endpoint = f"wss://{ws_api.api_id}.execute-api.{stack.region}.amazonaws.com/{ws_stage.stage_name}"
+    # Opt the widget into auto-open mode for the tester page only — production
+    # embeds load the unmodified widget via the shared chat-widget.js bundle.
+    config_js = (
+        f'window.WS_ENDPOINT = "{ws_endpoint}";\n'
+        f'window.RCAC_CHAT_AUTO_OPEN = true;\n'
+    )
+
+    s3deploy.BucketDeployment(
+        stack, "ChatTesterDeployment",
+        sources=[
+            # Host page (chat-tester/index.html).
+            s3deploy.Source.asset("chat-tester"),
+            # Reuse the production widget's CSS + JS so this tester always
+            # exercises whatever the public site would. Excludes everything
+            # that isn't the widget.
+            s3deploy.Source.asset(
+                "cdk/upload_portal",
+                exclude=["index.html", "forms/**", "images/**", "lib/**"],
+            ),
+            # Inject the WebSocket endpoint the widget reads at startup.
+            s3deploy.Source.data("config.js", config_js),
+        ],
+        destination_bucket=bucket,
+    )
+
+    CfnOutput(stack, "ChatTesterUrl", value=bucket.bucket_website_url)
+    return bucket
 
 
 # ── Stack ─────────────────────────────────────────────────────────────────────
@@ -983,3 +1100,4 @@ class RiversideTaxRefundStack(Stack):
         _build_claimant_portal(self, cfg, proj, upload_api, upload_fn, fn, admin_distribution, portal_origin)
         notif_fn = _build_notifications(self, cfg, proj, submissions_table, admin_config_table, user_pool, admin_distribution)
         _build_security(self, cfg, proj, upload_api, uploads_bucket, s3_key, chat_fn, upload_fn, notif_fn, fn)
+        _build_chat_tester(self, cfg, proj, ws_api, ws_stage)
