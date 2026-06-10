@@ -366,7 +366,7 @@
   }
 
   // ── UI events ────────────────────────────────────────────────
-  toggleBtn.addEventListener("click", () => {
+  function openPanel() {
     panel.hidden = false;
     toggleBtn.hidden = true;
     ensureSocket();
@@ -374,7 +374,8 @@
       renderWelcome();
     }
     input.focus();
-  });
+  }
+  toggleBtn.addEventListener("click", openPanel);
   closeBtn.addEventListener("click", () => {
     panel.hidden = true;
     toggleBtn.hidden = false;
@@ -393,4 +394,12 @@
     input.value = "";
     input.disabled = true;
   });
+
+  // Opt-in auto-open: hosts that set window.RCAC_CHAT_AUTO_OPEN = true before
+  // this script loads (or via config.js) get the panel open immediately with
+  // the toggle bubble suppressed. Used by the internal chat-tester page.
+  if (window.RCAC_CHAT_AUTO_OPEN) {
+    toggleBtn.style.display = "none";
+    openPanel();
+  }
 })();

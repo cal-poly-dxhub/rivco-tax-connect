@@ -1023,7 +1023,12 @@ def _build_chat_tester(stack, cfg, proj, ws_api, ws_stage):
     )
 
     ws_endpoint = f"wss://{ws_api.api_id}.execute-api.{stack.region}.amazonaws.com/{ws_stage.stage_name}"
-    config_js = f'window.WS_ENDPOINT = "{ws_endpoint}";\n'
+    # Opt the widget into auto-open mode for the tester page only — production
+    # embeds load the unmodified widget via the shared chat-widget.js bundle.
+    config_js = (
+        f'window.WS_ENDPOINT = "{ws_endpoint}";\n'
+        f'window.RCAC_CHAT_AUTO_OPEN = true;\n'
+    )
 
     s3deploy.BucketDeployment(
         stack, "ChatTesterDeployment",
