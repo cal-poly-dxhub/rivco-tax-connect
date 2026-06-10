@@ -16,7 +16,7 @@ function ChatSessionPageInner() {
   const searchParams = useSearchParams()
   const id = searchParams.get("id") || ""
   const router = useRouter()
-  const { ready } = useAuthGate({ requireSuperAdmin: true })
+  const { ready, isSuperAdmin } = useAuthGate()
   const { data, error: loadError, loading, reload, setData } = useApi<ChatSessionDetail>(
     `/admin/chat-sessions/${id}`,
     { enabled: ready && !!id, deps: [id] },
@@ -114,12 +114,14 @@ function ChatSessionPageInner() {
               {data.handoff.reason && (
                 <div><strong>Reason:</strong> {data.handoff.reason}</div>
               )}
-              <div className="flex gap-2 pt-2">
-                {data.handoff.refNumber && !data.handoff.resolved && (
-                  <Button size="sm" onClick={resolve} disabled={busy}>Mark resolved</Button>
-                )}
-                <Button size="sm" variant="ghost" onClick={remove} disabled={busy}>Delete session</Button>
-              </div>
+              {isSuperAdmin && (
+                <div className="flex gap-2 pt-2">
+                  {data.handoff.refNumber && !data.handoff.resolved && (
+                    <Button size="sm" onClick={resolve} disabled={busy}>Mark resolved</Button>
+                  )}
+                  <Button size="sm" variant="ghost" onClick={remove} disabled={busy}>Delete session</Button>
+                </div>
+              )}
             </div>
 
             <div className="rounded-md border p-4 flex flex-col gap-3">

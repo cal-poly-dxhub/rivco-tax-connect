@@ -936,15 +936,21 @@ def _username_from_email(email: str) -> str:
 
 
 def _handle_admin(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
-    _, is_super = _auth(event)
-    if not is_super:
-        return _err(403, "Super-admin only", headers)
+    dept_keys, is_super = _auth(event)
     if not admin_table or not USER_POOL_ID:
         return _err(500, "Admin backend not configured", headers)
 
     path = (event.get("pathParameters") or {}).get("proxy", "")
     method = event.get("httpMethod", "GET")
     parts = path.split("/") if path else []
+
+    # Chat-handoff *read* paths are open to any authenticated admin (handoffs
+    # may need to be picked up by whichever department's admin is on call).
+    # Mutating actions (resolve/delete) stay super-admin-only and are gated
+    # inside their handlers.
+    chat_read_open = parts[:1] == ["chat-sessions"] and method == "GET"
+    if not is_super and not chat_read_open:
+        return _err(403, "Super-admin only", headers)
 
     # /admin/config (GET)
     if path == "config" and method == "GET":
@@ -996,11 +1002,19 @@ def _handle_admin(event: dict[str, Any], headers: dict[str, str]) -> dict[str, A
     if parts[:1] == ["chat-sessions"]:
         if len(parts) == 1 and method == "GET":
             return _admin_list_chat_sessions(event, headers)
+        # GET /admin/chat-sessions/by-ref/<refNumber> — open to all admins,
+        # so on-call staff can paste a quoted reference and pull the transcript.
+        if len(parts) == 3 and parts[1] == "by-ref" and method == "GET":
+            return _admin_get_chat_session_by_ref(parts[2], headers)
         if len(parts) == 2 and method == "GET":
             return _admin_get_chat_session(parts[1], headers)
         if len(parts) == 3 and parts[2] == "resolve" and method == "POST":
+            if not is_super:
+                return _err(403, "Super-admin only", headers)
             return _admin_resolve_chat_handoff(parts[1], headers)
         if len(parts) == 2 and method == "DELETE":
+            if not is_super:
+                return _err(403, "Super-admin only", headers)
             return _admin_delete_chat_session(parts[1], headers)
 
     return _err(404, f"Unknown admin route: {method} {path}", headers)
@@ -1845,6 +1859,37 @@ def _admin_get_chat_session(session_id: str, headers: dict[str, str]) -> dict[st
     messages.sort(key=lambda m: m["timestamp"])
     return {"statusCode": 200, "headers": headers,
             "body": json.dumps({"meta": meta, "handoff": handoff, "messages": messages})}
+
+
+_REF_NUMBER = re.compile(r'^[A-Z0-9-]{3,32}$')
+
+
+def _admin_get_chat_session_by_ref(ref_number: str, headers: dict[str, str]) -> dict[str, Any]:
+    """Look up the session that owns a given handoff reference number.
+
+    Reference numbers are short (e.g. REF-A1B2C) so a filtered scan over
+    HANDOFF rows is cheap and keeps the chat-sessions table free of an extra
+    GSI. Returns the same shape as ``_admin_get_chat_session`` once the
+    matching session is found.
+    """
+    if not chat_table:
+        return _err(500, "Chat backend not configured", headers)
+    ref = (ref_number or "").strip().upper()
+    if not _REF_NUMBER.match(ref):
+        return _err(400, "Invalid reference number", headers)
+    items = _scan_all(
+        chat_table,
+        FilterExpression="sk = :h AND refNumber = :r",
+        ExpressionAttributeValues={":h": "HANDOFF", ":r": ref},
+    )
+    if not items:
+        return _err(404, "No handoff matches that reference number", headers)
+    # If multiple sessions share the same ref (shouldn't happen, but defend),
+    # use the most-recently-requested one.
+    items.sort(key=lambda it: it.get("requestedAt", ""), reverse=True)
+    session_pk = items[0]["pk"]
+    session_id = session_pk.split("#", 1)[1] if "#" in session_pk else session_pk
+    return _admin_get_chat_session(session_id, headers)
 
 
 def _admin_resolve_chat_handoff(session_id: str, headers: dict[str, str]) -> dict[str, Any]:

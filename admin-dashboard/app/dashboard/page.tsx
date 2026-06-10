@@ -155,11 +155,9 @@ export default function DashboardPage() {
           <h1 className="font-medium">Riverside County — Admin Dashboard</h1>
           <div className="flex gap-2">
             <ThemeToggle />
+            <Link href="/dashboard/chat"><Button variant="outline">Chat handoffs</Button></Link>
             {perms?.isSuperAdmin && (
-              <>
-                <Link href="/dashboard/chat"><Button variant="outline">Chat handoffs</Button></Link>
-                <Link href="/dashboard/config"><Button variant="outline">Admin config</Button></Link>
-              </>
+              <Link href="/dashboard/config"><Button variant="outline">Admin config</Button></Link>
             )}
             <Button variant="outline" onClick={onSignOut}>Sign out</Button>
           </div>
