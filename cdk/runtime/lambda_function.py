@@ -262,8 +262,15 @@ def sanitize_input(value: str, max_len: int = 200) -> str:
     return cleaned[:max_len]
 
 
-def generate_decoy_streets(real_address: str, count: int = 3) -> list[str]:
-    """Pick decoy street names from other records, preferring same city/state."""
+def generate_decoy_streets(real_address: str, count: int = 3, seed_key: str = "") -> list[str]:
+    """Pick decoy street names from other records, preferring same city/state.
+
+    Deterministic when ``seed_key`` is non-empty: the same key always yields
+    the same decoy set + ordering for a given dataset. The full quiz options
+    (real + decoys) are also re-shuffled deterministically by the caller, so
+    a claimant who restarts the flow sees an identical 4-button quiz instead
+    of a freshly-randomized one.
+    """
     records = load_records()
     real_street = extract_street(real_address)
     real_city_state = ','.join(real_address.split(',')[1:]).strip()
@@ -272,8 +279,8 @@ def generate_decoy_streets(real_address: str, count: int = 3) -> list[str]:
     all_addresses.discard(real_address)
 
     # Prefer addresses in the same city/state for realistic decoys
-    same_area = [a for a in all_addresses if ','.join(a.split(',')[1:]).strip() == real_city_state]
-    other_area = [a for a in all_addresses if a not in same_area]
+    same_area = sorted(a for a in all_addresses if ','.join(a.split(',')[1:]).strip() == real_city_state)
+    other_area = sorted(a for a in all_addresses if a not in same_area)
 
     pool = same_area + other_area
     # Extract streets and deduplicate
@@ -286,7 +293,8 @@ def generate_decoy_streets(real_address: str, count: int = 3) -> list[str]:
             seen.add(street.lower())
 
     decoys = candidate_streets[:count * 3]  # oversample then pick
-    random.shuffle(decoys)
+    rng = random.Random(seed_key) if seed_key else random
+    rng.shuffle(decoys)
     return decoys[:count]
 
 
@@ -381,9 +389,13 @@ def lookup(name: str, street: str = '', number: str = '') -> str:
     # Step 1 — present the decoy quiz, ask which street.
     if not street:
         real_street_name = street_name_only(real_address)
-        decoy_addrs = generate_decoy_streets(real_address, count=3)
+        # Deterministic seed: a given (canonical name + real address) always
+        # produces the same 4-option quiz. Means the chatbot tester and the
+        # claimant portal show identical decoys for the same person.
+        seed_key = f"{best_name.upper()}|{real_address.upper()}"
+        decoy_addrs = generate_decoy_streets(real_address, count=3, seed_key=seed_key)
         options = [real_street_name] + [street_name_only(a) for a in decoy_addrs]
-        random.shuffle(options)
+        random.Random(seed_key).shuffle(options)
         return json.dumps({
             'address_verification': 'street',
             'name': best_name,

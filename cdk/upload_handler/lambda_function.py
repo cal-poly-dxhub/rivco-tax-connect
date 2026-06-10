@@ -11,6 +11,40 @@ from botocore.config import Config
 s3 = boto3.client("s3", config=Config(signature_version="s3v4"))
 dynamodb = boto3.resource("dynamodb")
 cognito = boto3.client("cognito-idp")
+secrets_client = boto3.client("secretsmanager")
+
+
+def _get_claimant_secret() -> str:
+    """Return the HMAC key for signing claimant tokens, fetched lazily and
+    cached on the warm-container module level.
+
+    Resolution order:
+      1. CLAIMANT_SECRET — explicit value (legacy / local dev)
+      2. CLAIMANT_SECRET_ARN — Secrets Manager secret created by CDK
+      3. fall back to the dev placeholder + log a warning so behavior never
+         silently fails (claimant tokens just won't be valid across restarts)
+    """
+    cached = getattr(_get_claimant_secret, "_cached", None)
+    if cached:
+        return cached
+    direct = os.environ.get("CLAIMANT_SECRET", "").strip()
+    if direct and direct != "CHANGEME-set-in-ssm":
+        _get_claimant_secret._cached = direct  # type: ignore[attr-defined]
+        return direct
+    arn = os.environ.get("CLAIMANT_SECRET_ARN", "").strip()
+    if arn:
+        try:
+            resp = secrets_client.get_secret_value(SecretId=arn)
+            value = resp.get("SecretString") or ""
+            if value:
+                _get_claimant_secret._cached = value  # type: ignore[attr-defined]
+                return value
+        except Exception as e:  # noqa: BLE001
+            print(f"[claimant-secret] failed to fetch {arn}: {e!r}")
+    print("[claimant-secret] WARN: no real secret configured; using insecure dev default")
+    return "dev-secret-change-me"
+
+
 BUCKET = os.environ["UPLOAD_BUCKET"]
 TABLE_NAME = os.environ.get("TABLE_NAME", "")
 ADMIN_CONFIG_TABLE = os.environ.get("ADMIN_CONFIG_TABLE", "")
@@ -1899,14 +1933,25 @@ def _street_name_only(street: str) -> str:
     return street.strip()
 
 
-def _generate_decoy_streets(real_address: str, all_addresses: list[str], count: int = 3) -> list[str]:
-    """Pick `count` distinct street strings that differ from `real_address`."""
+def _generate_decoy_streets(
+    real_address: str, all_addresses: list[str], count: int = 3, seed_key: str = "",
+) -> list[str]:
+    """Pick `count` distinct street strings that differ from `real_address`.
+
+    Deterministic when ``seed_key`` is set: same key + same dataset → same
+    decoys + ordering. Used to keep the address-quiz options stable across
+    repeated requests for the same submission, so a claimant who hits Refresh
+    or restarts the flow sees the same 4 buttons.
+    """
     import random
     real_street = _extract_street(real_address)
     seen = {real_street.lower()}
     decoys: list[str] = []
-    candidates = list(all_addresses)
-    random.shuffle(candidates)
+    # Sort candidates so the input order is deterministic across calls — the
+    # `all_addresses` list comes back from a query whose order can vary.
+    candidates = sorted(all_addresses)
+    rng = random.Random(seed_key) if seed_key else random
+    rng.shuffle(candidates)
     for addr in candidates:
         if addr == real_address:
             continue
@@ -1932,9 +1977,7 @@ def _verify_claimant_token(submission_id: str, token: str) -> bool:
     import hmac
     import hashlib
     import time
-    secret = os.environ.get("CLAIMANT_SECRET", "dev-secret-change-me")
-    if secret == "dev-secret-change-me":
-        logger.warning("CLAIMANT_SECRET not set — using insecure dev default")
+    secret = _get_claimant_secret()
     try:
         decoded = base64.urlsafe_b64decode(token + "==").decode()
         parts = decoded.split(":")
@@ -2111,7 +2154,12 @@ def _claimant_quiz(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
         other_addresses = []
 
     real_street = _street_name_only(_extract_street(address))
-    decoys = [_street_name_only(_extract_street(a)) for a in _generate_decoy_streets(address, other_addresses, count=3)]
+    # Stable seed: a given submission always produces the same quiz options
+    # regardless of who asked or when. Lets a claimant restart and see the
+    # same 4 buttons, and matches what the chat bot generated for the same
+    # claimant where the keys overlap.
+    seed_key = f"{(item.get('name') or '').upper()}|{address.upper()}"
+    decoys = [_street_name_only(_extract_street(a)) for a in _generate_decoy_streets(address, other_addresses, count=3, seed_key=seed_key)]
     # Filter empty strings and deduplicate in case stripping left collisions
     seen: set[str] = {real_street.lower()}
     clean_decoys = []
@@ -2121,7 +2169,7 @@ def _claimant_quiz(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
             seen.add(d.lower())
 
     options = [real_street] + clean_decoys
-    random.shuffle(options)
+    random.Random(seed_key).shuffle(options)
 
     return {
         "statusCode": 200,
@@ -2211,9 +2259,7 @@ def _claimant_verify(event: dict[str, Any], headers: dict[str, str]) -> dict[str
         }), headers)
 
     # ── Verification succeeded — issue token ──
-    secret = os.environ.get("CLAIMANT_SECRET", "dev-secret-change-me")
-    if secret == "dev-secret-change-me":
-        logger.warning("CLAIMANT_SECRET not set — using insecure dev default")
+    secret = _get_claimant_secret()
 
     expiry = now_ts + 3600  # 1-hour token
     msg = f"{submission_id}:{expiry}"

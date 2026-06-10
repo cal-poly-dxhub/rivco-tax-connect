@@ -27,6 +27,7 @@ from aws_cdk import (
     aws_ses as ses,
     aws_ssm as ssm,
     aws_wafv2 as wafv2,
+    aws_secretsmanager as secretsmanager,
     aws_cloudwatch as cloudwatch,
     custom_resources as cr,
 )
@@ -767,7 +768,20 @@ def _build_claimant_portal(stack, cfg, proj, upload_api, upload_fn, fn, admin_di
     claimant_trigger.node.add_dependency(claimant_build)
 
     fn.add_environment("UPLOAD_PORTAL_URL", f"https://{claimant_distribution.distribution_domain_name}")
-    upload_fn.add_environment("CLAIMANT_SECRET", "CHANGEME-set-in-ssm")
+
+    # Real claimant-token signing secret. Secrets Manager generates the value
+    # once on first deploy and persists it across redeploys; the lambda fetches
+    # it at cold-start via boto3 (so the value never lands in the CFN template).
+    claimant_secret = secretsmanager.Secret(
+        stack, "ClaimantSecret",
+        description="HMAC key for signing claimant session tokens",
+        generate_secret_string=secretsmanager.SecretStringGenerator(
+            password_length=48,
+            exclude_punctuation=True,
+        ),
+    )
+    claimant_secret.grant_read(upload_fn)
+    upload_fn.add_environment("CLAIMANT_SECRET_ARN", claimant_secret.secret_arn)
     upload_fn.add_environment(
         "ALLOWED_ORIGINS",
         f"{portal_origin},"
