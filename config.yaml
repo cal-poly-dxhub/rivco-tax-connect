@@ -1,12 +1,12 @@
 project:
-  name: riverside-tax-refund-v3
+  name: riverside-tax-refund
   description: Riverside County Tax Refund Lookup
 
 aws:
   region: us-west-2
 
 lambda:
-  function_name: riverside-tax-lookup-v3
+  function_name: riverside-tax-lookup
   timeout_seconds: 30
   memory_mb: 512
   environment:
@@ -31,14 +31,14 @@ retention:
 # stack creates a Cognito user with this email and a temporary password (see
 # `SuperAdminBootstrapPassword` in stack outputs).
 super_admin:
-  email: gflusser+v3@amazon.com
+  email: gflusser+riv@amazon.com
 
 notifications:
   mode: ses         # "ses" (real email) or "log" (CloudWatch only)
   # REQUIRED if mode is "ses". This is the "From" address on notification
   # emails. CDK creates an SES identity; you must click the verification
   # link AWS sends before notifications can actually deliver.
-  sender: gflusser+v3@amazon.com
+  sender: gflusser+riv@amazon.com
   # Set to false when this sender is already verified out-of-band (e.g. by a
   # parallel stack in the same account). CloudFormation cannot import an
   # existing SES identity, so re-creating it fails with "already exists".
@@ -54,7 +54,14 @@ admin_dashboard:
 # stack. Default behavior is to create them (`true`); set to `false` to
 # reuse an existing one.
 security:
-  manage_guardduty_detector: false
+  manage_guardduty_detector: true
+
+# Optional internal tool — a Next.js + shadcn page that talks to the chat
+# WebSocket so admins can test the bot without embedding the production
+# widget. Set `enabled: false` (or remove this block) once testing is done;
+# the construct deletes itself cleanly with the next deploy.
+chat_tester:
+  enabled: true
 
 # Bedrock Claude — drives the web chat agent.
 bedrock:

@@ -57,3 +57,8 @@ RCAC-Logo-Final.png
 /chat
 *.drawio
 .claude/worktrees/
+
+# Next.js build/install artifacts (chat-tester, claimant-portal, admin-dashboard)
+**/node_modules/
+**/.next/
+**/out/

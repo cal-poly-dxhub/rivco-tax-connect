@@ -983,6 +983,138 @@ def _build_security(stack, cfg, proj, upload_api, uploads_bucket, s3_key, chat_f
     CfnOutput(stack, "WafAclArn", value=waf_acl.attr_arn)
 
 
+# ── Optional: chat-tester admin tool ──────────────────────────────────────────
+# A throwaway Next.js + shadcn page that talks to the production chat
+# WebSocket. Gated by `chat_tester.enabled: true` in config.yaml so the whole
+# thing can be removed by flipping one flag — no other constructs reference
+# anything created here.
+
+def _build_chat_tester(stack, cfg, proj, ws_api, ws_stage):
+    """Self-contained admin chatbot tester (Next.js static export + CodeBuild)."""
+    tester_cfg = cfg.get("chat_tester") or {}
+    if not tester_cfg.get("enabled", False):
+        return None
+
+    dash_cfg = cfg.get("admin_dashboard") or {}
+    gh_owner = dash_cfg.get("github_owner", "cal-poly-dxhub")
+    gh_repo = dash_cfg.get("github_repo", "rivco-tax-connect")
+    gh_branch = dash_cfg.get("github_branch", "main")
+
+    bucket = s3.Bucket(
+        stack, "ChatTesterBucket",
+        bucket_name=f"{proj}-chat-tester-{stack.account}",
+        removal_policy=RemovalPolicy.DESTROY,
+        auto_delete_objects=True,
+        block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+        encryption=s3.BucketEncryption.S3_MANAGED,
+    )
+    oac = cloudfront.S3OriginAccessControl(
+        stack, "ChatTesterBucketOAC", description="OAC for chat-tester bucket",
+    )
+    distribution = cloudfront.Distribution(
+        stack, "ChatTesterDistribution",
+        default_behavior=cloudfront.BehaviorOptions(
+            origin=cloudfront_origins.S3BucketOrigin.with_origin_access_control(
+                bucket, origin_access_control=oac,
+            ),
+            viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+            cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
+            function_associations=[cloudfront.FunctionAssociation(
+                function=cloudfront.Function(
+                    stack, "ChatTesterRewriteFunction",
+                    code=cloudfront.FunctionCode.from_inline(
+                        "function handler(event) {\n"
+                        "  var req = event.request;\n"
+                        "  var uri = req.uri;\n"
+                        "  if (uri.endsWith('/')) { req.uri = uri + 'index.html'; }\n"
+                        "  else if (!uri.split('/').pop().includes('.')) { req.uri = uri + '/index.html'; }\n"
+                        "  return req;\n"
+                        "}\n"
+                    ),
+                ),
+                event_type=cloudfront.FunctionEventType.VIEWER_REQUEST,
+            )],
+        ),
+        default_root_object="index.html",
+    )
+
+    ws_endpoint = f"wss://{ws_api.api_id}.execute-api.{stack.region}.amazonaws.com/{ws_stage.stage_name}"
+
+    build = codebuild.Project(
+        stack, "ChatTesterBuild",
+        source=codebuild.Source.git_hub(owner=gh_owner, repo=gh_repo, branch_or_ref=gh_branch, clone_depth=1),
+        environment=codebuild.BuildEnvironment(
+            build_image=codebuild.LinuxBuildImage.STANDARD_7_0,
+            compute_type=codebuild.ComputeType.SMALL,
+        ),
+        environment_variables={
+            "WS_ENDPOINT": codebuild.BuildEnvironmentVariable(value=ws_endpoint),
+            "TARGET_BUCKET": codebuild.BuildEnvironmentVariable(value=bucket.bucket_name),
+            "DISTRIBUTION_ID": codebuild.BuildEnvironmentVariable(value=distribution.distribution_id),
+        },
+        build_spec=codebuild.BuildSpec.from_object({
+            "version": "0.2",
+            "phases": {
+                "install": {
+                    "runtime-versions": {"nodejs": "22"},
+                    "commands": [
+                        "cd chat-tester",
+                        "npm ci",
+                    ],
+                },
+                "build": {
+                    "commands": [
+                        'printf \'window.__CHAT_TESTER_CONFIG__ = {"WS_ENDPOINT":"%s"};\\n\' "$WS_ENDPOINT" > public/config.js',
+                        "npm run build",
+                    ],
+                },
+                "post_build": {
+                    "commands": [
+                        'cd "$CODEBUILD_SRC_DIR"',
+                        'aws s3 sync chat-tester/out/ "s3://$TARGET_BUCKET/" --delete',
+                        'aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths "/*"',
+                    ],
+                },
+            },
+        }),
+        logging=codebuild.LoggingOptions(
+            cloud_watch=codebuild.CloudWatchLoggingOptions(
+                log_group=logs.LogGroup(
+                    stack, "ChatTesterBuildLogGroup",
+                    removal_policy=RemovalPolicy.DESTROY,
+                    retention=logs.RetentionDays.ONE_WEEK,
+                ),
+            ),
+        ),
+    )
+    distribution.grant(build.role, "cloudfront:CreateInvalidation")
+    bucket.grant_read_write(build)
+
+    trigger = cr.AwsCustomResource(
+        stack, "TriggerChatTesterBuild",
+        on_create=cr.AwsSdkCall(
+            service="CodeBuild", action="startBuild",
+            parameters={"projectName": build.project_name},
+            physical_resource_id=cr.PhysicalResourceId.of(f"chat-tester-build-{int(_time.time())}"),
+            output_paths=["build.id"],
+        ),
+        on_update=cr.AwsSdkCall(
+            service="CodeBuild", action="startBuild",
+            parameters={"projectName": build.project_name},
+            physical_resource_id=cr.PhysicalResourceId.of(f"chat-tester-build-{int(_time.time())}"),
+            output_paths=["build.id"],
+        ),
+        policy=cr.AwsCustomResourcePolicy.from_statements([
+            iam.PolicyStatement(actions=["codebuild:StartBuild"], resources=[build.project_arn]),
+        ]),
+    )
+    trigger.node.add_dependency(build)
+
+    CfnOutput(stack, "ChatTesterUrl", value=f"https://{distribution.distribution_domain_name}")
+    CfnOutput(stack, "ChatTesterBuildProjectName", value=build.project_name)
+    return distribution
+
+
 # ── Stack ─────────────────────────────────────────────────────────────────────
 
 class RiversideTaxRefundStack(Stack):
@@ -1031,3 +1163,4 @@ class RiversideTaxRefundStack(Stack):
         _build_claimant_portal(self, cfg, proj, upload_api, upload_fn, fn, admin_distribution, portal_origin)
         notif_fn = _build_notifications(self, cfg, proj, submissions_table, admin_config_table, user_pool, admin_distribution)
         _build_security(self, cfg, proj, upload_api, uploads_bucket, s3_key, chat_fn, upload_fn, notif_fn, fn)
+        _build_chat_tester(self, cfg, proj, ws_api, ws_stage)
