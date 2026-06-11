@@ -52,6 +52,7 @@ RCAC-Logo-Final.png
 *.md
 !README.md
 !cdk/chat_system_prompt.md
+!cdk/chat_faq.md
 
 # Local-only chat-history scratch file at the repo root.
 /chat

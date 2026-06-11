@@ -163,14 +163,29 @@ def _build_chat(stack, cfg, proj, fn):
     # the parameter itself remains the live-editable source of truth at
     # runtime, so post-deploy edits should go through SSM, not by re-running
     # `cdk deploy` (which would clobber them).
-    _prompt_path = os.path.join(os.path.dirname(__file__), "chat_system_prompt.md")
-    with open(_prompt_path) as _pf:
+    #
+    # The FAQ file is appended to the system prompt at synth time so updates
+    # ship with the same `cdk deploy`. SSM advanced tier supports up to 8KB.
+    _here = os.path.dirname(__file__)
+    with open(os.path.join(_here, "chat_system_prompt.md")) as _pf:
         _prompt_text = _pf.read()
+    _faq_path = os.path.join(_here, "chat_faq.md")
+    if os.path.exists(_faq_path):
+        with open(_faq_path) as _ff:
+            _faq_text = _ff.read()
+        _prompt_text = (
+            _prompt_text.rstrip()
+            + "\n\n**KNOWLEDGE BASE (FAQ):** Treat the entries below as authoritative. "
+            + "Match by intent, not exact wording, and quote the answer directly when you can. "
+            + "If no entry covers the user's question, do not guess — offer a live-agent handoff "
+            + "via the request_agent tool.\n\n"
+            + _faq_text
+        )
     prompt_param = ssm.StringParameter(
         stack, "ChatSystemPrompt",
         parameter_name=f"/{proj}/chat/system-prompt",
         string_value=_prompt_text,
-        description="Bedrock Claude system prompt for the auditor chat agent",
+        description="Bedrock Claude system prompt for the auditor chat agent (with FAQ appended)",
         tier=ssm.ParameterTier.ADVANCED,
     )
 
