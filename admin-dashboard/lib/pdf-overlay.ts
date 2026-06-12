@@ -60,6 +60,7 @@ export async function renderFilledPdf(
   refundType: string,
   formData: Record<string, unknown>,
   signatureDataUrl?: string,
+  submittedAt?: string,
 ): Promise<FilledPdfResult | null> {
   if (!AP13_REFUND_TYPES.has(refundType)) return null
   let signatureMissing = false
@@ -70,8 +71,20 @@ export async function renderFilledPdf(
 
   const val = (id: string) => formatFieldValue(id, formData[id])
 
+  // Address comes in as a single mailing-address string. The PDF wants three
+  // separate fields on page 2 (street / city / state+zip) plus the "executed
+  // at" line (city / state). Parse once and reuse.
+  const parsedAddress = parseAddress(typeof formData.address === "string" ? formData.address : "")
+
+  // The PDF date field at the top of page 1 is a "warrant date" slot, but
+  // there's a separate "Date" field on page 2 (next to "executed at City").
+  // Fall back to the submittedAt timestamp when no explicit warrant_date
+  // was provided so the form isn't blank.
+  const submittedDateStr = submittedAt ? formatDate(submittedAt) : ""
+  const warrantDate = val("warrant_date") || submittedDateStr
+
   // Page 1 fields
-  setField(form, "Date26_af_date", val("warrant_date"))
+  setField(form, "Date26_af_date", warrantDate)
   setField(form, "Text2", val("warrant_amount"))
   setField(form, "Text3", val("warrant_number"))
   setField(form, "Text4", val("business_unit"))
@@ -81,11 +94,16 @@ export async function renderFilledPdf(
   setField(form, "Text12", val("address"))
   setField(form, "Text13", val("email"))
 
-  // Page 2 — Declaration header
+  // Page 2 — Declaration header (street / city / state+zip parsed out)
   setField(form, "Text14", val("name"))
-  setField(form, "Text15", val("address"))
-  setField(form, "Text16", val("city"))
-  setField(form, "Text17", val("state_zip"))
+  setField(form, "Text15", parsedAddress.street || val("address"))
+  setField(form, "Text16", parsedAddress.city || val("city"))
+  setField(form, "Text17", parsedAddress.stateZip || val("state_zip"))
+
+  // Page 2 — Executed at row (date defaults to submittedAt)
+  setField(form, "Text18", val("exec_city") || parsedAddress.city)
+  setField(form, "Text19", val("exec_state") || parsedAddress.state)
+  setField(form, "Text20", val("exec_date") || submittedDateStr)
 
   // Page 2 — NAME / Warrant / Amount row
   setField(form, "Text21", val("name"))
@@ -169,6 +187,70 @@ function formatFieldValue(fieldId: string, value: unknown): string {
     return String(value)
   }
   return String(value)
+}
+
+/**
+ * Split a mailing-address string into PDF-ready parts. The form takes
+ * "street", "city", and "state ZIP" as three separate fields on page 2.
+ *
+ * Handles common shapes:
+ *   "789 Mission Blvd, San Diego, CA 92154"
+ *   "789 Mission Blvd, San Diego CA 92154"
+ *   "789 Mission Blvd"           (street only — city/state/zip empty)
+ */
+function parseAddress(address: string): {
+  street: string
+  city: string
+  state: string
+  zip: string
+  stateZip: string
+} {
+  const blank = { street: "", city: "", state: "", zip: "", stateZip: "" }
+  if (!address) return blank
+  // Comma-separated is the common shape; fall back to whitespace splitting if
+  // the user typed it that way.
+  const parts = address.split(",").map((p) => p.trim()).filter(Boolean)
+  if (parts.length === 0) return blank
+
+  const street = parts[0] || ""
+  let city = ""
+  let stateZipRaw = ""
+
+  if (parts.length >= 3) {
+    // street, city, "STATE ZIP"
+    city = parts[1] || ""
+    stateZipRaw = parts.slice(2).join(", ")
+  } else if (parts.length === 2) {
+    // street, "city STATE ZIP" — split off the trailing state+zip
+    const tail = parts[1]
+    const m = tail.match(/^(.+?)\s+([A-Za-z]{2})\s*(\d{5}(?:-\d{4})?)?$/)
+    if (m) {
+      city = m[1].trim()
+      stateZipRaw = `${m[2]} ${m[3] ?? ""}`.trim()
+    } else {
+      city = tail
+    }
+  } else {
+    // street only
+    return { ...blank, street }
+  }
+
+  // Pull state + zip out of "CA 92154" / "CA 92154-0001"
+  const m = stateZipRaw.match(/^([A-Za-z]{2})\s*(\d{5}(?:-\d{4})?)?$/)
+  const state = m ? m[1].toUpperCase() : ""
+  const zip = m ? (m[2] ?? "") : ""
+
+  return { street, city, state, zip, stateZip: stateZipRaw }
+}
+
+/** Format an ISO timestamp as "MM/DD/YYYY" for the PDF date fields. */
+function formatDate(iso: string): string {
+  if (!iso) return ""
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ""
+  const mm = String(d.getMonth() + 1).padStart(2, "0")
+  const dd = String(d.getDate()).padStart(2, "0")
+  return `${mm}/${dd}/${d.getFullYear()}`
 }
 
 function escapeHtml(s: string): string {

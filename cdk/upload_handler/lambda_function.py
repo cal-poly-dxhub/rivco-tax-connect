@@ -535,6 +535,7 @@ def _handle_package(event: dict[str, Any], headers: dict[str, str]) -> dict[str,
         return _err(403, "Not authorized for this submission", headers)
 
     internal_ids = _internal_doc_ids(refund_types) if not is_super else set()
+    original_names = manifest.get("originalNames") or {}
 
     paginator = s3.get_paginator("list_objects_v2")
     files = []
@@ -552,7 +553,12 @@ def _handle_package(event: dict[str, Any], headers: dict[str, str]) -> dict[str,
                 Params={"Bucket": BUCKET, "Key": key},
                 ExpiresIn=PACKAGE_EXPIRY,
             )
-            files.append({"filename": filename, "downloadUrl": download_url, "size": obj["Size"]})
+            files.append({
+                "filename": filename,
+                "originalFilename": original_names.get(filename, ""),
+                "downloadUrl": download_url,
+                "size": obj["Size"],
+            })
 
     return {
         "statusCode": 200,
@@ -866,12 +872,20 @@ def _handle_upload(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
 
     urls = []
     now = _now_iso()
+    # Map safe filename → claimant's original filename so the dashboard and
+    # the /claim page can display "DMV License.pdf" instead of "government-id.pdf".
+    original_names: dict[str, str] = {}
 
     for f in files:
         content_type = f.get("contentType", "")
         filename = _sanitize_filename(f.get("filename") or "file")
         if content_type not in ALLOWED_TYPES:
             return _err(400, f"Unsupported file type: {content_type}", headers)
+
+        original = (f.get("originalFilename") or "").strip()
+        if original:
+            # Cap length so a malicious client can't bloat the manifest.
+            original_names[filename] = original[:200]
 
         key = f"{submission_id}/{filename}"
         presigned = s3.generate_presigned_url(
@@ -884,7 +898,11 @@ def _handle_upload(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
     s3.put_object(
         Bucket=BUCKET,
         Key=f"{submission_id}/_manifest.json",
-        Body=json.dumps({"name": name, "refundType": refund_type}),
+        Body=json.dumps({
+            "name": name,
+            "refundType": refund_type,
+            "originalNames": original_names,
+        }),
         ContentType="application/json",
     )
 
@@ -1503,8 +1521,9 @@ _DEFAULT_FORM_SCHEMAS: dict[str, dict[str, Any]] = {
             {"id": "warrant_date", "label": "Warrant Date", "type": "date", "required": False, "section": "STALE_WARRANT"},
             {"id": "business_name", "label": "Business Claimant Name & Title", "type": "text", "required": False, "section": "STALE_WARRANT"},
             {"id": "business_unit", "label": "Business Unit", "type": "text", "required": False, "section": "STALE_WARRANT"},
+            {"id": "is_owner", "label": "Are you the legal owner or custodian of this warrant?", "type": "checkbox", "required": True, "section": "STALE_WARRANT"},
+            {"id": "warrant_included", "label": "Is the stale dated warrant included with your documentation?", "type": "checkbox", "required": True, "section": "STALE_WARRANT"},
             {"id": "is_incorporated", "label": "Is the claimant an incorporated entity?", "type": "checkbox", "required": False, "section": "STALE_WARRANT"},
-            {"id": "is_owner", "label": "Is the claimant the original payee?", "type": "checkbox", "required": False, "section": "STALE_WARRANT"},
         ],
     },
     "PAYROLL": {
@@ -1518,6 +1537,8 @@ _DEFAULT_FORM_SCHEMAS: dict[str, dict[str, Any]] = {
             {"id": "warrant_amount", "label": "Warrant Amount", "type": "number", "required": True, "section": "PAYROLL"},
             {"id": "warrant_date", "label": "Warrant Date", "type": "date", "required": False, "section": "PAYROLL"},
             {"id": "business_unit", "label": "Business Unit", "type": "text", "required": False, "section": "PAYROLL"},
+            {"id": "is_owner", "label": "Are you the legal owner or custodian of this warrant?", "type": "checkbox", "required": True, "section": "PAYROLL"},
+            {"id": "warrant_included", "label": "Is the stale dated warrant included with your documentation?", "type": "checkbox", "required": True, "section": "PAYROLL"},
         ],
     },
     "PROPERTY_TAX": {
@@ -2381,6 +2402,16 @@ def _claimant_status(event: dict[str, Any], headers: dict[str, str]) -> dict[str
     all_docs = item.get("documents") or []
     visible_docs = [d for d in all_docs if _doc_prefix(d) not in internal_ids]
 
+    # Pull original filenames from the manifest so the /claim status page can
+    # show "DMV License.pdf" instead of "government-id.pdf".
+    original_names: dict[str, str] = {}
+    try:
+        manifest_obj = s3.get_object(Bucket=BUCKET, Key=f"{submission_id}/_manifest.json")
+        manifest = json.loads(manifest_obj["Body"].read())
+        original_names = manifest.get("originalNames") or {}
+    except Exception:  # noqa: BLE001
+        pass
+
     return {
         "statusCode": 200,
         "headers": headers,
@@ -2390,6 +2421,7 @@ def _claimant_status(event: dict[str, Any], headers: dict[str, str]) -> dict[str
             "refundType": refund_type,
             "overallStatus": overall,
             "documents": visible_docs,
+            "originalNames": {k: v for k, v in original_names.items() if k in visible_docs},
             "submittedAt": item.get("submittedAt", ""),
             "updatedAt": item.get("updatedAt", ""),
         }),
@@ -2436,6 +2468,7 @@ def _claimant_continue(event: dict[str, Any], headers: dict[str, str]) -> dict[s
         return _err(400, "Provide 1–10 files", headers)
 
     uploads = []
+    new_originals: dict[str, str] = {}
     for f in files:
         content_type = f.get("contentType", "")
         filename = _sanitize_filename(f.get("filename") or "file")
@@ -2443,6 +2476,30 @@ def _claimant_continue(event: dict[str, Any], headers: dict[str, str]) -> dict[s
             return _err(400, f"Unsupported file type: {content_type}", headers)
         upload_url = _presigned_put(submission_id, filename, content_type)
         uploads.append({"filename": filename, "uploadUrl": upload_url})
+        original = (f.get("originalFilename") or "").strip()
+        if original:
+            new_originals[filename] = original[:200]
+
+    # Merge new original-name mappings into the existing manifest so the
+    # upload-more flow surfaces friendly names too.
+    if new_originals:
+        try:
+            manifest_obj = s3.get_object(Bucket=BUCKET, Key=f"{submission_id}/_manifest.json")
+            manifest = json.loads(manifest_obj["Body"].read())
+        except Exception:  # noqa: BLE001
+            manifest = {}
+        existing = manifest.get("originalNames") or {}
+        existing.update(new_originals)
+        manifest["originalNames"] = existing
+        try:
+            s3.put_object(
+                Bucket=BUCKET,
+                Key=f"{submission_id}/_manifest.json",
+                Body=json.dumps(manifest),
+                ContentType="application/json",
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"[continue] manifest update failed for sid={submission_id}: {e!r}")
 
     return {
         "statusCode": 200,

@@ -12,6 +12,12 @@ export interface ClaimantSubmission {
   refundType: string;
   overallStatus: ClaimStatus;
   documents: string[];
+  /**
+   * Map of safe filename -> the claimant's original filename, when known.
+   * Backed by the upload manifest. Missing entries (e.g. older claims) just
+   * fall back to the safe filename for display.
+   */
+  originalNames?: Record<string, string>;
   submittedAt: string;
   updatedAt: string;
 }

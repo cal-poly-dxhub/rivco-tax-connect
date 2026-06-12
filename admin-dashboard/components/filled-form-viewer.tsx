@@ -39,12 +39,13 @@ export function FilledFormViewer({ formDataUrl, refundTypes }: Props) {
         const json = await resp.json()
         const formData: Record<string, unknown> = json.formData || json
         const signature: string | undefined = json.signature
+        const submittedAt: string | undefined = typeof json.submittedAt === "string" ? json.submittedAt : undefined
 
         const results: RenderedItem[] = []
 
         for (const rt of refundTypes) {
           if (hasOverlayConfig(rt)) {
-            const result = await renderFilledPdf(rt, formData, signature)
+            const result = await renderFilledPdf(rt, formData, signature, submittedAt)
             if (result && !cancelled) {
               const blob = new Blob([result.bytes as unknown as BlobPart], { type: "application/pdf" })
               results.push({

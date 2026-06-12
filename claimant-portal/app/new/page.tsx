@@ -451,11 +451,19 @@ export default function NewClaimPage() {
         docFiles.push({ docId: base, file: f, safeName: `${base}.${ext(f)}` });
       });
 
-      const fileList: { filename: string; contentType: string }[] = [
+      const fileList: {
+        filename: string;
+        contentType: string;
+        originalFilename?: string;
+      }[] = [
         { filename: "unified-form.json", contentType: "application/json" },
         ...docFiles.map((d) => ({
           filename: d.safeName,
           contentType: d.file.type || "application/octet-stream",
+          // The backend stamps this on the manifest so the dashboard /
+          // /claim status page can display "DMV License.pdf" instead of
+          // the doc-id-derived safe filename.
+          originalFilename: d.file.name,
         })),
       ];
 

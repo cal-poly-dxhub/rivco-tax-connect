@@ -67,6 +67,9 @@ export default function ClaimUploadPage() {
       const fileList = named.map((d) => ({
         filename: d.safeName,
         contentType: d.file.type || "application/octet-stream",
+        // Preserved on the manifest so admins see the user's original
+        // filename ('My Receipt.pdf') instead of 'other-20260612-1.pdf'.
+        originalFilename: d.file.name,
       }));
 
       const cont = await apiFetch<ContinueResponse>("/claimant/continue", {

@@ -25,7 +25,13 @@ export type AuditResponse = {
   entries: AuditEntry[]
 }
 
-export type PackageFile = { filename: string; downloadUrl: string; size: number }
+export type PackageFile = {
+  filename: string
+  downloadUrl: string
+  size: number
+  /** The user's original filename, when known. Empty string for legacy/missing entries. */
+  originalFilename?: string
+}
 
 export type Package = {
   submissionId: string

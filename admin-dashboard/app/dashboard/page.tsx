@@ -349,8 +349,9 @@ function SubmissionDetail({ submission }: { submission: Submission }) {
                   <button
                     onClick={() => setActive(f)}
                     className={`text-left w-full truncate ${active?.filename === f.filename ? "font-semibold text-foreground" : "text-blue-600 hover:underline"}`}
+                    title={f.filename}
                   >
-                    📄 {f.filename === "unified-form.json" ? "Filled claim form" : f.filename}
+                    📄 {friendlyFileLabel(f)}
                   </button>
                 </li>
               ))}
@@ -407,8 +408,8 @@ function FileViewer({ file, submission }: { file: PackageFile; submission: Submi
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between border-b p-2 bg-background">
         <div className="flex items-center gap-2">
-          <span className="text-xs truncate">
-            {isUnifiedForm ? "Filled claim form" : file.filename}
+          <span className="text-xs truncate" title={file.filename}>
+            {friendlyFileLabel(file)}
           </span>
           {isUnifiedForm && (
             <button
@@ -453,3 +454,23 @@ function FileViewer({ file, submission }: { file: PackageFile; submission: Submi
     </div>
   )
 }
+
+// Doc-id-based fallback labels — used when no original filename was captured
+// (older claims uploaded before originalNames was wired through).
+const FALLBACK_DOC_LABELS: Record<string, string> = {
+  "unified-form": "Filled claim form",
+  "government-id": "Government photo ID",
+  "proof-of-entitlement": "Proof of entitlement",
+  "proof-of-ownership": "Proof of property ownership",
+  "scanned-form": "Scanned paper form",
+  "ap13-affidavit": "Signed AP-13 affidavit",
+  "property-tax-claim": "Signed property tax claim",
+}
+
+function friendlyFileLabel(f: PackageFile): string {
+  if (f.filename === "unified-form.json") return "Filled claim form"
+  if (f.originalFilename) return f.originalFilename
+  const stem = f.filename.split(".")[0].replace(/-\d+$/, "")
+  return FALLBACK_DOC_LABELS[stem] || f.filename
+}
+
