@@ -2100,6 +2100,9 @@ def _handle_claimant(event: dict[str, Any], headers: dict[str, str]) -> dict[str
     elif resource == "/claimant/continue-complete" or proxy == "continue-complete":
         if method == "POST":
             return _claimant_continue_complete(event, headers)
+    elif resource == "/claimant/save-draft" or proxy == "save-draft":
+        if method == "POST":
+            return _claimant_save_draft(event, headers)
 
     return _err(404, f"No claimant handler for {method} {resource or proxy}", headers)
 
@@ -2431,9 +2434,74 @@ def _claimant_status(event: dict[str, Any], headers: dict[str, str]) -> dict[str
             "overallStatus": overall,
             "documents": visible_docs,
             "originalNames": {k: v for k, v in original_names.items() if k in visible_docs},
+            # Whatever fields the claimant has typed so far if the form is
+            # still in draft. Lets the /new page resume a partially-filled
+            # submission. Empty/absent for already-submitted claims.
+            "draftFormData": item.get("draftFormData") or {},
             "submittedAt": item.get("submittedAt", ""),
             "updatedAt": item.get("updatedAt", ""),
         }),
+    }
+
+
+def _claimant_save_draft(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    """POST /claimant/save-draft  (requires X-Claimant-Token header)
+
+    Body: {"submissionId": "...", "formData": { ...partial form values... }}
+    Persists `formData` to the META row so the user can resume on a later
+    visit. Only allowed while the submission is still in `draft` status —
+    refuses to overwrite once a real submit has been recorded so an admin's
+    in-progress review can't be clobbered.
+    """
+    token = (event.get("headers") or {}).get("X-Claimant-Token") or \
+            (event.get("headers") or {}).get("x-claimant-token") or ""
+
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except json.JSONDecodeError:
+        return _err(400, "Invalid JSON", headers)
+
+    submission_id = (body.get("submissionId") or "").strip()
+    form_data = body.get("formData")
+
+    if not submission_id:
+        return _err(400, "submissionId is required", headers)
+    if not re.fullmatch(r'[0-9a-f]{12}', submission_id):
+        return _err(400, "Invalid submission id", headers)
+    if not isinstance(form_data, dict):
+        return _err(400, "formData must be an object", headers)
+    if not token:
+        return _err(401, "X-Claimant-Token header required", headers)
+    if not _verify_claimant_token(submission_id, token):
+        return _err(403, "Invalid or expired token", headers)
+    if not table:
+        return _err(500, "DynamoDB not configured", headers)
+
+    item = _get_submission(submission_id)
+    if not item:
+        return _err(404, "Submission not found", headers)
+
+    # Only let drafts be overwritten — once a claim has been submitted we
+    # don't want a stray autosave to clobber the final state.
+    statuses = item.get("statuses") or {}
+    if statuses and not all(v == "draft" for v in statuses.values()):
+        return _err(409, "Cannot save draft on a submitted claim", headers)
+
+    # Cap form-data size so a malicious client can't bloat the row. Form
+    # values are typed strings/booleans; 16 KB is plenty.
+    if len(json.dumps(form_data)) > 16384:
+        return _err(400, "formData too large", headers)
+
+    table.update_item(
+        Key=_sub_key(submission_id),
+        UpdateExpression="SET draftFormData = :d, updatedAt = :u",
+        ExpressionAttributeValues={":d": form_data, ":u": _now_iso()},
+    )
+
+    return {
+        "statusCode": 200,
+        "headers": headers,
+        "body": json.dumps({"submissionId": submission_id, "saved": True}),
     }
 
 

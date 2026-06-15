@@ -18,6 +18,11 @@ export interface ClaimantSubmission {
    * fall back to the safe filename for display.
    */
   originalNames?: Record<string, string>;
+  /**
+   * Whatever the claimant has typed so far on /new. Returned only while the
+   * submission is still in `draft` status; lets the page resume mid-fill.
+   */
+  draftFormData?: Record<string, unknown>;
   submittedAt: string;
   updatedAt: string;
 }

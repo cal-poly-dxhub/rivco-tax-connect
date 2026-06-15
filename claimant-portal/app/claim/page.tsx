@@ -96,6 +96,7 @@ export default function ClaimStatusPage() {
   const overallStatus = submission.overallStatus as ClaimStatus;
   const canUploadMore =
     overallStatus === "partial" || overallStatus === "uploaded";
+  const canResume = overallStatus === "draft";
   const visibleDocs = (submission.documents ?? []).filter(
     (d) => !d.startsWith("_"),
   );
@@ -206,6 +207,29 @@ export default function ClaimStatusPage() {
                 </li>
               ))}
             </ul>
+          </div>
+        )}
+
+        {/* Resume draft button (status = draft) */}
+        {canResume && submissionId && (
+          <div className="mb-4">
+            <button
+              type="button"
+              onClick={() => router.push(`/new?submissionId=${encodeURIComponent(submissionId)}`)}
+              className="w-full py-3 font-bold uppercase tracking-wide text-sm"
+              style={{
+                fontFamily: "Montserrat, sans-serif",
+                background: "var(--navy)",
+                color: "#fff",
+                border: "none",
+                cursor: "pointer",
+              }}
+            >
+              Continue your claim
+            </button>
+            <p className="text-xs mt-2" style={{ color: "var(--text-muted)" }}>
+              Picks up where you left off — your previous answers are saved.
+            </p>
           </div>
         )}
 

@@ -2,7 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
+import { getToken } from "@/lib/types";
 import type {
+  ClaimantSubmission,
   ReserveResponse,
   UploadSlot,
 } from "@/lib/types";
@@ -277,6 +279,7 @@ export default function NewClaimPage() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
+    const resumeId = params.get("submissionId") ?? "";
     const name = params.get("name") ?? "";
     const type = params.get("type") ?? "";
     const address = params.get("address") ?? "";
@@ -284,6 +287,43 @@ export default function NewClaimPage() {
     setUrlName(name);
     setUrlType(type);
     setUrlAddress(address);
+
+    if (resumeId) {
+      // Resume path: claimant came from /claim's "Continue your claim" button.
+      // Token must already be in sessionStorage from a prior verify; if not,
+      // bounce them to /my-claim to verify first.
+      (async () => {
+        const token = getToken(resumeId);
+        if (!token) {
+          window.location.href = "/my-claim";
+          return;
+        }
+        try {
+          setPhase("loading");
+          const status = await apiFetch<ClaimantSubmission>(
+            `/claimant/status?id=${encodeURIComponent(resumeId)}`,
+            { token },
+          );
+          setReservedId(resumeId);
+          setUrlName(status.name);
+          setUrlType(status.refundType);
+          // Hydrate the form with whatever they typed before. We don't get
+          // back the real address from the server (privacy) — but it's in
+          // draftFormData if they typed it.
+          const draft = status.draftFormData ?? {};
+          setFormValues({
+            name: status.name,
+            ...(draft as Record<string, string>),
+          });
+          await loadSchemas(status.refundType.split(",").filter(Boolean));
+          setPhase("form");
+        } catch (e) {
+          setErrorMsg(e instanceof Error ? e.message : String(e));
+          setPhase("error");
+        }
+      })();
+      return;
+    }
 
     if (name && type && address) {
       // Bot handoff: reserve immediately then load form
@@ -378,6 +418,71 @@ export default function NewClaimPage() {
   function handleFieldChange(id: string, value: string) {
     setFormValues((v) => ({ ...v, [id]: value }));
   }
+
+  // Stash whatever the user has typed so they can resume later. Reuses the
+  // claimant token from sessionStorage; the token is set by the bot-handoff
+  // /reserve call (returned via setReservedId) or by a /my-claim verify.
+  async function saveDraft(opts: { silent?: boolean } = {}) {
+    if (!reservedId) return; // No id yet -> can't save (e.g. mini-form path).
+    const token = getToken(reservedId);
+    if (!token) {
+      if (!opts.silent) {
+        setStatusMsg("Your session expired. Please verify again at /my-claim before saving.");
+      }
+      return;
+    }
+    try {
+      await apiFetch("/claimant/save-draft", {
+        method: "POST",
+        token,
+        body: JSON.stringify({ submissionId: reservedId, formData: formValues }),
+      });
+      if (!opts.silent) {
+        setStatusMsg(
+          `Saved. Resume any time at /my-claim with this Claim ID: ${reservedId}`,
+        );
+      }
+    } catch (e) {
+      if (!opts.silent) {
+        setStatusMsg(
+          e instanceof ApiError
+            ? `Could not save draft (${e.status}): ${e.message}`
+            : `Could not save draft: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+  }
+
+  // Best-effort save on tab close so the user doesn't lose progress.
+  // Uses sendBeacon when available to survive the unload.
+  useEffect(() => {
+    if (!reservedId) return;
+    const handler = () => {
+      const token = getToken(reservedId);
+      if (!token) return;
+      const url =
+        (window.__CLAIMANT_CONFIG__?.API_URL?.replace(/\/$/, "") ?? "") +
+        "/claimant/save-draft";
+      const body = JSON.stringify({
+        submissionId: reservedId,
+        formData: formValues,
+      });
+      // sendBeacon doesn't let us set custom headers, so fall back to a
+      // best-effort fetch with keepalive when we need the auth header.
+      try {
+        fetch(url, {
+          method: "POST",
+          keepalive: true,
+          headers: { "Content-Type": "application/json", "X-Claimant-Token": token },
+          body,
+        });
+      } catch {
+        // ignore — best-effort
+      }
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [reservedId, formValues]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -956,6 +1061,24 @@ export default function NewClaimPage() {
               >
                 {phase === "submitting" ? "Submitting…" : "Submit Claim"}
               </button>
+
+              {reservedId && (
+                <button
+                  type="button"
+                  onClick={() => saveDraft()}
+                  disabled={phase === "submitting"}
+                  className="w-full mt-2 py-2 text-xs font-bold uppercase tracking-widest disabled:opacity-50"
+                  style={{
+                    fontFamily: "Montserrat, sans-serif",
+                    background: "transparent",
+                    color: "var(--navy)",
+                    border: "1px solid var(--navy)",
+                    cursor: phase === "submitting" ? "not-allowed" : "pointer",
+                  }}
+                >
+                  Save and continue later
+                </button>
+              )}
             </form>
           )}
         </div>
