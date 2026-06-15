@@ -610,6 +610,8 @@ def _compute_statuses(departments: list[str], refund_type_csv: str, filenames: l
 def _handle_status(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
     """List submissions the caller is allowed to see."""
     dept_keys, is_super = _auth(event)
+    qs = event.get("queryStringParameters") or {}
+    include_drafts = (qs.get("include") or "").lower() == "drafts"
     if table:
         submissions = []
         for item in _list_submissions():
@@ -624,6 +626,13 @@ def _handle_status(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
             statuses = item.get("statuses")
             if not isinstance(statuses, dict):
                 statuses = _compute_statuses(depts, item.get("refundType", ""), docs)
+
+            # Drafts are created by /claimant/reserve when a claimant opens
+            # the form via a bot link but never submits. They clutter the
+            # admin queue with non-actionable rows; hide unless explicitly
+            # requested via ?include=drafts.
+            if not include_drafts and all(v == "draft" for v in statuses.values()):
+                continue
 
             tasks_by_dept = _tasks_by_department(statuses, depts, refund_types, docs)
 
