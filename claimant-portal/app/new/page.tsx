@@ -30,6 +30,34 @@ interface SchemasResponse {
   merged_fields: FormField[];
 }
 
+/**
+ * One refund/claim from the bot handoff. Multiple stale-warrant or payroll
+ * refunds for the same person each become an entry — the form renders a
+ * warrant block per claim and the admin viewer renders a filled AP-13 per
+ * claim. Property-tax claims share the array but have their own field set.
+ */
+interface Claim {
+  type: string;
+  // STALE_WARRANT / PAYROLL fields
+  warrant_number?: string;
+  warrant_amount?: string;
+  warrant_date?: string;
+  business_unit?: string;
+  business_name?: string;
+  is_owner?: string;
+  warrant_included?: string;
+  // PROPERTY_TAX fields
+  assessment_number?: string;
+  tax_year?: string;
+  refund_amount?: string;
+}
+
+const AP13_TYPES = new Set(["STALE_WARRANT", "PAYROLL"]);
+
+function isAp13(type: string): boolean {
+  return AP13_TYPES.has(type);
+}
+
 interface RequiredDoc {
   id: string;
   label: string;
@@ -263,6 +291,10 @@ export default function NewClaimPage() {
   const [schemas, setSchemas] = useState<SchemasResponse | null>(null);
   const [docReqs, setDocReqs] = useState<RequiredDoc[]>([]);
   const [formValues, setFormValues] = useState<Record<string, string>>({});
+  // Per-claim fields. AP-13 (STALE_WARRANT, PAYROLL) types each get one
+  // entry per warrant; PROPERTY_TAX gets one entry. Fields like name /
+  // address / email / phone live in formValues since they're shared.
+  const [claims, setClaims] = useState<Claim[]>([]);
   const [sigDataUrl, setSigDataUrl] = useState<string | null>(null);
   // Per-required-doc file (single each).
   const [reqFiles, setReqFiles] = useState<Record<string, File | null>>({});
@@ -311,11 +343,17 @@ export default function NewClaimPage() {
           // back the real address from the server (privacy) — but it's in
           // draftFormData if they typed it.
           const draft = status.draftFormData ?? {};
+          const { claims: savedClaims, ...savedFields } = draft as Record<string, unknown>;
           setFormValues({
             name: status.name,
-            ...(draft as Record<string, string>),
+            ...(savedFields as Record<string, string>),
           });
           await loadSchemas(status.refundType.split(",").filter(Boolean));
+          // Override the URL-derived claims with the saved per-claim entries
+          // if the user got that far before saving.
+          if (Array.isArray(savedClaims) && savedClaims.length > 0) {
+            setClaims(savedClaims as Claim[]);
+          }
           setPhase("form");
         } catch (e) {
           setErrorMsg(e instanceof Error ? e.message : String(e));
@@ -361,22 +399,31 @@ export default function NewClaimPage() {
     setSchemas(data);
     setDocReqs(reqs.docs || []);
     setReqFiles({});
-    // Pre-fill amounts/ids from URL if available (bot handoff)
+    // Build a per-claim array from the bot-handoff URL — one entry per
+    // refund. Multiple stale warrants for the same person turn into N
+    // separate AP-13 entries; PROPERTY_TAX gets one entry that holds
+    // assessment/tax-year/refund-amount.
     const params = new URLSearchParams(window.location.search);
     const amounts = (params.get("amount") ?? "").split(",");
     const ids = (params.get("id") ?? "").split(",");
-    const pre: Record<string, string> = {};
-    types.forEach((rt, i) => {
+    const assessment = params.get("assessment") ?? "";
+    const taxyear = params.get("taxyear") ?? "";
+    const built: Claim[] = types.map((rt, i) => {
       if (rt === "PROPERTY_TAX") {
-        if (amounts[i]) pre["refund_amount"] = amounts[i];
-      } else {
-        if (amounts[i]) pre["warrant_amount"] = amounts[i];
-        if (ids[i]) pre["warrant_number"] = ids[i];
+        return {
+          type: rt,
+          assessment_number: assessment,
+          tax_year: taxyear,
+          refund_amount: amounts[i] || "",
+        };
       }
+      return {
+        type: rt,
+        warrant_number: ids[i] || "",
+        warrant_amount: amounts[i] || "",
+      };
     });
-    if (params.get("assessment")) pre["assessment_number"] = params.get("assessment")!;
-    if (params.get("taxyear")) pre["tax_year"] = params.get("taxyear")!;
-    setFormValues((v) => ({ ...v, ...pre }));
+    setClaims(built);
   }
 
   async function handleMiniSubmit(e: React.FormEvent) {
@@ -435,7 +482,10 @@ export default function NewClaimPage() {
       await apiFetch("/claimant/save-draft", {
         method: "POST",
         token,
-        body: JSON.stringify({ submissionId: reservedId, formData: formValues }),
+        body: JSON.stringify({
+          submissionId: reservedId,
+          formData: { ...formValues, claims },
+        }),
       });
       if (!opts.silent) {
         setStatusMsg(
@@ -465,7 +515,7 @@ export default function NewClaimPage() {
         "/claimant/save-draft";
       const body = JSON.stringify({
         submissionId: reservedId,
-        formData: formValues,
+        formData: { ...formValues, claims },
       });
       // sendBeacon doesn't let us set custom headers, so fall back to a
       // best-effort fetch with keepalive when we need the auth header.
@@ -482,7 +532,7 @@ export default function NewClaimPage() {
     };
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
-  }, [reservedId, formValues]);
+  }, [reservedId, formValues, claims]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -493,12 +543,35 @@ export default function NewClaimPage() {
     }
     if (!schemas) return;
 
-    // Validate required fields
+    // Validate required fields. Common fields read from formValues; per-claim
+    // fields read from the matching claims[i] entry — required checks are
+    // applied per claim so 3 stale-warrant claims need 3 warrant numbers.
     const missing: string[] = [];
     for (const f of schemas.merged_fields) {
-      if (f.required && f.type !== "checkbox") {
-        const val = (formValues[f.id] ?? "").trim();
-        if (!val) missing.push(f.label);
+      const section = f.section || "common";
+      const isCommon = section === "common";
+      if (f.type === "checkbox") {
+        if (!f.required) continue;
+        if (isCommon) {
+          if (!(formValues[f.id] === "true" || formValues[f.id] === "false")) missing.push(f.label);
+        } else {
+          claims.forEach((c, i) => {
+            if (c.type !== section) return;
+            const v = (c as unknown as Record<string, unknown>)[f.id];
+            if (!(v === "true" || v === "false")) missing.push(`${f.label} (Claim ${i + 1})`);
+          });
+        }
+        continue;
+      }
+      if (!f.required) continue;
+      if (isCommon) {
+        if (!(formValues[f.id] ?? "").trim()) missing.push(f.label);
+      } else {
+        claims.forEach((c, i) => {
+          if (c.type !== section) return;
+          const v = String((c as unknown as Record<string, unknown>)[f.id] ?? "").trim();
+          if (!v) missing.push(`${f.label} (Claim ${i + 1})`);
+        });
       }
     }
     if (missing.length > 0) {
@@ -524,9 +597,15 @@ export default function NewClaimPage() {
       const refundType = types.join(",");
       const address = formValues["address"] || urlAddress || miniAddress;
 
-      // Build unified form JSON blob
+      // Build unified form JSON blob.
+      //
+      // `formData` keeps the shared fields (name/address/email/phone) so older
+      // tooling that reads it still works.
+      // `claims` is the new array — one entry per refund. The admin viewer
+      // iterates this to render one filled AP-13 PDF per claim.
       const unifiedPayload = {
         formData: formValues,
+        claims,
         refundTypes: types,
         signature: sigDataUrl,
         submittedAt: new Date().toISOString(),
@@ -794,128 +873,177 @@ export default function NewClaimPage() {
 
               {/* Form sections */}
               {(() => {
-                const { merged_fields, refund_types, schemas: typeSchemas } = schemas;
-                const sectionOrder = ["common", ...refund_types];
+                const { merged_fields, schemas: typeSchemas } = schemas;
                 const bySection: Record<string, FormField[]> = {};
                 for (const f of merged_fields) {
                   const s = f.section || "common";
                   (bySection[s] = bySection[s] || []).push(f);
                 }
 
-                return sectionOrder.map((section) => {
-                  const fields = bySection[section];
-                  if (!fields || fields.length === 0) return null;
+                // Render shared (common) fields once, then iterate `claims`.
+                // AP-13 refund types (STALE_WARRANT, PAYROLL) get one section
+                // per claim instance. PROPERTY_TAX gets one (single-claim).
+                const ap13Counts: Record<string, number> = {};
+                for (const c of claims) if (isAp13(c.type)) ap13Counts[c.type] = (ap13Counts[c.type] ?? 0) + 1;
+                const ap13SeenIdx: Record<string, number> = {};
 
-                  const sectionTitle =
-                    section === "common"
-                      ? "Claimant Information"
-                      : typeSchemas[section]?.title ?? section;
+                const renderSectionFields = (
+                  sectionFields: FormField[],
+                  // For AP-13 sections, the per-claim getter/setter; otherwise
+                  // null which means use formValues directly.
+                  perClaim: { idx: number; claim: Claim } | null,
+                ) => (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+                    {sectionFields.map((f) => {
+                      const isWide =
+                        f.type === "address" || f.type === "textarea" || f.type === "checkbox";
 
-                  return (
-                    <div key={section}>
-                      <div
-                        className="text-center text-xs font-bold uppercase tracking-widest py-2 mb-4 border-t border-b"
-                        style={{
-                          fontFamily: "Montserrat, sans-serif",
-                          borderColor: "var(--border)",
-                        }}
-                      >
-                        {sectionTitle}
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-                        {fields.map((f) => {
-                          const isWide =
-                            f.type === "address" || f.type === "textarea" || f.type === "checkbox";
-
-                          if (f.type === "checkbox") {
-                            return (
-                              <div
-                                key={f.id}
-                                className="col-span-full flex items-center gap-4 py-1"
-                              >
-                                <span className="text-sm">{f.label}</span>
-                                <div className="flex gap-4 ml-auto">
-                                  {["true", "false"].map((val) => (
-                                    <label
-                                      key={val}
-                                      className="flex items-center gap-1 text-sm font-bold cursor-pointer"
-                                    >
-                                      <input
-                                        type="radio"
-                                        name={f.id}
-                                        value={val}
-                                        checked={formValues[f.id] === val}
-                                        onChange={(e) =>
-                                          handleFieldChange(f.id, e.target.value)
-                                        }
-                                        style={{ accentColor: "var(--navy)" }}
-                                      />
-                                      {val === "true" ? "Yes" : "No"}
-                                    </label>
-                                  ))}
-                                </div>
-                              </div>
-                            );
-                          }
-
-                          const inputType: Record<string, string> = {
-                            text: "text",
-                            email: "email",
-                            tel: "tel",
-                            date: "date",
-                            number: "number",
-                          };
-
-                          const input =
-                            f.type === "address" || f.type === "textarea" ? (
-                              <textarea
-                                id={`f_${f.id}`}
-                                required={f.required}
-                                rows={2}
-                                value={formValues[f.id] ?? ""}
-                                onChange={(e) => handleFieldChange(f.id, e.target.value)}
-                                className="w-full border-b bg-transparent outline-none py-2 text-sm resize-none"
-                                style={{ borderColor: "var(--border)" }}
-                              />
-                            ) : (
-                              <input
-                                id={`f_${f.id}`}
-                                type={inputType[f.type] ?? "text"}
-                                required={f.required}
-                                value={formValues[f.id] ?? ""}
-                                onChange={(e) => handleFieldChange(f.id, e.target.value)}
-                                className="w-full border-b bg-transparent outline-none py-2 text-sm"
-                                style={{ borderColor: "var(--border)" }}
-                              />
-                            );
-
-                          return (
-                            <div
-                              key={f.id}
-                              className={isWide ? "col-span-full" : ""}
-                            >
-                              {input}
-                              <label
-                                htmlFor={`f_${f.id}`}
-                                className="block text-xs uppercase tracking-widest mt-1"
-                                style={{
-                                  fontFamily: "Montserrat, sans-serif",
-                                  color: "var(--text-muted)",
-                                }}
-                              >
-                                {f.label}
-                                {f.required && (
-                                  <span style={{ color: "var(--red)" }}> *</span>
-                                )}
-                              </label>
-                            </div>
+                      // Resolve current value + writer for this field.
+                      const fieldKey = perClaim ? `${f.id}_${perClaim.idx}` : f.id;
+                      const value = perClaim
+                        ? String((perClaim.claim as unknown as Record<string, unknown>)[f.id] ?? "")
+                        : (formValues[f.id] ?? "");
+                      const onChange = (v: string) => {
+                        if (perClaim) {
+                          setClaims((prev) =>
+                            prev.map((c, i) =>
+                              i === perClaim.idx ? { ...c, [f.id]: v } : c,
+                            ),
                           );
-                        })}
-                      </div>
-                    </div>
+                        } else {
+                          handleFieldChange(f.id, v);
+                        }
+                      };
+
+                      if (f.type === "checkbox") {
+                        return (
+                          <div
+                            key={fieldKey}
+                            className="col-span-full flex items-center gap-4 py-1"
+                          >
+                            <span className="text-sm">{f.label}</span>
+                            <div className="flex gap-4 ml-auto">
+                              {["true", "false"].map((val) => (
+                                <label
+                                  key={val}
+                                  className="flex items-center gap-1 text-sm font-bold cursor-pointer"
+                                >
+                                  <input
+                                    type="radio"
+                                    name={fieldKey}
+                                    value={val}
+                                    checked={value === val}
+                                    onChange={(e) => onChange(e.target.value)}
+                                    style={{ accentColor: "var(--navy)" }}
+                                  />
+                                  {val === "true" ? "Yes" : "No"}
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      const inputType: Record<string, string> = {
+                        text: "text",
+                        email: "email",
+                        tel: "tel",
+                        date: "date",
+                        number: "number",
+                      };
+
+                      const input =
+                        f.type === "address" || f.type === "textarea" ? (
+                          <textarea
+                            id={`f_${fieldKey}`}
+                            required={f.required}
+                            rows={2}
+                            value={value}
+                            onChange={(e) => onChange(e.target.value)}
+                            className="w-full border-b bg-transparent outline-none py-2 text-sm resize-none"
+                            style={{ borderColor: "var(--border)" }}
+                          />
+                        ) : (
+                          <input
+                            id={`f_${fieldKey}`}
+                            type={inputType[f.type] ?? "text"}
+                            required={f.required}
+                            value={value}
+                            onChange={(e) => onChange(e.target.value)}
+                            className="w-full border-b bg-transparent outline-none py-2 text-sm"
+                            style={{ borderColor: "var(--border)" }}
+                          />
+                        );
+
+                      return (
+                        <div
+                          key={fieldKey}
+                          className={isWide ? "col-span-full" : ""}
+                        >
+                          {input}
+                          <label
+                            htmlFor={`f_${fieldKey}`}
+                            className="block text-xs uppercase tracking-widest mt-1"
+                            style={{
+                              fontFamily: "Montserrat, sans-serif",
+                              color: "var(--text-muted)",
+                            }}
+                          >
+                            {f.label}
+                            {f.required && (
+                              <span style={{ color: "var(--red)" }}> *</span>
+                            )}
+                          </label>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+
+                const sectionHeader = (title: string, key: string) => (
+                  <div
+                    key={`hdr-${key}`}
+                    className="text-center text-xs font-bold uppercase tracking-widest py-2 mb-4 border-t border-b"
+                    style={{
+                      fontFamily: "Montserrat, sans-serif",
+                      borderColor: "var(--border)",
+                    }}
+                  >
+                    {title}
+                  </div>
+                );
+
+                const blocks: React.ReactNode[] = [];
+
+                // Common (shared) fields
+                if (bySection.common && bySection.common.length) {
+                  blocks.push(
+                    <div key="common">
+                      {sectionHeader("Claimant Information", "common")}
+                      {renderSectionFields(bySection.common, null)}
+                    </div>,
+                  );
+                }
+
+                // Per-claim sections, in URL/handoff order.
+                claims.forEach((claim, idx) => {
+                  const fields = bySection[claim.type];
+                  if (!fields || fields.length === 0) return;
+                  const sectionTitle = typeSchemas[claim.type]?.title ?? claim.type;
+                  let title = sectionTitle;
+                  if (isAp13(claim.type) && (ap13Counts[claim.type] ?? 0) > 1) {
+                    const seen = (ap13SeenIdx[claim.type] = (ap13SeenIdx[claim.type] ?? 0) + 1);
+                    title = `${sectionTitle} — Claim ${seen} of ${ap13Counts[claim.type]}`;
+                  }
+                  blocks.push(
+                    <div key={`claim-${idx}`}>
+                      {sectionHeader(title, `claim-${idx}`)}
+                      {renderSectionFields(fields, { idx, claim })}
+                    </div>,
                   );
                 });
+
+                return blocks;
               })()}
 
               {/* Supporting Documents */}
