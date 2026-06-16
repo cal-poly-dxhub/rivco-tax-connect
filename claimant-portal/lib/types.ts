@@ -38,6 +38,13 @@ export interface VerifyResponse {
 
 export interface ReserveResponse {
   submissionId: string;
+  /**
+   * Session token for save-draft / continue-upload calls. The bot only ever
+   * routes to /reserve after an address-verified match, so we treat that
+   * as already-authenticated and mint the same shape /verify would.
+   */
+  token?: string;
+  expiresAt?: string;
 }
 
 export interface UploadRequest {

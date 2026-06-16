@@ -2157,11 +2157,38 @@ def _claimant_reserve(event: dict[str, Any], headers: dict[str, str]) -> dict[st
         print(_tb.format_exc())
         raise
 
+    # Mint a session token alongside the reservation so the claimant can use
+    # save-draft / continue-upload immediately, without re-verifying via the
+    # address quiz. The bot only ever reaches /reserve after a successful
+    # name+address match, so we treat that as already-verified for token
+    # purposes.
+    token, expiry_iso = _mint_claimant_token(submission_id)
+
     return {
         "statusCode": 200,
         "headers": headers,
-        "body": json.dumps({"submissionId": submission_id}),
+        "body": json.dumps({
+            "submissionId": submission_id,
+            "token": token,
+            "expiresAt": expiry_iso,
+        }),
     }
+
+
+def _mint_claimant_token(submission_id: str) -> tuple[str, str]:
+    """Build the same HMAC token shape /claimant/verify returns. 1-hour TTL."""
+    import base64
+    import hmac
+    import hashlib
+    import time
+    secret = _get_claimant_secret()
+    expiry = int(time.time()) + 3600
+    msg = f"{submission_id}:{expiry}"
+    sig = hmac.new(secret.encode(), msg.encode(), hashlib.sha256).hexdigest()
+    token_plain = f"{submission_id}:{expiry}:{sig}"
+    token = base64.urlsafe_b64encode(token_plain.encode()).rstrip(b"=").decode()
+    expiry_iso = datetime.fromtimestamp(expiry, tz=timezone.utc).isoformat()
+    return token, expiry_iso
 
 
 def _claimant_quiz(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
@@ -2337,15 +2364,7 @@ def _claimant_verify(event: dict[str, Any], headers: dict[str, str]) -> dict[str
         }), headers)
 
     # ── Verification succeeded — issue token ──
-    secret = _get_claimant_secret()
-
-    expiry = now_ts + 3600  # 1-hour token
-    msg = f"{submission_id}:{expiry}"
-    sig = hmac.new(secret.encode(), msg.encode(), hashlib.sha256).hexdigest()
-    token_plain = f"{submission_id}:{expiry}:{sig}"
-    token = base64.urlsafe_b64encode(token_plain.encode()).rstrip(b"=").decode()
-
-    expiry_iso = datetime.fromtimestamp(expiry, tz=timezone.utc).isoformat()
+    token, expiry_iso = _mint_claimant_token(submission_id)
 
     # Reset failure counter
     table.update_item(

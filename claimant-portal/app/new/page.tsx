@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
-import { getToken } from "@/lib/types";
+import { getToken, storeToken } from "@/lib/types";
 import type {
   ClaimantSubmission,
   ReserveResponse,
@@ -304,6 +304,9 @@ export default function NewClaimPage() {
   const [otherFiles, setOtherFiles] = useState<File[]>([]);
   const [submissionId, setSubmissionId] = useState("");
   const [statusMsg, setStatusMsg] = useState("");
+  // "info" = blue (in-progress), "success" = green (saved/ok),
+  // "error" = red (validation / failures). Defaults to error for back-compat.
+  const [statusKind, setStatusKind] = useState<"info" | "success" | "error">("error");
   const [errorMsg, setErrorMsg] = useState("");
 
   // Reserve-on-load state (bot handoff)
@@ -373,6 +376,7 @@ export default function NewClaimPage() {
             body: JSON.stringify({ name, refundType: type, address }),
           });
           setReservedId(res.submissionId);
+          if (res.token) storeToken(res.submissionId, res.token);
           // Pre-fill values
           setFormValues({ name, address });
           await loadSchemas(type.split(",").filter(Boolean));
@@ -444,6 +448,7 @@ export default function NewClaimPage() {
         }),
       });
       setReservedId(res.submissionId);
+      if (res.token) storeToken(res.submissionId, res.token);
       setFormValues({ name: miniName, address: miniAddress });
       setUrlName(miniName);
       setUrlAddress(miniAddress);
@@ -474,6 +479,7 @@ export default function NewClaimPage() {
     const token = getToken(reservedId);
     if (!token) {
       if (!opts.silent) {
+        setStatusKind("error");
         setStatusMsg("Your session expired. Please verify again at /my-claim before saving.");
       }
       return;
@@ -488,12 +494,14 @@ export default function NewClaimPage() {
         }),
       });
       if (!opts.silent) {
+        setStatusKind("success");
         setStatusMsg(
           `Saved. Resume any time at /my-claim with this Claim ID: ${reservedId}`,
         );
       }
     } catch (e) {
       if (!opts.silent) {
+        setStatusKind("error");
         setStatusMsg(
           e instanceof ApiError
             ? `Could not save draft (${e.status}): ${e.message}`
@@ -538,6 +546,7 @@ export default function NewClaimPage() {
     e.preventDefault();
     const usingScannedForm = !!scannedForm;
     if (!sigDataUrl && !usingScannedForm) {
+      setStatusKind("error");
       setStatusMsg("Please sign the form (or upload a scanned hand-filled form) before submitting.");
       return;
     }
@@ -575,6 +584,7 @@ export default function NewClaimPage() {
       }
     }
     if (missing.length > 0) {
+      setStatusKind("error");
       setStatusMsg(`Please fill required fields: ${missing.join(", ")}`);
       return;
     }
@@ -584,6 +594,7 @@ export default function NewClaimPage() {
       .filter((d) => d.required && !reqFiles[d.id])
       .map((d) => d.label);
     if (missingDocs.length > 0) {
+      setStatusKind("error");
       setStatusMsg(`Please upload required documents: ${missingDocs.join(", ")}`);
       return;
     }
@@ -700,6 +711,7 @@ export default function NewClaimPage() {
       const msg = e instanceof ApiError
         ? `Submission failed (${e.status}): ${e.message}`
         : `Submission failed: ${e instanceof Error ? e.message : String(e)}`;
+      setStatusKind("error");
       setStatusMsg(msg);
       setPhase("form");
     }
@@ -1162,18 +1174,24 @@ export default function NewClaimPage() {
               </div>
 
               {/* Status message */}
-              {statusMsg && (
-                <div
-                  className="px-4 py-3 text-sm border-l-4 mb-4"
-                  style={{
-                    background: phase === "submitting" ? "#e3f2fd" : "#fce4ec",
-                    borderColor: phase === "submitting" ? "#0c71ca" : "var(--red)",
-                    color: phase === "submitting" ? "#1565c0" : "#c62828",
-                  }}
-                >
-                  {statusMsg}
-                </div>
-              )}
+              {statusMsg && (() => {
+                // Submitting always wins as info-blue; otherwise the kind set
+                // by whoever wrote the message (success-green / error-red).
+                const kind = phase === "submitting" ? "info" : statusKind;
+                const palette = {
+                  info: { bg: "#e3f2fd", border: "#0c71ca", fg: "#1565c0" },
+                  success: { bg: "#e8f5e9", border: "var(--green)", fg: "#1b5e20" },
+                  error: { bg: "#fce4ec", border: "var(--red)", fg: "#c62828" },
+                }[kind];
+                return (
+                  <div
+                    className="px-4 py-3 text-sm border-l-4 mb-4"
+                    style={{ background: palette.bg, borderColor: palette.border, color: palette.fg }}
+                  >
+                    {statusMsg}
+                  </div>
+                );
+              })()}
 
               <button
                 type="submit"
