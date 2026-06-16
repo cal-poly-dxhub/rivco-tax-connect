@@ -302,6 +302,11 @@ export default function NewClaimPage() {
   const [scannedForm, setScannedForm] = useState<File | null>(null);
   // Optional "other" attachments (multi-file).
   const [otherFiles, setOtherFiles] = useState<File[]>([]);
+  // Files already uploaded to S3 via save-draft. Keyed by safeName, value is
+  // the original filename to display next to the doc box. The user can pick
+  // a fresh file to replace one of these (saving uploads the new one and the
+  // backend drops the old one with the same doc-id prefix).
+  const [savedDocs, setSavedDocs] = useState<Record<string, string>>({});
   const [submissionId, setSubmissionId] = useState("");
   const [statusMsg, setStatusMsg] = useState("");
   // "info" = blue (in-progress), "success" = green (saved/ok),
@@ -357,6 +362,16 @@ export default function NewClaimPage() {
           if (Array.isArray(savedClaims) && savedClaims.length > 0) {
             setClaims(savedClaims as Claim[]);
           }
+          // Surface previously-uploaded files so the user sees them attached
+          // and only has to pick replacements for what they want to change.
+          const docs = status.documents ?? [];
+          const origs = status.originalNames ?? {};
+          const savedMap: Record<string, string> = {};
+          for (const fn of docs) {
+            if (fn === "unified-form.json") continue;
+            savedMap[fn] = origs[fn] || fn;
+          }
+          setSavedDocs(savedMap);
           setPhase("form");
         } catch (e) {
           setErrorMsg(e instanceof Error ? e.message : String(e));
@@ -474,6 +489,10 @@ export default function NewClaimPage() {
   // Stash whatever the user has typed so they can resume later. Reuses the
   // claimant token from sessionStorage; the token is set by the bot-handoff
   // /reserve call (returned via setReservedId) or by a /my-claim verify.
+  //
+  // Also uploads any newly-picked files immediately so they survive a tab
+  // close. Files already on S3 (savedDocs) are skipped unless the user picked
+  // a replacement.
   async function saveDraft(opts: { silent?: boolean } = {}) {
     if (!reservedId) return; // No id yet -> can't save (e.g. mini-form path).
     const token = getToken(reservedId);
@@ -485,18 +504,112 @@ export default function NewClaimPage() {
       return;
     }
     try {
-      await apiFetch("/claimant/save-draft", {
+      // Collect any newly-picked files that need uploading. Required-doc
+      // slots, scanned-form, and "other" attachments use the same naming
+      // scheme as handleSubmit so the backend `_doc_prefix()` semantics line up.
+      const ext = (f: File) => (f.name.split(".").pop() ?? "bin").toLowerCase();
+      const toUpload: { docId: string; file: File; safeName: string }[] = [];
+      Object.entries(reqFiles).forEach(([docId, f]) => {
+        if (f) toUpload.push({ docId, file: f, safeName: `${docId}.${ext(f)}` });
+      });
+      if (scannedForm) {
+        toUpload.push({
+          docId: "scanned-form",
+          file: scannedForm,
+          safeName: `scanned-form.${ext(scannedForm)}`,
+        });
+      }
+      otherFiles.forEach((f, i) => {
+        // Stamp other-N files with a per-save timestamp so multiple save
+        // rounds don't collide on the same key.
+        const ts = new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14);
+        const base = otherFiles.length > 1 ? `other-${ts}-${i + 1}` : `other-${ts}`;
+        toUpload.push({ docId: base, file: f, safeName: `${base}.${ext(f)}` });
+      });
+
+      // Push files to S3 if there are any.
+      const newOriginals: Record<string, string> = {};
+      let uploadedNames: string[] = [];
+      if (toUpload.length > 0) {
+        const continueRes = await apiFetch<{ uploads: UploadSlot[] }>("/claimant/continue", {
+          method: "POST",
+          token,
+          body: JSON.stringify({
+            submissionId: reservedId,
+            files: toUpload.map((d) => ({
+              filename: d.safeName,
+              contentType: d.file.type || "application/octet-stream",
+              originalFilename: d.file.name,
+            })),
+          }),
+        });
+        for (const d of toUpload) {
+          const slot = continueRes.uploads.find((u) => u.filename === d.safeName);
+          if (!slot) continue;
+          const r = await fetch(slot.uploadUrl, {
+            method: "PUT",
+            headers: { "Content-Type": d.file.type || "application/octet-stream" },
+            body: d.file,
+          });
+          if (!r.ok) throw new Error(`S3 PUT failed (${r.status}) for ${d.file.name}`);
+          newOriginals[d.safeName] = d.file.name;
+        }
+        uploadedNames = toUpload.map((d) => d.safeName);
+      }
+
+      // Persist form fields + merge filenames into documents server-side.
+      const saveResp = await apiFetch<{ documents?: string[] }>("/claimant/save-draft", {
         method: "POST",
         token,
         body: JSON.stringify({
           submissionId: reservedId,
           formData: { ...formValues, claims },
+          filenames: uploadedNames,
+          originalNames: newOriginals,
         }),
       });
+
+      // Roll uploaded files into savedDocs and clear the picked-file state so
+      // the UI shows them as attached.
+      if (uploadedNames.length > 0) {
+        setSavedDocs((prev) => {
+          const next = { ...prev };
+          // Drop older docs with the same doc-id prefix so the user sees the
+          // replacement, not both.
+          const newPrefixes = new Set(uploadedNames.map((n) => n.split(".")[0].replace(/-\d+$/, "")));
+          for (const k of Object.keys(next)) {
+            const prefix = k.split(".")[0].replace(/-\d+$/, "");
+            if (newPrefixes.has(prefix) && !uploadedNames.includes(k)) delete next[k];
+          }
+          for (const fn of uploadedNames) {
+            next[fn] = newOriginals[fn] || fn;
+          }
+          return next;
+        });
+        // Clear the in-memory pickers — the files are saved now.
+        setReqFiles({});
+        setScannedForm(null);
+        setOtherFiles([]);
+      } else if (saveResp.documents) {
+        // Server may have echoed back the canonical doc list; trust it.
+        const known = new Set(saveResp.documents);
+        setSavedDocs((prev) => {
+          const next: Record<string, string> = {};
+          for (const k of Object.keys(prev)) {
+            if (known.has(k)) next[k] = prev[k];
+          }
+          return next;
+        });
+      }
+
       if (!opts.silent) {
         setStatusKind("success");
+        const fileNote =
+          uploadedNames.length > 0
+            ? ` (${uploadedNames.length} file${uploadedNames.length === 1 ? "" : "s"} attached)`
+            : "";
         setStatusMsg(
-          `Saved. Resume any time at /my-claim with this Claim ID: ${reservedId}`,
+          `Saved${fileNote}. Resume any time at /my-claim with this Claim ID: ${reservedId}`,
         );
       }
     } catch (e) {
@@ -590,8 +703,13 @@ export default function NewClaimPage() {
     }
 
     // Validate required documents
+    // Required-doc check: a freshly-picked file or a previously-saved file
+    // (from a draft-save round) both count.
+    const savedSlots = new Set(
+      Object.keys(savedDocs).map((k) => k.split(".")[0]),
+    );
     const missingDocs = docReqs
-      .filter((d) => d.required && !reqFiles[d.id])
+      .filter((d) => d.required && !reqFiles[d.id] && !savedSlots.has(d.id))
       .map((d) => d.label);
     if (missingDocs.length > 0) {
       setStatusKind("error");
@@ -1068,66 +1186,91 @@ export default function NewClaimPage() {
                 </div>
 
                 {/* Required docs list — one labeled file box per requirement */}
-                {docReqs.map((doc) => (
-                  <div
-                    key={doc.id}
-                    className="border px-4 py-3 mb-3 flex flex-wrap items-center gap-3"
-                    style={{ borderColor: "var(--border-light)" }}
-                  >
-                    <div className="flex-1 min-w-[16rem] text-sm font-semibold">
-                      {doc.label}
-                      {doc.required && (
-                        <span
-                          className="ml-2 text-xs font-bold"
-                          style={{ color: "var(--red)" }}
-                        >
-                          Required
+                {docReqs.map((doc) => {
+                  // A saved doc for this slot has a safeName starting with
+                  // the doc-id (e.g. "government-id.pdf" → "government-id").
+                  const savedKey = Object.keys(savedDocs).find(
+                    (k) => k.split(".")[0] === doc.id,
+                  );
+                  const savedLabel = savedKey ? savedDocs[savedKey] : null;
+                  const picked = reqFiles[doc.id];
+                  return (
+                    <div
+                      key={doc.id}
+                      className="border px-4 py-3 mb-3 flex flex-wrap items-center gap-3"
+                      style={{ borderColor: "var(--border-light)" }}
+                    >
+                      <div className="flex-1 min-w-[16rem] text-sm font-semibold">
+                        {doc.label}
+                        {doc.required && (
+                          <span
+                            className="ml-2 text-xs font-bold"
+                            style={{ color: "var(--red)" }}
+                          >
+                            Required
+                          </span>
+                        )}
+                      </div>
+                      <input
+                        type="file"
+                        accept=".pdf,.jpg,.jpeg,.png,.heic"
+                        onChange={(e) =>
+                          setReqFiles((prev) => ({
+                            ...prev,
+                            [doc.id]: e.target.files?.[0] ?? null,
+                          }))
+                        }
+                        className="text-sm"
+                      />
+                      {picked ? (
+                        <span className="text-xs" style={{ color: "var(--green, #2e7d32)" }}>
+                          ✓ {picked.name} (will replace on save)
                         </span>
-                      )}
+                      ) : savedLabel ? (
+                        <span className="text-xs" style={{ color: "var(--green, #2e7d32)" }}>
+                          ✓ {savedLabel} (saved — pick a new file to replace)
+                        </span>
+                      ) : null}
                     </div>
-                    <input
-                      type="file"
-                      accept=".pdf,.jpg,.jpeg,.png,.heic"
-                      onChange={(e) =>
-                        setReqFiles((prev) => ({
-                          ...prev,
-                          [doc.id]: e.target.files?.[0] ?? null,
-                        }))
-                      }
-                      className="text-sm"
-                    />
-                    {reqFiles[doc.id] && (
-                      <span className="text-xs" style={{ color: "var(--green, #2e7d32)" }}>
-                        ✓ {reqFiles[doc.id]?.name}
-                      </span>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
 
                 {/* Optional: scanned hand-filled paper form */}
-                <div
-                  className="border-2 border-dashed px-4 py-3 mb-3"
-                  style={{ borderColor: "var(--border-light)" }}
-                >
-                  <div className="text-xs font-bold uppercase tracking-wider mb-1" style={{ fontFamily: "Montserrat, sans-serif", color: "var(--text-muted)" }}>
-                    Optional: Hand-filled paper form
-                  </div>
-                  <p className="text-xs mb-2" style={{ color: "var(--text-muted)" }}>
-                    If you printed and filled this form by hand, upload a scan or photograph
-                    here instead of signing digitally below.
-                  </p>
-                  <input
-                    type="file"
-                    accept=".pdf,.jpg,.jpeg,.png,.heic"
-                    onChange={(e) => setScannedForm(e.target.files?.[0] ?? null)}
-                    className="text-sm"
-                  />
-                  {scannedForm && (
-                    <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
-                      ✓ {scannedForm.name}
+                {(() => {
+                  const savedKey = Object.keys(savedDocs).find(
+                    (k) => k.split(".")[0] === "scanned-form",
+                  );
+                  const savedLabel = savedKey ? savedDocs[savedKey] : null;
+                  return (
+                    <div
+                      className="border-2 border-dashed px-4 py-3 mb-3"
+                      style={{ borderColor: "var(--border-light)" }}
+                    >
+                      <div className="text-xs font-bold uppercase tracking-wider mb-1" style={{ fontFamily: "Montserrat, sans-serif", color: "var(--text-muted)" }}>
+                        Optional: Hand-filled paper form
+                      </div>
+                      <p className="text-xs mb-2" style={{ color: "var(--text-muted)" }}>
+                        If you printed and filled this form by hand, upload a scan or photograph
+                        here instead of signing digitally below.
+                      </p>
+                      <input
+                        type="file"
+                        accept=".pdf,.jpg,.jpeg,.png,.heic"
+                        onChange={(e) => setScannedForm(e.target.files?.[0] ?? null)}
+                        className="text-sm"
+                      />
+                      {scannedForm ? (
+                        <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
+                          ✓ {scannedForm.name} (will replace on save)
+                        </div>
+                      ) : savedLabel ? (
+                        <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
+                          ✓ {savedLabel} (saved — pick a new file to replace)
+                        </div>
+                      ) : null}
                     </div>
-                  )}
-                </div>
+                  );
+                })()}
 
                 {/* Optional: other supporting documents */}
                 <div
@@ -1148,6 +1291,20 @@ export default function NewClaimPage() {
                     onChange={(e) => setOtherFiles(Array.from(e.target.files ?? []))}
                     className="text-sm"
                   />
+                  {/* Previously-saved 'other' attachments */}
+                  {(() => {
+                    const otherSaved = Object.entries(savedDocs).filter(
+                      ([k]) => k.startsWith("other-") || k.startsWith("other."),
+                    );
+                    if (!otherSaved.length) return null;
+                    return (
+                      <ul className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
+                        {otherSaved.map(([key, label]) => (
+                          <li key={key}>✓ {label} (saved)</li>
+                        ))}
+                      </ul>
+                    );
+                  })()}
                   {otherFiles.length > 0 && (
                     <ul className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
                       {otherFiles.map((f, i) => (

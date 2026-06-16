@@ -2466,11 +2466,17 @@ def _claimant_status(event: dict[str, Any], headers: dict[str, str]) -> dict[str
 def _claimant_save_draft(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
     """POST /claimant/save-draft  (requires X-Claimant-Token header)
 
-    Body: {"submissionId": "...", "formData": { ...partial form values... }}
-    Persists `formData` to the META row so the user can resume on a later
-    visit. Only allowed while the submission is still in `draft` status —
-    refuses to overwrite once a real submit has been recorded so an admin's
-    in-progress review can't be clobbered.
+    Body: {
+      "submissionId": "...",
+      "formData": { ...partial form values... },
+      "filenames": ["government-id.pdf", ...]     (optional)
+      "originalNames": {"government-id.pdf": "DMV License.pdf"}  (optional)
+    }
+
+    Persists draftFormData + merges any newly-uploaded filenames into
+    documents — without flipping status off `draft`, so the claim stays
+    out of the admin queue until the real submit. Cannot be called once
+    a claim has actually been submitted.
     """
     token = (event.get("headers") or {}).get("X-Claimant-Token") or \
             (event.get("headers") or {}).get("x-claimant-token") or ""
@@ -2482,6 +2488,8 @@ def _claimant_save_draft(event: dict[str, Any], headers: dict[str, str]) -> dict
 
     submission_id = (body.get("submissionId") or "").strip()
     form_data = body.get("formData")
+    new_filenames = body.get("filenames") or []
+    new_originals = body.get("originalNames") or {}
 
     if not submission_id:
         return _err(400, "submissionId is required", headers)
@@ -2489,6 +2497,10 @@ def _claimant_save_draft(event: dict[str, Any], headers: dict[str, str]) -> dict
         return _err(400, "Invalid submission id", headers)
     if not isinstance(form_data, dict):
         return _err(400, "formData must be an object", headers)
+    if not isinstance(new_filenames, list):
+        return _err(400, "filenames must be a list", headers)
+    if not isinstance(new_originals, dict):
+        return _err(400, "originalNames must be an object", headers)
     if not token:
         return _err(401, "X-Claimant-Token header required", headers)
     if not _verify_claimant_token(submission_id, token):
@@ -2511,16 +2523,79 @@ def _claimant_save_draft(event: dict[str, Any], headers: dict[str, str]) -> dict
     if len(json.dumps(form_data)) > 16384:
         return _err(400, "formData too large", headers)
 
+    # Merge new filenames into documents, deduped, preserving order.
+    # Per-doc-id semantic: a new "government-id.pdf" replaces the old one
+    # since they share the same prefix; but for `other-N` files we just
+    # append. Keep this simple — dedupe by exact filename.
+    existing_docs: list[str] = list(item.get("documents") or [])
+    seen = set(existing_docs)
+    for fn in new_filenames:
+        if not isinstance(fn, str) or not fn:
+            continue
+        if fn in seen:
+            continue
+        existing_docs.append(fn)
+        seen.add(fn)
+
+    # If the new file replaces an old one with the same doc-id (e.g. user
+    # re-picked their photo ID), drop the older sibling so the dashboard
+    # doesn't show stale duplicates.
+    if new_filenames:
+        new_prefixes = {_doc_prefix(fn) for fn in new_filenames if isinstance(fn, str)}
+        deduped: list[str] = []
+        new_set = set(new_filenames)
+        for fn in existing_docs:
+            prefix = _doc_prefix(fn)
+            if prefix in new_prefixes and fn not in new_set:
+                # An older file with the same doc-id; drop it.
+                continue
+            deduped.append(fn)
+        existing_docs = deduped
+
+    update_expr_parts = ["draftFormData = :d", "documents = :docs", "updatedAt = :u"]
+    expr_vals: dict[str, Any] = {
+        ":d": form_data,
+        ":docs": existing_docs,
+        ":u": _now_iso(),
+    }
+
+    # Merge originalNames into the manifest so resumed views see friendly
+    # labels next to the saved files.
+    if new_originals:
+        try:
+            manifest_obj = s3.get_object(Bucket=BUCKET, Key=f"{submission_id}/_manifest.json")
+            manifest = json.loads(manifest_obj["Body"].read())
+        except Exception:  # noqa: BLE001
+            manifest = {"name": item.get("name", ""), "refundType": item.get("refundType", "")}
+        existing_originals = manifest.get("originalNames") or {}
+        for k, v in new_originals.items():
+            if isinstance(k, str) and isinstance(v, str):
+                existing_originals[k] = v[:200]
+        manifest["originalNames"] = existing_originals
+        try:
+            s3.put_object(
+                Bucket=BUCKET,
+                Key=f"{submission_id}/_manifest.json",
+                Body=json.dumps(manifest),
+                ContentType="application/json",
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"[save-draft] manifest update failed for sid={submission_id}: {e!r}")
+
     table.update_item(
         Key=_sub_key(submission_id),
-        UpdateExpression="SET draftFormData = :d, updatedAt = :u",
-        ExpressionAttributeValues={":d": form_data, ":u": _now_iso()},
+        UpdateExpression="SET " + ", ".join(update_expr_parts),
+        ExpressionAttributeValues=expr_vals,
     )
 
     return {
         "statusCode": 200,
         "headers": headers,
-        "body": json.dumps({"submissionId": submission_id, "saved": True}),
+        "body": json.dumps({
+            "submissionId": submission_id,
+            "saved": True,
+            "documents": existing_docs,
+        }),
     }
 
 
