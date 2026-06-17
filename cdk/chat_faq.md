@@ -40,3 +40,6 @@ A: I can connect you. Just say "I'd like to talk to a person" and I'll generate 
 
 Q: Can I claim a refund on someone else's behalf, like a deceased relative or a business I own?
 A: Yes, but you'll need to provide additional documentation through the claim form to prove you're the rightful claimant (e.g. proof of entitlement for stale-dated warrants, proof of ownership for property tax, business documentation, or estate paperwork). I don't have the full requirements list — for the specific paperwork your situation needs, please call (951) 955-3800.
+
+Q: Where do I send my completed claim, or who do I contact?
+A: Use https://auditorcontroller.org/ContactUs/Divisions — same page covers stale-dated warrant, payroll, and property tax. Or call (951) 955-3800.
