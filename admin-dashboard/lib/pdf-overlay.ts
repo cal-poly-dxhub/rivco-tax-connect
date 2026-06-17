@@ -1,10 +1,4 @@
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib"
-
-// Static link the office wants surfaced on every refund-type form. Used to
-// cover the hardcoded `ACOStaleDatedWarrant@RIVCO.ORG` baked into the PDF
-// template (page 1 + page 4) so the same URL works for stale warrant /
-// payroll / property tax claims.
-const CONTACT_URL = "https://auditorcontroller.org/ContactUs/Divisions"
+import { PDFDocument } from "pdf-lib"
 
 // Maps our form field IDs to the PDF's AcroForm field names.
 // The PDF has duplicate overlapping fields (named + TextN); use only one per slot.
@@ -152,62 +146,6 @@ export async function renderFilledPdf(
     } catch {
       signatureMissing = true
     }
-  }
-
-  // Cover the hardcoded `ACOStaleDatedWarrant@RIVCO.ORG` on pages 1 and 4
-  // with the divisions URL. Coordinates from pdfplumber word extraction on
-  // the template — keep the mask tight to the text bounds so it doesn't
-  // bleed into the surrounding bordered box or clip the line below.
-  try {
-    const helv = await pdfDoc.embedFont(StandardFonts.Helvetica)
-    const pages = pdfDoc.getPages()
-    const stamp = (
-      pageIdx: number,
-      x0: number,
-      x1: number,
-      maskTopY: number,
-      maskBottomY: number,
-    ) => {
-      if (!pages[pageIdx]) return
-      const page = pages[pageIdx]
-      const pageH = page.getHeight()
-      const pageW = page.getWidth()
-      // Pad horizontally enough that no glyph anti-aliasing escapes the mask.
-      const padX = 4
-      const rectX = Math.max(0, x0 - padX)
-      const rectW = (x1 - x0) + padX * 2
-      // Vertical bounds — keep the mask inside the text's own bounding box
-      // (no padding above/below) so it doesn't eat the box border above or
-      // the line of text below. The new URL still draws cleanly because we
-      // use a slightly smaller font size than the original.
-      const yBottom = pageH - maskBottomY
-      const rectH = (maskBottomY - maskTopY)
-      page.drawRectangle({
-        x: rectX,
-        y: yBottom,
-        width: rectW,
-        height: rectH,
-        color: rgb(1, 1, 1),
-      })
-      // Draw URL centered on the original text width, sized to fit.
-      const fontSize = 9
-      const textWidth = helv.widthOfTextAtSize(CONTACT_URL, fontSize)
-      const textX = rectX + (rectW - textWidth) / 2
-      const textY = yBottom + 1 // sit on the baseline inside the rect
-      page.drawText(CONTACT_URL, {
-        x: textX,
-        y: textY,
-        size: fontSize,
-        font: helv,
-        color: rgb(0, 0.184, 0.529), // navy
-      })
-    }
-    // page 1: ACOStaleDatedWarrant@RIVCO.ORG  x0=223.6 x1=401.3
-    stamp(0, 223.6, 401.3, 423.3, 434.4)
-    // page 4: same email, slightly different x  x0=232.1 x1=393.8
-    stamp(3, 232.1, 393.8, 556.9, 566.9)
-  } catch {
-    // best-effort overlay — never block the rest of the rendering on it
   }
 
   // Remove the duplicate named fields so they don't render empty boxes
@@ -381,8 +319,6 @@ export async function renderPropertyTaxHtml(
   </div>
   <div class="footer">
     County of Riverside · Office of the Auditor-Controller · 4080 Lemon Street, 6th Floor · Riverside, CA 92502-1326
-    <br>
-    Submit completed claims and required documentation via <a href="${CONTACT_URL}">${CONTACT_URL}</a>
   </div>
 </body>
 </html>`
