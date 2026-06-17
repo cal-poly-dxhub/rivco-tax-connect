@@ -70,6 +70,46 @@ interface DocRequirementsResponse {
   either_of: string[][];
 }
 
+// ── Reusable file-picker button ───────────────────────────
+//
+// Native <input type="file"> renders the OS-default "Choose File" UI which
+// looks like a label, not a button. Wrap it in a styled <label> so the
+// click target reads as an obvious button. The hidden input still drives
+// onChange so accessibility (keyboard, screen readers) is preserved.
+
+function FileInputButton({
+  accept,
+  multiple,
+  onChange,
+  label,
+}: {
+  accept?: string;
+  multiple?: boolean;
+  onChange: (files: File[]) => void;
+  label: string;
+}) {
+  return (
+    <label
+      className="inline-flex items-center px-3 py-2 text-xs font-bold uppercase tracking-widest cursor-pointer"
+      style={{
+        fontFamily: "Montserrat, sans-serif",
+        background: "var(--navy)",
+        color: "#fff",
+        border: "none",
+      }}
+    >
+      {label}
+      <input
+        type="file"
+        accept={accept}
+        multiple={multiple}
+        onChange={(e) => onChange(Array.from(e.target.files ?? []))}
+        className="hidden"
+      />
+    </label>
+  );
+}
+
 // ── Header ─────────────────────────────────────────────────
 
 function PageHeader() {
@@ -1211,24 +1251,23 @@ export default function NewClaimPage() {
                           </span>
                         )}
                       </div>
-                      <input
-                        type="file"
+                      <FileInputButton
                         accept=".pdf,.jpg,.jpeg,.png,.heic"
-                        onChange={(e) =>
+                        onChange={(files) =>
                           setReqFiles((prev) => ({
                             ...prev,
-                            [doc.id]: e.target.files?.[0] ?? null,
+                            [doc.id]: files[0] ?? null,
                           }))
                         }
-                        className="text-sm"
+                        label={picked || savedLabel ? "Replace File" : "Choose File"}
                       />
                       {picked ? (
                         <span className="text-xs" style={{ color: "var(--green, #2e7d32)" }}>
-                          ✓ {picked.name} (will replace on save)
+                          ✓ {picked.name}
                         </span>
                       ) : savedLabel ? (
                         <span className="text-xs" style={{ color: "var(--green, #2e7d32)" }}>
-                          ✓ {savedLabel} (saved — pick a new file to replace)
+                          ✓ {savedLabel}
                         </span>
                       ) : null}
                     </div>
@@ -1253,19 +1292,18 @@ export default function NewClaimPage() {
                         If you printed and filled this form by hand, upload a scan or photograph
                         here instead of signing digitally below.
                       </p>
-                      <input
-                        type="file"
+                      <FileInputButton
                         accept=".pdf,.jpg,.jpeg,.png,.heic"
-                        onChange={(e) => setScannedForm(e.target.files?.[0] ?? null)}
-                        className="text-sm"
+                        onChange={(files) => setScannedForm(files[0] ?? null)}
+                        label={scannedForm || savedLabel ? "Replace File" : "Choose File"}
                       />
                       {scannedForm ? (
                         <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
-                          ✓ {scannedForm.name} (will replace on save)
+                          ✓ {scannedForm.name}
                         </div>
                       ) : savedLabel ? (
                         <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
-                          ✓ {savedLabel} (saved — pick a new file to replace)
+                          ✓ {savedLabel}
                         </div>
                       ) : null}
                     </div>
@@ -1284,12 +1322,11 @@ export default function NewClaimPage() {
                     Attach any additional evidence you'd like staff to review (correspondence,
                     payment records, etc.). You can select multiple files at once.
                   </p>
-                  <input
-                    type="file"
-                    multiple
+                  <FileInputButton
                     accept=".pdf,.jpg,.jpeg,.png,.heic"
-                    onChange={(e) => setOtherFiles(Array.from(e.target.files ?? []))}
-                    className="text-sm"
+                    multiple
+                    onChange={(files) => setOtherFiles(files)}
+                    label={otherFiles.length > 0 ? "Replace Files" : "Choose Files"}
                   />
                   {/* Previously-saved 'other' attachments */}
                   {(() => {
@@ -1300,7 +1337,7 @@ export default function NewClaimPage() {
                     return (
                       <ul className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
                         {otherSaved.map(([key, label]) => (
-                          <li key={key}>✓ {label} (saved)</li>
+                          <li key={key}>✓ {label}</li>
                         ))}
                       </ul>
                     );
