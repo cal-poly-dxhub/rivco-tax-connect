@@ -54,7 +54,7 @@ admin_dashboard:
 # stack. Default behavior is to create them (`true`); set to `false` to
 # reuse an existing one.
 security:
-  manage_guardduty_detector: false
+  manage_guardduty_detector: true
 
 # Optional internal tool — a Next.js + shadcn page that talks to the chat
 # WebSocket so admins can test the bot without embedding the production
