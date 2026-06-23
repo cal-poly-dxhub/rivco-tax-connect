@@ -45,8 +45,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full diagram, flow walkthrough, a
 ├── auditor-controller-webpage.html # Mock auditor-controller.org site (gitignored)
 ├── config.yaml                     # Project config (region, super-admin, branch, model id)
 ├── ARCHITECTURE.md                 # Full architecture diagram + design notes
-├── DEPLOYMENT_GUIDE.md             # Deploy / verify / troubleshoot
-└── INTEGRATION_TESTS.md            # Manual test scenarios
+└── DEPLOYMENT_GUIDE.md             # Deploy / verify / troubleshoot
 ```
 
 ## Quick start
