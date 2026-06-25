@@ -318,14 +318,31 @@ def _street_matches(claim_street_name: str, real_address: str) -> bool:
 
 
 def _number_matches(claim_number: str, real_address: str) -> bool:
-    """Compare claimant's house-number guess against the real number."""
+    """Compare claimant's house-number guess against the real number.
+
+    Accepts variations users actually type:
+      - leading/trailing whitespace
+      - dashes ("23-19" vs "2319")
+      - leading zeros ("0789" vs "789") — only when the claim is purely numeric
+    Alphanumeric house numbers ("4080A") still need a case-insensitive match
+    on the alphabetic suffix.
+    """
     claim = (claim_number or '').strip()
     if not claim:
         return False
     real_num, _ = split_street_parts(extract_street(real_address))
     if not real_num:
         return False
-    return claim.lower().replace('-', '') == real_num.lower().replace('-', '')
+    norm = lambda s: s.lower().replace('-', '').replace(' ', '')
+    c = norm(claim)
+    r = norm(real_num)
+    if c == r:
+        return True
+    # Strip leading zeros only when both sides are pure digits — keeps
+    # "0789" vs "789" matching but doesn't collapse "4080A" to "480A".
+    if c.isdigit() and r.isdigit():
+        return c.lstrip('0') == r.lstrip('0')
+    return False
 
 
 def lookup(name: str, street: str = '', number: str = '') -> str:
@@ -425,8 +442,10 @@ def lookup(name: str, street: str = '', number: str = '') -> str:
             ),
         })
 
-    # Step 3 — verify number too.
-    if not _number_matches(number, real_address):
+    # Step 3 — verify number too. Some claimants have multiple records on the
+    # same street with different house numbers (rare but real); accept the
+    # number if it matches ANY record's address, not just records[0].
+    if not any(_number_matches(number, r.get('address', '')) for r in records):
         return json.dumps({
             'verification_failed': True,
             'message': (
