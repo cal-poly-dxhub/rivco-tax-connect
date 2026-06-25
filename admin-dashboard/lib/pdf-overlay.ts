@@ -129,26 +129,43 @@ export async function renderFilledPdf(
     }
   }
 
-  // Embed signature
+  // Embed signature. The AP-13 has TWO claimant signature boxes:
+  //   - Page 1: "SIGNATURE PayeeBusiness Claimant"   (Sig field, ~ y=225)
+  //   - Page 2: "SIGNATURE PayeeBusiness Claimant_2" (Sig field, ~ y=425)
+  // Both are claimant-signed; only "Signature of Notary Public" is left blank
+  // for the notary in person.
   if (signatureDataUrl) {
     try {
       const sigBytes = dataUrlToBytes(signatureDataUrl)
       const sigImage = await pdfDoc.embedPng(sigBytes)
       const pages = pdfDoc.getPages()
-      const page = pages[0]
       const scaled = sigImage.scaleToFit(250, 28)
-      page.drawImage(sigImage, {
+      // Page 1 — claimant signature on the affidavit body
+      pages[0].drawImage(sigImage, {
         x: 65,
         y: 227,
         width: scaled.width,
         height: scaled.height,
       })
+      // Page 2 — second claimant signature (the wider declaration block)
+      if (pages[1]) {
+        const scaled2 = sigImage.scaleToFit(280, 18)
+        pages[1].drawImage(sigImage, {
+          x: 80,
+          y: 425,
+          width: scaled2.width,
+          height: scaled2.height,
+        })
+      }
     } catch {
       signatureMissing = true
     }
   }
 
-  // Remove the duplicate named fields so they don't render empty boxes
+  // Remove the duplicate named fields so they don't render empty boxes.
+  // Also strip the two claimant Sig fields after we've drawn the image on
+  // top — if pdf-lib leaves them as form fields, flatten() can paint an
+  // empty rectangle over the drawn signature.
   const duplicateFields = [
     "Print Name", "Street Address", "City", "State and ZIP code",
     "City_2", "State", "Date", "NAME PayeeBusiness Name",
@@ -161,6 +178,7 @@ export async function renderFilledPdf(
     "PRINTED NAME Payee Business Name", "undefined",
     "AFFIDAVIT FOR THE REPLACEMENT OF STALE DATED WARRANT OFFICE OF THE AUDITORCONTROLLER",
     "AP  13 Policy  214 Page 2 of 4",
+    "SIGNATURE PayeeBusiness Claimant", "SIGNATURE PayeeBusiness Claimant_2",
   ]
   for (const name of duplicateFields) {
     try { form.removeField(form.getField(name)) } catch {}

@@ -87,13 +87,26 @@ export async function renderAp13Pdf(
     try {
       const sigBytes = dataUrlToBytes(signatureDataUrl);
       const sigImage = await pdfDoc.embedPng(sigBytes);
+      const pages = pdfDoc.getPages();
       const scaled = sigImage.scaleToFit(250, 28);
-      pdfDoc.getPages()[0].drawImage(sigImage, {
+      // Page 1 — claimant signature on the affidavit body.
+      pages[0].drawImage(sigImage, {
         x: 65,
         y: 227,
         width: scaled.width,
         height: scaled.height,
       });
+      // Page 2 — second claimant signature (declaration block). Notary box
+      // stays blank for the notary to sign in person.
+      if (pages[1]) {
+        const scaled2 = sigImage.scaleToFit(280, 18);
+        pages[1].drawImage(sigImage, {
+          x: 80,
+          y: 425,
+          width: scaled2.width,
+          height: scaled2.height,
+        });
+      }
     } catch {
       // fall through — signature may be missing on the printed copy and the
       // claimant signs on paper before it goes to the notary.
@@ -114,6 +127,7 @@ export async function renderAp13Pdf(
     "PRINTED NAME Payee Business Name", "undefined",
     "AFFIDAVIT FOR THE REPLACEMENT OF STALE DATED WARRANT OFFICE OF THE AUDITORCONTROLLER",
     "AP  13 Policy  214 Page 2 of 4",
+    "SIGNATURE PayeeBusiness Claimant", "SIGNATURE PayeeBusiness Claimant_2",
   ];
   for (const name of duplicateFields) {
     try { form.removeField(form.getField(name)); } catch {}
