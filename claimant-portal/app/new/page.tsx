@@ -58,6 +58,29 @@ function isAp13(type: string): boolean {
   return AP13_TYPES.has(type);
 }
 
+// Per-warrant notarization threshold. Notary is required on the AP-13 when an
+// individual warrant/claim is at or above this amount.
+const NOTARY_THRESHOLD = 1000;
+
+function parseAmount(raw: string | undefined): number {
+  if (!raw) return 0;
+  const n = parseFloat(String(raw).replace(/[$,\s]/g, ""));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function claimAmount(claim: Claim): number {
+  if (claim.type === "PROPERTY_TAX") return parseAmount(claim.refund_amount);
+  return parseAmount(claim.warrant_amount);
+}
+
+function requiresNotary(claim: Claim): boolean {
+  return isAp13(claim.type) && claimAmount(claim) >= NOTARY_THRESHOLD;
+}
+
+function anyClaimRequiresNotary(claims: Claim[]): boolean {
+  return claims.some(requiresNotary);
+}
+
 interface RequiredDoc {
   id: string;
   label: string;
@@ -356,6 +379,20 @@ export default function NewClaimPage() {
 
   // Reserve-on-load state (bot handoff)
   const [reservedId, setReservedId] = useState("");
+
+  // Notary popup. Auto-opens the first time any warrant on the form crosses
+  // the $1,000 threshold; user can re-open it from the inline notice.
+  const [notaryOpen, setNotaryOpen] = useState(false);
+  const notaryShownRef = useRef(false);
+  const notaryRequired = anyClaimRequiresNotary(claims);
+  const qualifyingClaimCount = claims.filter(requiresNotary).length;
+
+  useEffect(() => {
+    if (notaryRequired && !notaryShownRef.current) {
+      notaryShownRef.current = true;
+      setNotaryOpen(true);
+    }
+  }, [notaryRequired]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -1387,36 +1424,59 @@ export default function NewClaimPage() {
                 );
               })()}
 
-              <button
-                type="submit"
-                disabled={phase === "submitting"}
-                className="w-full py-3 font-bold uppercase tracking-wide text-sm disabled:opacity-50"
-                style={{
-                  fontFamily: "Montserrat, sans-serif",
-                  background: "var(--yellow)",
-                  color: "var(--navy-dark)",
-                  border: "none",
-                  cursor: phase === "submitting" ? "not-allowed" : "pointer",
-                }}
-              >
-                {phase === "submitting" ? "Submitting…" : "Submit Claim"}
-              </button>
+              {notaryRequired && (
+                <div
+                  className="px-4 py-3 mb-3 text-sm border-l-4"
+                  style={{ background: "#fff8e1", borderColor: "#c98a00", color: "#5a3b00" }}
+                >
+                  <strong>Notarization required.</strong>{" "}
+                  {qualifyingClaimCount === 1
+                    ? "One warrant on this submission is $1,000 or more, so its AP-13 affidavit must be notarized before it can be submitted."
+                    : `${qualifyingClaimCount} warrants on this submission are $1,000 or more, so their AP-13 affidavits must be notarized before they can be submitted.`}{" "}
+                  Use <strong>Save and continue later</strong> below, then return with your Claim ID after the notarized form(s) are signed.{" "}
+                  <button
+                    type="button"
+                    onClick={() => setNotaryOpen(true)}
+                    className="underline font-bold"
+                    style={{ color: "#5a3b00" }}
+                  >
+                    See instructions
+                  </button>
+                </div>
+              )}
+
+              {!notaryRequired && (
+                <button
+                  type="submit"
+                  disabled={phase === "submitting"}
+                  className="w-full py-3 font-bold uppercase tracking-wide text-sm disabled:opacity-50"
+                  style={{
+                    fontFamily: "Montserrat, sans-serif",
+                    background: "var(--yellow)",
+                    color: "var(--navy-dark)",
+                    border: "none",
+                    cursor: phase === "submitting" ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {phase === "submitting" ? "Submitting…" : "Submit Claim"}
+                </button>
+              )}
 
               {reservedId && (
                 <button
                   type="button"
                   onClick={() => saveDraft()}
                   disabled={phase === "submitting"}
-                  className="w-full mt-2 py-2 text-xs font-bold uppercase tracking-widest disabled:opacity-50"
+                  className={`w-full ${notaryRequired ? "" : "mt-2"} py-2 text-xs font-bold uppercase tracking-widest disabled:opacity-50`}
                   style={{
                     fontFamily: "Montserrat, sans-serif",
-                    background: "transparent",
-                    color: "var(--navy)",
-                    border: "1px solid var(--navy)",
+                    background: notaryRequired ? "var(--yellow)" : "transparent",
+                    color: notaryRequired ? "var(--navy-dark)" : "var(--navy)",
+                    border: notaryRequired ? "none" : "1px solid var(--navy)",
                     cursor: phase === "submitting" ? "not-allowed" : "pointer",
                   }}
                 >
-                  Save and continue later
+                  {notaryRequired ? "Save and continue later (required)" : "Save and continue later"}
                 </button>
               )}
             </form>
@@ -1432,6 +1492,92 @@ export default function NewClaimPage() {
           4080 Lemon Street, 6th Floor · P.O. Box 1326 · Riverside, CA 92502-1326
         </footer>
       </div>
+
+      {/* ── Notary popup ── */}
+      {notaryOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center px-4"
+          style={{ background: "rgba(0,0,0,0.5)" }}
+        >
+          <div
+            className="w-full max-w-lg relative"
+            style={{
+              background: "var(--surface)",
+              border: "2px solid var(--navy)",
+              boxShadow: "0 8px 32px rgba(0,0,0,0.25)",
+            }}
+          >
+            <div
+              className="px-6 py-4 flex items-center justify-between"
+              style={{ background: "var(--navy)" }}
+            >
+              <span
+                className="text-white font-bold uppercase tracking-wide text-sm"
+                style={{ fontFamily: "Montserrat, sans-serif" }}
+              >
+                Notarization Required
+              </span>
+              <button
+                type="button"
+                onClick={() => setNotaryOpen(false)}
+                className="text-gray-300 hover:text-white text-lg leading-none"
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <div className="px-6 py-6 text-sm space-y-3" style={{ color: "var(--text-muted)" }}>
+              <p>
+                Notarization is determined <strong>per warrant</strong>, not per submission.
+              </p>
+              <ul className="list-disc pl-5 space-y-1">
+                <li>
+                  If <strong>every</strong> warrant on this claim is under $1,000, no notary is
+                  needed and you can submit normally.
+                </li>
+                <li>
+                  If <strong>any</strong> warrant is $1,000 or more, the AP-13 affidavit for that
+                  warrant must be notarized before this claim can be submitted.
+                </li>
+              </ul>
+              <p>To finish a claim that needs notarization:</p>
+              <ol className="list-decimal pl-5 space-y-1">
+                <li>
+                  Use the <strong>Print AP-13 forms</strong> button below to print one affidavit
+                  per qualifying warrant ($1,000 or more).
+                </li>
+                <li>Have each printed form notarized.</li>
+                <li>
+                  Click <strong>Save and continue later</strong> to save your progress and get
+                  your <strong>Claim ID</strong>.
+                </li>
+                <li>
+                  Return to the <strong>Continue Claimant Portal</strong> with your Claim ID and
+                  upload scans of the notarized form(s) to complete your submission.
+                </li>
+              </ol>
+              <p className="text-xs italic">
+                Warrants under $1,000 on this same claim do <strong>not</strong> need notarization.
+              </p>
+            </div>
+            <div className="px-6 pb-6 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setNotaryOpen(false)}
+                className="px-5 py-2 text-sm font-bold uppercase tracking-wide"
+                style={{
+                  fontFamily: "Montserrat, sans-serif",
+                  background: "var(--navy)",
+                  color: "#fff",
+                  border: "none",
+                }}
+              >
+                Got it
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
