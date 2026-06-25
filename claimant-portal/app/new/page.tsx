@@ -827,6 +827,9 @@ export default function NewClaimPage() {
         } else {
           claims.forEach((c, i) => {
             if (c.type !== section) return;
+            // $1K+ warrants don't render their fields — the notarized scan
+            // covers them, so skip required-field validation for that row.
+            if (requiresNotary(c)) return;
             const v = (c as unknown as Record<string, unknown>)[f.id];
             if (!(v === "true" || v === "false")) missing.push(`${f.label} (Claim ${i + 1})`);
           });
@@ -839,6 +842,7 @@ export default function NewClaimPage() {
       } else {
         claims.forEach((c, i) => {
           if (c.type !== section) return;
+          if (requiresNotary(c)) return;
           const v = String((c as unknown as Record<string, unknown>)[f.id] ?? "").trim();
           if (!v) missing.push(`${f.label} (Claim ${i + 1})`);
         });
@@ -1327,16 +1331,95 @@ export default function NewClaimPage() {
                   );
                 }
 
-                // Per-claim sections, in URL/handoff order.
+                // Per-claim sections, in URL/handoff order. Warrants at or
+                // above the $1,000 notary threshold replace their entire
+                // field block with a Print AP-13 + Upload Notarized pair —
+                // the claimant fills nothing for those rows because the
+                // notarized scan supersedes a digital fill-in.
                 claims.forEach((claim, idx) => {
-                  const fields = bySection[claim.type];
-                  if (!fields || fields.length === 0) return;
                   const sectionTitle = typeSchemas[claim.type]?.title ?? claim.type;
                   let title = sectionTitle;
                   if (isAp13(claim.type) && (ap13Counts[claim.type] ?? 0) > 1) {
                     const seen = (ap13SeenIdx[claim.type] = (ap13SeenIdx[claim.type] ?? 0) + 1);
                     title = `${sectionTitle} — Claim ${seen} of ${ap13Counts[claim.type]}`;
                   }
+
+                  if (requiresNotary(claim)) {
+                    const amt = parseAmount(claim.warrant_amount).toLocaleString(undefined, {
+                      style: "currency",
+                      currency: "USD",
+                    });
+                    const picked = notarizedFiles[idx];
+                    const savedKey = Object.keys(savedDocs).find(
+                      (k) => k.split(".")[0] === notarizedDocId(idx),
+                    );
+                    const savedLabel = savedKey ? savedDocs[savedKey] : null;
+                    blocks.push(
+                      <div key={`claim-${idx}`}>
+                        {sectionHeader(title, `claim-${idx}`)}
+                        <div
+                          className="border-2 px-4 py-4 mb-4"
+                          style={{ borderColor: "#c98a00", background: "#fffaf0" }}
+                        >
+                          <div className="text-sm mb-1">
+                            <span className="font-bold">
+                              Warrant {claim.warrant_number || `#${idx + 1}`}
+                            </span>
+                            <span className="ml-2" style={{ color: "var(--text-muted)" }}>
+                              {amt}
+                            </span>
+                          </div>
+                          <p className="text-xs mb-3" style={{ color: "var(--text-muted)" }}>
+                            This warrant is $1,000 or more, so the AP-13 affidavit must be
+                            notarized. Print the form below — your name, address, warrant number,
+                            and amount are pre-filled — get it notarized, then upload the scan.
+                          </p>
+                          <div className="flex gap-2 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={() => handlePrintAp13ForClaim(idx)}
+                              className="px-3 py-2 text-xs font-bold uppercase tracking-wide"
+                              style={{
+                                fontFamily: "Montserrat, sans-serif",
+                                background: "var(--navy)",
+                                color: "#fff",
+                                border: "none",
+                              }}
+                            >
+                              Print filled AP-13
+                            </button>
+                            <FileInputButton
+                              accept=".pdf,.jpg,.jpeg,.png,.heic"
+                              onChange={(files) =>
+                                setNotarizedFiles((prev) => ({
+                                  ...prev,
+                                  [idx]: files[0] ?? null,
+                                }))
+                              }
+                              label={picked || savedLabel ? "Replace Notarized Scan" : "Upload Notarized Scan"}
+                            />
+                          </div>
+                          {picked ? (
+                            <div className="mt-2 text-xs" style={{ color: "var(--green, #2e7d32)" }}>
+                              ✓ {picked.name}
+                            </div>
+                          ) : savedLabel ? (
+                            <div className="mt-2 text-xs" style={{ color: "var(--green, #2e7d32)" }}>
+                              ✓ {savedLabel}
+                            </div>
+                          ) : (
+                            <div className="mt-2 text-xs" style={{ color: "#a14a00" }}>
+                              Notarized scan required to submit.
+                            </div>
+                          )}
+                        </div>
+                      </div>,
+                    );
+                    return;
+                  }
+
+                  const fields = bySection[claim.type];
+                  if (!fields || fields.length === 0) return;
                   blocks.push(
                     <div key={`claim-${idx}`}>
                       {sectionHeader(title, `claim-${idx}`)}
@@ -1527,8 +1610,8 @@ export default function NewClaimPage() {
                   <p className="mb-2">
                     <strong>Notarization required.</strong>{" "}
                     {qualifyingClaimCount === 1
-                      ? "One warrant on this submission is $1,000 or more. Print the AP-13, get it notarized, then upload the notarized scan below — Submit unlocks once it's attached."
-                      : `${qualifyingClaimCount} warrants on this submission are $1,000 or more. Print each AP-13 below, get them notarized, then upload each notarized scan — Submit unlocks once all are attached.`}
+                      ? "One warrant on this submission is $1,000 or more. Print the AP-13 in its claim section above, get it notarized, then upload the scan there — Submit unlocks once it's attached."
+                      : `${qualifyingClaimCount} warrants on this submission are $1,000 or more. Print each AP-13 in its claim section above, get them notarized, then upload each scan there — Submit unlocks once all are attached.`}
                   </p>
                   <button
                     type="button"
@@ -1538,70 +1621,6 @@ export default function NewClaimPage() {
                   >
                     See instructions
                   </button>
-
-                  <div className="mt-3 space-y-2">
-                    {claims.map((c, idx) => {
-                      if (!requiresNotary(c)) return null;
-                      const label = c.warrant_number
-                        ? `Warrant ${c.warrant_number}`
-                        : `Claim ${idx + 1}`;
-                      const amt = parseAmount(c.warrant_amount).toLocaleString(undefined, {
-                        style: "currency",
-                        currency: "USD",
-                      });
-                      const picked = notarizedFiles[idx];
-                      const savedKey = Object.keys(savedDocs).find(
-                        (k) => k.split(".")[0] === notarizedDocId(idx),
-                      );
-                      const savedLabel = savedKey ? savedDocs[savedKey] : null;
-                      return (
-                        <div
-                          key={`notary-${idx}`}
-                          className="border px-3 py-2 flex flex-wrap items-center gap-2"
-                          style={{ background: "#fff", borderColor: "#c98a00", color: "var(--text)" }}
-                        >
-                          <div className="flex-1 min-w-[14rem] text-sm">
-                            <div className="font-semibold">{label} — {amt}</div>
-                            <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-                              Print the filled AP-13, get it notarized, then upload the scan.
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => handlePrintAp13ForClaim(idx)}
-                            className="px-3 py-1 text-xs font-bold uppercase tracking-wide"
-                            style={{
-                              fontFamily: "Montserrat, sans-serif",
-                              background: "var(--navy)",
-                              color: "#fff",
-                              border: "none",
-                            }}
-                          >
-                            Print AP-13
-                          </button>
-                          <FileInputButton
-                            accept=".pdf,.jpg,.jpeg,.png,.heic"
-                            onChange={(files) =>
-                              setNotarizedFiles((prev) => ({
-                                ...prev,
-                                [idx]: files[0] ?? null,
-                              }))
-                            }
-                            label={picked || savedLabel ? "Replace Notarized" : "Upload Notarized"}
-                          />
-                          {picked ? (
-                            <span className="text-xs w-full" style={{ color: "var(--green, #2e7d32)" }}>
-                              ✓ {picked.name}
-                            </span>
-                          ) : savedLabel ? (
-                            <span className="text-xs w-full" style={{ color: "var(--green, #2e7d32)" }}>
-                              ✓ {savedLabel}
-                            </span>
-                          ) : null}
-                        </div>
-                      );
-                    })}
-                  </div>
                 </div>
               )}
 
