@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { PDFDocument } from "pdf-lib";
 import { apiFetch, ApiError } from "@/lib/api";
+import { renderAp13Pdf } from "@/lib/ap13";
 import { getToken, storeToken } from "@/lib/types";
 import type {
   ClaimantSubmission,
@@ -561,6 +563,65 @@ export default function NewClaimPage() {
 
   function handleFieldChange(id: string, value: string) {
     setFormValues((v) => ({ ...v, [id]: value }));
+  }
+
+  // Render one filled AP-13 PDF per qualifying warrant ($1,000+), merge them
+  // into a single document, and open the system print dialog. Sub-$1,000
+  // warrants are skipped because they don't need notarization. Property-tax
+  // claims are skipped — only AP-13 warrants are printable here.
+  async function handlePrintAp13() {
+    const qualifying = claims.filter(requiresNotary);
+    if (qualifying.length === 0) {
+      setStatusKind("error");
+      setStatusMsg("No warrants on this claim require notarization.");
+      return;
+    }
+    setStatusKind("info");
+    setStatusMsg("Generating notary-ready forms…");
+    try {
+      const merged = await PDFDocument.create();
+      const submittedAt = new Date().toISOString();
+      for (const claim of qualifying) {
+        const claimAsRecord = claim as unknown as Record<string, unknown> & { type: string };
+        const bytes = await renderAp13Pdf(formValues, claimAsRecord, sigDataUrl, submittedAt);
+        if (!bytes) continue;
+        const src = await PDFDocument.load(bytes);
+        const pages = await merged.copyPages(src, src.getPageIndices());
+        pages.forEach((p) => merged.addPage(p));
+      }
+      if (merged.getPageCount() === 0) {
+        setStatusKind("error");
+        setStatusMsg("Could not generate AP-13 forms.");
+        return;
+      }
+      const out = await merged.save();
+      const blobPart: BlobPart = out.buffer.slice(
+        out.byteOffset,
+        out.byteOffset + out.byteLength,
+      ) as ArrayBuffer;
+      const blob = new Blob([blobPart], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const win = window.open(url, "_blank");
+      if (!win) {
+        // Pop-up blocked — surface a direct link the user can click.
+        setStatusKind("error");
+        setStatusMsg("Pop-up blocked. Allow pop-ups and try again.");
+        URL.revokeObjectURL(url);
+        return;
+      }
+      win.addEventListener("load", () => {
+        try { win.focus(); win.print(); } catch {}
+      });
+      setStatusKind("success");
+      setStatusMsg(
+        qualifying.length === 1
+          ? "Opened a notary-ready AP-13 form in a new tab."
+          : `Opened ${qualifying.length} notary-ready AP-13 forms in a new tab.`,
+      );
+    } catch (e) {
+      setStatusKind("error");
+      setStatusMsg(`Could not generate AP-13 forms: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   // Stash whatever the user has typed so they can resume later. Reuses the
@@ -1429,19 +1490,38 @@ export default function NewClaimPage() {
                   className="px-4 py-3 mb-3 text-sm border-l-4"
                   style={{ background: "#fff8e1", borderColor: "#c98a00", color: "#5a3b00" }}
                 >
-                  <strong>Notarization required.</strong>{" "}
-                  {qualifyingClaimCount === 1
-                    ? "One warrant on this submission is $1,000 or more, so its AP-13 affidavit must be notarized before it can be submitted."
-                    : `${qualifyingClaimCount} warrants on this submission are $1,000 or more, so their AP-13 affidavits must be notarized before they can be submitted.`}{" "}
-                  Use <strong>Save and continue later</strong> below, then return with your Claim ID after the notarized form(s) are signed.{" "}
-                  <button
-                    type="button"
-                    onClick={() => setNotaryOpen(true)}
-                    className="underline font-bold"
-                    style={{ color: "#5a3b00" }}
-                  >
-                    See instructions
-                  </button>
+                  <p className="mb-2">
+                    <strong>Notarization required.</strong>{" "}
+                    {qualifyingClaimCount === 1
+                      ? "One warrant on this submission is $1,000 or more, so its AP-13 affidavit must be notarized before it can be submitted."
+                      : `${qualifyingClaimCount} warrants on this submission are $1,000 or more, so their AP-13 affidavits must be notarized before they can be submitted.`}{" "}
+                    Use <strong>Save and continue later</strong> below, then return with your Claim ID after the notarized form(s) are signed.
+                  </p>
+                  <div className="flex gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={handlePrintAp13}
+                      className="px-3 py-1 text-xs font-bold uppercase tracking-wide"
+                      style={{
+                        fontFamily: "Montserrat, sans-serif",
+                        background: "var(--navy)",
+                        color: "#fff",
+                        border: "none",
+                      }}
+                    >
+                      {qualifyingClaimCount === 1
+                        ? "Print AP-13 form"
+                        : `Print AP-13 forms (${qualifyingClaimCount})`}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNotaryOpen(true)}
+                      className="px-3 py-1 text-xs font-bold uppercase tracking-wide underline"
+                      style={{ color: "#5a3b00", background: "transparent", border: "none" }}
+                    >
+                      See instructions
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -1560,7 +1640,25 @@ export default function NewClaimPage() {
                 Warrants under $1,000 on this same claim do <strong>not</strong> need notarization.
               </p>
             </div>
-            <div className="px-6 pb-6 flex justify-end">
+            <div className="px-6 pb-6 flex justify-end gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => {
+                  setNotaryOpen(false);
+                  handlePrintAp13();
+                }}
+                className="px-5 py-2 text-sm font-bold uppercase tracking-wide"
+                style={{
+                  fontFamily: "Montserrat, sans-serif",
+                  background: "var(--yellow)",
+                  color: "var(--navy-dark)",
+                  border: "none",
+                }}
+              >
+                {qualifyingClaimCount === 1
+                  ? "Print AP-13 form"
+                  : `Print AP-13 forms (${qualifyingClaimCount})`}
+              </button>
               <button
                 type="button"
                 onClick={() => setNotaryOpen(false)}
