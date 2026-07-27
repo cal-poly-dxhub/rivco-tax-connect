@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { PDFDocument } from "pdf-lib";
 import { apiFetch, ApiError } from "@/lib/api";
+import { renderAp13Pdf } from "@/lib/ap13";
 import { getToken, storeToken } from "@/lib/types";
 import type {
   ClaimantSubmission,
@@ -56,6 +58,29 @@ const AP13_TYPES = new Set(["STALE_WARRANT", "PAYROLL"]);
 
 function isAp13(type: string): boolean {
   return AP13_TYPES.has(type);
+}
+
+// Per-warrant notarization threshold. Notary is required on the AP-13 when an
+// individual warrant/claim is at or above this amount.
+const NOTARY_THRESHOLD = 1000;
+
+function parseAmount(raw: string | undefined): number {
+  if (!raw) return 0;
+  const n = parseFloat(String(raw).replace(/[$,\s]/g, ""));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function claimAmount(claim: Claim): number {
+  if (claim.type === "PROPERTY_TAX") return parseAmount(claim.refund_amount);
+  return parseAmount(claim.warrant_amount);
+}
+
+function requiresNotary(claim: Claim): boolean {
+  return isAp13(claim.type) && claimAmount(claim) >= NOTARY_THRESHOLD;
+}
+
+function anyClaimRequiresNotary(claims: Claim[]): boolean {
+  return claims.some(requiresNotary);
 }
 
 interface RequiredDoc {
@@ -357,6 +382,32 @@ export default function NewClaimPage() {
   // Reserve-on-load state (bot handoff)
   const [reservedId, setReservedId] = useState("");
 
+  // Notary popup. Auto-opens the first time any warrant on the form crosses
+  // the $1,000 threshold; user can re-open it from the inline notice.
+  const [notaryOpen, setNotaryOpen] = useState(false);
+  const notaryShownRef = useRef(false);
+  const notaryRequired = anyClaimRequiresNotary(claims);
+  const qualifyingClaimCount = claims.filter(requiresNotary).length;
+
+  // Notarized-form uploads keyed by claim index. Each qualifying warrant
+  // (>= $1,000) needs its own notarized AP-13 scan before Submit unlocks.
+  const [notarizedFiles, setNotarizedFiles] = useState<Record<number, File | null>>({});
+  // notary doc keys saved on a prior draft round, e.g. "notarized-2.pdf".
+  const notarizedDocId = (idx: number) => `notarized-${idx}`;
+  function hasNotarizedForClaim(idx: number): boolean {
+    if (notarizedFiles[idx]) return true;
+    return Object.keys(savedDocs).some((k) => k.split(".")[0] === notarizedDocId(idx));
+  }
+  const allNotarizedUploaded = !notaryRequired
+    || claims.every((c, i) => !requiresNotary(c) || hasNotarizedForClaim(i));
+
+  useEffect(() => {
+    if (notaryRequired && !notaryShownRef.current) {
+      notaryShownRef.current = true;
+      setNotaryOpen(true);
+    }
+  }, [notaryRequired]);
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const resumeId = params.get("submissionId") ?? "";
@@ -526,6 +577,55 @@ export default function NewClaimPage() {
     setFormValues((v) => ({ ...v, [id]: value }));
   }
 
+  // Render one filled AP-13 PDF for a single qualifying warrant and open the
+  // system print dialog. Reuses the same overlay logic the admin dashboard
+  // uses (lib/ap13.ts) so the printed copy matches what staff will eventually
+  // see — name, address, warrant number, amount, business unit are all
+  // pre-filled. The claimant signs and gets it notarized on paper.
+  async function handlePrintAp13ForClaim(idx: number) {
+    const claim = claims[idx];
+    if (!claim || !requiresNotary(claim)) return;
+    setStatusKind("info");
+    setStatusMsg("Generating notary-ready form…");
+    try {
+      const claimAsRecord = claim as unknown as Record<string, unknown> & { type: string };
+      const bytes = await renderAp13Pdf(
+        formValues,
+        claimAsRecord,
+        sigDataUrl,
+        new Date().toISOString(),
+      );
+      if (!bytes) {
+        setStatusKind("error");
+        setStatusMsg("Could not generate AP-13 form.");
+        return;
+      }
+      const blobPart: BlobPart = bytes.buffer.slice(
+        bytes.byteOffset,
+        bytes.byteOffset + bytes.byteLength,
+      ) as ArrayBuffer;
+      const blob = new Blob([blobPart], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const win = window.open(url, "_blank");
+      if (!win) {
+        setStatusKind("error");
+        setStatusMsg("Pop-up blocked. Allow pop-ups and try again.");
+        URL.revokeObjectURL(url);
+        return;
+      }
+      win.addEventListener("load", () => {
+        try { win.focus(); win.print(); } catch {}
+      });
+      setStatusKind("success");
+      setStatusMsg(
+        `Opened AP-13 for warrant ${claim.warrant_number || `#${idx + 1}`} in a new tab.`,
+      );
+    } catch (e) {
+      setStatusKind("error");
+      setStatusMsg(`Could not generate AP-13 form: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   // Stash whatever the user has typed so they can resume later. Reuses the
   // claimant token from sessionStorage; the token is set by the bot-handoff
   // /reserve call (returned via setReservedId) or by a /my-claim verify.
@@ -565,6 +665,14 @@ export default function NewClaimPage() {
         const ts = new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14);
         const base = otherFiles.length > 1 ? `other-${ts}-${i + 1}` : `other-${ts}`;
         toUpload.push({ docId: base, file: f, safeName: `${base}.${ext(f)}` });
+      });
+      // Notarized AP-13 scans, one per qualifying claim. Keyed by claim
+      // index so the admin can match each upload to the warrant it covers.
+      Object.entries(notarizedFiles).forEach(([idxStr, f]) => {
+        if (!f) return;
+        const idx = parseInt(idxStr, 10);
+        const docId = notarizedDocId(idx);
+        toUpload.push({ docId, file: f, safeName: `${docId}.${ext(f)}` });
       });
 
       // Push files to S3 if there are any.
@@ -719,6 +827,9 @@ export default function NewClaimPage() {
         } else {
           claims.forEach((c, i) => {
             if (c.type !== section) return;
+            // $1K+ warrants don't render their fields — the notarized scan
+            // covers them, so skip required-field validation for that row.
+            if (requiresNotary(c)) return;
             const v = (c as unknown as Record<string, unknown>)[f.id];
             if (!(v === "true" || v === "false")) missing.push(`${f.label} (Claim ${i + 1})`);
           });
@@ -731,6 +842,7 @@ export default function NewClaimPage() {
       } else {
         claims.forEach((c, i) => {
           if (c.type !== section) return;
+          if (requiresNotary(c)) return;
           const v = String((c as unknown as Record<string, unknown>)[f.id] ?? "").trim();
           if (!v) missing.push(`${f.label} (Claim ${i + 1})`);
         });
@@ -755,6 +867,24 @@ export default function NewClaimPage() {
       setStatusKind("error");
       setStatusMsg(`Please upload required documents: ${missingDocs.join(", ")}`);
       return;
+    }
+
+    // Notary gate: every $1,000+ warrant needs a notarized AP-13 scan.
+    if (notaryRequired) {
+      const missingNotary: string[] = [];
+      claims.forEach((c, i) => {
+        if (!requiresNotary(c)) return;
+        if (!hasNotarizedForClaim(i)) {
+          missingNotary.push(c.warrant_number || `claim ${i + 1}`);
+        }
+      });
+      if (missingNotary.length > 0) {
+        setStatusKind("error");
+        setStatusMsg(
+          `Notarized AP-13 required for: ${missingNotary.join(", ")}. Upload the notarized scans before submitting, or use Save and continue later.`,
+        );
+        return;
+      }
     }
 
     setPhase("submitting");
@@ -802,6 +932,12 @@ export default function NewClaimPage() {
       otherFiles.forEach((f, i) => {
         const base = otherFiles.length > 1 ? `other-${i + 1}` : "other";
         docFiles.push({ docId: base, file: f, safeName: `${base}.${ext(f)}` });
+      });
+      Object.entries(notarizedFiles).forEach(([idxStr, f]) => {
+        if (!f) return;
+        const idx = parseInt(idxStr, 10);
+        const docId = notarizedDocId(idx);
+        docFiles.push({ docId, file: f, safeName: `${docId}.${ext(f)}` });
       });
 
       const fileList: {
@@ -1195,16 +1331,95 @@ export default function NewClaimPage() {
                   );
                 }
 
-                // Per-claim sections, in URL/handoff order.
+                // Per-claim sections, in URL/handoff order. Warrants at or
+                // above the $1,000 notary threshold replace their entire
+                // field block with a Print AP-13 + Upload Notarized pair —
+                // the claimant fills nothing for those rows because the
+                // notarized scan supersedes a digital fill-in.
                 claims.forEach((claim, idx) => {
-                  const fields = bySection[claim.type];
-                  if (!fields || fields.length === 0) return;
                   const sectionTitle = typeSchemas[claim.type]?.title ?? claim.type;
                   let title = sectionTitle;
                   if (isAp13(claim.type) && (ap13Counts[claim.type] ?? 0) > 1) {
                     const seen = (ap13SeenIdx[claim.type] = (ap13SeenIdx[claim.type] ?? 0) + 1);
                     title = `${sectionTitle} — Claim ${seen} of ${ap13Counts[claim.type]}`;
                   }
+
+                  if (requiresNotary(claim)) {
+                    const amt = parseAmount(claim.warrant_amount).toLocaleString(undefined, {
+                      style: "currency",
+                      currency: "USD",
+                    });
+                    const picked = notarizedFiles[idx];
+                    const savedKey = Object.keys(savedDocs).find(
+                      (k) => k.split(".")[0] === notarizedDocId(idx),
+                    );
+                    const savedLabel = savedKey ? savedDocs[savedKey] : null;
+                    blocks.push(
+                      <div key={`claim-${idx}`}>
+                        {sectionHeader(title, `claim-${idx}`)}
+                        <div
+                          className="border-2 px-4 py-4 mb-4"
+                          style={{ borderColor: "#c98a00", background: "#fffaf0" }}
+                        >
+                          <div className="text-sm mb-1">
+                            <span className="font-bold">
+                              Warrant {claim.warrant_number || `#${idx + 1}`}
+                            </span>
+                            <span className="ml-2" style={{ color: "var(--text-muted)" }}>
+                              {amt}
+                            </span>
+                          </div>
+                          <p className="text-xs mb-3" style={{ color: "var(--text-muted)" }}>
+                            This warrant is $1,000 or more, so the AP-13 affidavit must be
+                            notarized. Print the form below — your name, address, warrant number,
+                            and amount are pre-filled — get it notarized, then upload the scan.
+                          </p>
+                          <div className="flex gap-2 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={() => handlePrintAp13ForClaim(idx)}
+                              className="px-3 py-2 text-xs font-bold uppercase tracking-wide"
+                              style={{
+                                fontFamily: "Montserrat, sans-serif",
+                                background: "var(--navy)",
+                                color: "#fff",
+                                border: "none",
+                              }}
+                            >
+                              Print filled AP-13
+                            </button>
+                            <FileInputButton
+                              accept=".pdf,.jpg,.jpeg,.png,.heic"
+                              onChange={(files) =>
+                                setNotarizedFiles((prev) => ({
+                                  ...prev,
+                                  [idx]: files[0] ?? null,
+                                }))
+                              }
+                              label={picked || savedLabel ? "Replace Notarized Scan" : "Upload Notarized Scan"}
+                            />
+                          </div>
+                          {picked ? (
+                            <div className="mt-2 text-xs" style={{ color: "var(--green, #2e7d32)" }}>
+                              ✓ {picked.name}
+                            </div>
+                          ) : savedLabel ? (
+                            <div className="mt-2 text-xs" style={{ color: "var(--green, #2e7d32)" }}>
+                              ✓ {savedLabel}
+                            </div>
+                          ) : (
+                            <div className="mt-2 text-xs" style={{ color: "#a14a00" }}>
+                              Notarized scan required to submit.
+                            </div>
+                          )}
+                        </div>
+                      </div>,
+                    );
+                    return;
+                  }
+
+                  const fields = bySection[claim.type];
+                  if (!fields || fields.length === 0) return;
                   blocks.push(
                     <div key={`claim-${idx}`}>
                       {sectionHeader(title, `claim-${idx}`)}
@@ -1387,10 +1602,37 @@ export default function NewClaimPage() {
                 );
               })()}
 
+              {notaryRequired && (
+                <div
+                  className="px-4 py-3 mb-3 text-sm border-l-4"
+                  style={{ background: "#fff8e1", borderColor: "#c98a00", color: "#5a3b00" }}
+                >
+                  <p className="mb-2">
+                    <strong>Notarization required.</strong>{" "}
+                    {qualifyingClaimCount === 1
+                      ? "One warrant on this submission is $1,000 or more. Print the AP-13 in its claim section above, get it notarized, then upload the scan there — Submit unlocks once it's attached."
+                      : `${qualifyingClaimCount} warrants on this submission are $1,000 or more. Print each AP-13 in its claim section above, get them notarized, then upload each scan there — Submit unlocks once all are attached.`}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setNotaryOpen(true)}
+                    className="text-xs font-bold uppercase tracking-wide underline"
+                    style={{ color: "#5a3b00", background: "transparent", border: "none" }}
+                  >
+                    See instructions
+                  </button>
+                </div>
+              )}
+
               <button
                 type="submit"
-                disabled={phase === "submitting"}
-                className="w-full py-3 font-bold uppercase tracking-wide text-sm disabled:opacity-50"
+                disabled={phase === "submitting" || (notaryRequired && !allNotarizedUploaded)}
+                title={
+                  notaryRequired && !allNotarizedUploaded
+                    ? "Upload all notarized AP-13 scans to enable Submit, or use Save and continue later."
+                    : undefined
+                }
+                className="w-full py-3 font-bold uppercase tracking-wide text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                 style={{
                   fontFamily: "Montserrat, sans-serif",
                   background: "var(--yellow)",
@@ -1399,7 +1641,11 @@ export default function NewClaimPage() {
                   cursor: phase === "submitting" ? "not-allowed" : "pointer",
                 }}
               >
-                {phase === "submitting" ? "Submitting…" : "Submit Claim"}
+                {phase === "submitting"
+                  ? "Submitting…"
+                  : notaryRequired && !allNotarizedUploaded
+                  ? "Submit Claim (notarized form required)"
+                  : "Submit Claim"}
               </button>
 
               {reservedId && (
@@ -1432,6 +1678,93 @@ export default function NewClaimPage() {
           4080 Lemon Street, 6th Floor · P.O. Box 1326 · Riverside, CA 92502-1326
         </footer>
       </div>
+
+      {/* ── Notary popup ── */}
+      {notaryOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center px-4"
+          style={{ background: "rgba(0,0,0,0.5)" }}
+        >
+          <div
+            className="w-full max-w-lg relative"
+            style={{
+              background: "var(--surface)",
+              border: "2px solid var(--navy)",
+              boxShadow: "0 8px 32px rgba(0,0,0,0.25)",
+            }}
+          >
+            <div
+              className="px-6 py-4 flex items-center justify-between"
+              style={{ background: "var(--navy)" }}
+            >
+              <span
+                className="text-white font-bold uppercase tracking-wide text-sm"
+                style={{ fontFamily: "Montserrat, sans-serif" }}
+              >
+                Notarization Required
+              </span>
+              <button
+                type="button"
+                onClick={() => setNotaryOpen(false)}
+                className="text-gray-300 hover:text-white text-lg leading-none"
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <div className="px-6 py-6 text-sm space-y-3" style={{ color: "var(--text-muted)" }}>
+              <p>
+                Notarization is determined <strong>per warrant</strong>, not per submission.
+              </p>
+              <ul className="list-disc pl-5 space-y-1">
+                <li>
+                  If <strong>every</strong> warrant on this claim is under $1,000, no notary is
+                  needed and you can submit normally.
+                </li>
+                <li>
+                  If <strong>any</strong> warrant is $1,000 or more, the AP-13 affidavit for that
+                  warrant must be notarized before this claim can be submitted.
+                </li>
+              </ul>
+              <p>To finish a claim that needs notarization:</p>
+              <ol className="list-decimal pl-5 space-y-1">
+                <li>
+                  Use the <strong>Print AP-13</strong> button on each qualifying warrant below to
+                  print one filled affidavit per warrant ($1,000 or more).
+                </li>
+                <li>Have each printed form notarized.</li>
+                <li>
+                  Upload each notarized scan back into its slot on the form. Once every notarized
+                  AP-13 is attached, the <strong>Submit Claim</strong> button unlocks.
+                </li>
+                <li>
+                  If you need to step away, use <strong>Save and continue later</strong> to get
+                  your <strong>Claim ID</strong>, then return via the Continue Claimant Portal to
+                  upload the notarized scans whenever they're ready.
+                </li>
+              </ol>
+              <p className="text-xs italic">
+                Warrants under $1,000 on this same claim do <strong>not</strong> need notarization.
+              </p>
+            </div>
+            <div className="px-6 pb-6 flex justify-end gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setNotaryOpen(false)}
+                className="px-5 py-2 text-sm font-bold uppercase tracking-wide"
+                style={{
+                  fontFamily: "Montserrat, sans-serif",
+                  background: "var(--navy)",
+                  color: "#fff",
+                  border: "none",
+                }}
+              >
+                Got it
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
