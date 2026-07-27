@@ -26,7 +26,7 @@ ALLOWED_TYPES = {
     "application/json",
 }
 _SAFE_FILENAME = re.compile(r'[^\w.\-]')
-PACKAGE_EXPIRY = 7 * 24 * 3600  # 7 days
+PACKAGE_EXPIRY = 60 * 60  # 1 hour — short-lived; admin dashboard re-fetches on demand
 
 # Default document requirements per refund type. Used as the seed when the
 # admin-config table has no DOCREQ#<type> entry yet. Super-admin can override
