@@ -38,12 +38,15 @@ export type Task = { label: string; done: boolean }
 
 export type StatusValue = "partial" | "uploaded" | "under-review" | "approved" | "denied"
 
+export type Confidence = "high" | "low"
+
 export type Submission = {
   submissionId: string
   name: string
   refundType: string
   statuses: Record<string, StatusValue>
   documents: string[]
+  confidence: Confidence
   submittedAt: string
   departments: string[]
   tasksByDepartment: Record<string, Task[]>

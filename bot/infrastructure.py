@@ -311,9 +311,9 @@ class RiversideTaxRefundStack(Stack):
                 expiration=Duration.days(expire_days),
             )],
             cors=[
-                s3.CorsRule(  # Claimant upload
+                s3.CorsRule(  # Claimant upload — presigned URLs are already scoped/signed/time-limited
                     allowed_methods=[s3.HttpMethods.PUT],
-                    allowed_origins=[portal_origin],
+                    allowed_origins=["*"],
                     allowed_headers=["*"],
                     max_age=3600,
                 ),
@@ -503,7 +503,7 @@ class RiversideTaxRefundStack(Stack):
             default_cors_preflight_options=apigw.CorsOptions(
                 allow_origins=apigw.Cors.ALL_ORIGINS,
                 allow_methods=apigw.Cors.ALL_METHODS,
-                allow_headers=["Content-Type", "Authorization"],
+                allow_headers=["Content-Type", "Authorization", "X-Claimant-Token"],
             ),
             deploy_options=apigw.StageOptions(
                 throttling_rate_limit=2,
@@ -587,8 +587,7 @@ class RiversideTaxRefundStack(Stack):
             destination_bucket=portal_bucket,
         )
 
-        # Wire upload portal URL into main Lambda so the bot can reference it
-        fn.add_environment("UPLOAD_PORTAL_URL", portal_bucket.bucket_website_url)
+        # UPLOAD_PORTAL_URL is set below once the claimant portal CloudFront URL is known.
 
         CfnOutput(self, "UploadPortalUrl", value=portal_bucket.bucket_website_url)
         CfnOutput(self, "UploadApiUrl", value=upload_api.url)
@@ -645,11 +644,8 @@ class RiversideTaxRefundStack(Stack):
             default_root_object="index.html",
         )
 
-        # Now that the CloudFront domain is known, allow the dashboard origin in CORS.
-        upload_fn.add_environment(
-            "ALLOWED_ORIGINS",
-            f"{portal_origin},https://{admin_distribution.distribution_domain_name}",
-        )
+        # ALLOWED_ORIGINS is set after the claimant portal distribution is created below
+        # so it can include all three origins in one call.
 
         admin_build = codebuild.Project(
             self, "AdminBuild",
@@ -673,11 +669,11 @@ class RiversideTaxRefundStack(Stack):
                 "version": "0.2",
                 "phases": {
                     "install": {
-                        "runtime-versions": {"nodejs": "20"},
+                        "runtime-versions": {"nodejs": "22"},
                         "commands": [
                             "cd admin-dashboard",
                             "corepack enable",
-                            "yarn install --immutable",
+                            "yarn install --immutable --ignore-engines",
                         ],
                     },
                     "build": {
@@ -735,6 +731,145 @@ class RiversideTaxRefundStack(Stack):
 
         CfnOutput(self, "AdminDashboardUrl", value=f"https://{admin_distribution.distribution_domain_name}")
         CfnOutput(self, "AdminBuildProjectName", value=admin_build.project_name)
+
+        # --- Claimant portal (separate Next.js app, public) ---
+        claimant_bucket = s3.Bucket(
+            self, "ClaimantBucket",
+            bucket_name=f"{proj}-claimant-{self.account}",
+            removal_policy=RemovalPolicy.DESTROY,
+            auto_delete_objects=True,
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            encryption=s3.BucketEncryption.S3_MANAGED,
+        )
+
+        claimant_oac = cloudfront.S3OriginAccessControl(
+            self, "ClaimantBucketOAC", description="OAC for claimant portal bucket",
+        )
+        claimant_distribution = cloudfront.Distribution(
+            self, "ClaimantDistribution",
+            default_behavior=cloudfront.BehaviorOptions(
+                origin=cloudfront_origins.S3BucketOrigin.with_origin_access_control(
+                    claimant_bucket, origin_access_control=claimant_oac,
+                ),
+                viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
+                function_associations=[cloudfront.FunctionAssociation(
+                    function=cloudfront.Function(
+                        self, "ClaimantRewriteFunction",
+                        code=cloudfront.FunctionCode.from_inline(
+                            "function handler(event) {\n"
+                            "  var req = event.request;\n"
+                            "  var uri = req.uri;\n"
+                            "  if (uri.endsWith('/')) { req.uri = uri + 'index.html'; }\n"
+                            "  else if (!uri.split('/').pop().includes('.')) { req.uri = uri + '/index.html'; }\n"
+                            "  return req;\n"
+                            "}\n"
+                        ),
+                    ),
+                    event_type=cloudfront.FunctionEventType.VIEWER_REQUEST,
+                )],
+            ),
+            default_root_object="index.html",
+        )
+
+        claimant_build = codebuild.Project(
+            self, "ClaimantBuild",
+            source=codebuild.Source.git_hub(
+                owner=gh_owner, repo=gh_repo, branch_or_ref=gh_branch, clone_depth=1,
+            ),
+            environment=codebuild.BuildEnvironment(
+                build_image=codebuild.LinuxBuildImage.STANDARD_7_0,
+                compute_type=codebuild.ComputeType.SMALL,
+            ),
+            artifacts=codebuild.Artifacts.s3(
+                bucket=claimant_bucket, include_build_id=False, package_zip=False,
+                name="/", encryption=False,
+            ),
+            environment_variables={
+                "API_URL": codebuild.BuildEnvironmentVariable(value=upload_api.url.rstrip("/")),
+            },
+            build_spec=codebuild.BuildSpec.from_object({
+                "version": "0.2",
+                "phases": {
+                    "install": {
+                        "runtime-versions": {"nodejs": "22"},
+                        "commands": [
+                            "cd claimant-portal",
+                            "corepack enable",
+                            "yarn install --immutable",
+                        ],
+                    },
+                    "build": {
+                        "commands": [
+                            'printf \'window.__CLAIMANT_CONFIG__ = {"API_URL":"%s"};\\n\' "$API_URL" > public/config.js',
+                            "yarn build",
+                        ],
+                    },
+                },
+                "artifacts": {
+                    "base-directory": "claimant-portal/out",
+                    "files": ["**/*"],
+                },
+            }),
+            logging=codebuild.LoggingOptions(
+                cloud_watch=codebuild.CloudWatchLoggingOptions(
+                    log_group=logs.LogGroup(
+                        self, "ClaimantBuildLogGroup",
+                        removal_policy=RemovalPolicy.DESTROY,
+                        retention=logs.RetentionDays.ONE_WEEK,
+                    ),
+                ),
+            ),
+        )
+        claimant_distribution.grant(claimant_build.role, "cloudfront:CreateInvalidation")
+        claimant_bucket.grant_write(claimant_build)
+
+        claimant_trigger = cr.AwsCustomResource(
+            self, "TriggerClaimantBuild",
+            on_create=cr.AwsSdkCall(
+                service="CodeBuild", action="startBuild",
+                parameters={"projectName": claimant_build.project_name},
+                physical_resource_id=cr.PhysicalResourceId.of(f"claimant-build-{int(_time.time())}"),
+                output_paths=["build.id"],
+            ),
+            on_update=cr.AwsSdkCall(
+                service="CodeBuild", action="startBuild",
+                parameters={"projectName": claimant_build.project_name},
+                physical_resource_id=cr.PhysicalResourceId.of(f"claimant-build-{int(_time.time())}"),
+                output_paths=["build.id"],
+            ),
+            policy=cr.AwsCustomResourcePolicy.from_statements([
+                iam.PolicyStatement(
+                    actions=["codebuild:StartBuild"],
+                    resources=[claimant_build.project_arn],
+                ),
+            ]),
+        )
+        claimant_trigger.node.add_dependency(claimant_build)
+
+        # Add /claimant/* routes to API Gateway (no authorizer — public)
+        claimant_resource = upload_api.root.add_resource("claimant")
+        claimant_resource.add_resource("{proxy+}").add_method(
+            "ANY", apigw.LambdaIntegration(upload_fn),
+        )
+
+        # Override the bot Lambda's UPLOAD_PORTAL_URL to point to the new claimant portal.
+        # (The old portal_bucket is kept in place for backward compatibility.)
+        fn.add_environment("UPLOAD_PORTAL_URL", f"https://{claimant_distribution.distribution_domain_name}")
+        # Placeholder CLAIMANT_SECRET — must be overridden post-deploy via SSM/env update.
+        upload_fn.add_environment("CLAIMANT_SECRET", "CHANGEME-set-in-ssm")
+
+        # Allow the claimant portal CloudFront domain in upload bucket CORS.
+        # Appended to the already-set ALLOWED_ORIGINS from the admin distribution block.
+        upload_fn.add_environment(
+            "ALLOWED_ORIGINS",
+            f"{portal_origin},"
+            f"https://{admin_distribution.distribution_domain_name},"
+            f"https://{claimant_distribution.distribution_domain_name}",
+        )
+
+        CfnOutput(self, "ClaimantPortalUrl", value=f"https://{claimant_distribution.distribution_domain_name}")
+        CfnOutput(self, "ClaimantBuildProjectName", value=claimant_build.project_name)
 
         # --- Notifications (DynamoDB stream → Lambda → SES) ---
         notif_cfg = cfg.get("notifications") or {}
