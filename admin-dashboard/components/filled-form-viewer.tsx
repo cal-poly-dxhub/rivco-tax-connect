@@ -10,6 +10,16 @@ type Props = {
 
 type RenderedItem = { type: string; url: string; label: string; signatureMissing?: boolean }
 
+const REFUND_TYPE_LABELS: Record<string, string> = {
+  STALE_WARRANT: "Stale Dated Warrant (AP-13)",
+  PAYROLL: "Payroll",
+  PROPERTY_TAX: "Property Tax",
+}
+
+function formatRefundType(rt: string): string {
+  return REFUND_TYPE_LABELS[rt] || rt.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
 export function FilledFormViewer({ formDataUrl, refundTypes }: Props) {
   const [pdfUrls, setPdfUrls] = useState<RenderedItem[]>([])
   const [active, setActive] = useState<string | null>(null)
@@ -40,7 +50,7 @@ export function FilledFormViewer({ formDataUrl, refundTypes }: Props) {
               results.push({
                 type: rt,
                 url: URL.createObjectURL(blob),
-                label: `${rt} (PDF overlay)`,
+                label: formatRefundType(rt),
                 signatureMissing: result.signatureMissing,
               })
             }
@@ -51,7 +61,7 @@ export function FilledFormViewer({ formDataUrl, refundTypes }: Props) {
               results.push({
                 type: rt,
                 url: URL.createObjectURL(blob),
-                label: `${rt} (Form view)`,
+                label: formatRefundType(rt),
               })
             }
           }
