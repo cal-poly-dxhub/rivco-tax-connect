@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, use } from "react"
+import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
@@ -12,13 +12,18 @@ import { ChatSessionDetail } from "@/lib/types"
 import { useAuthGate } from "@/hooks/use-auth-gate"
 import { useApi } from "@/hooks/use-api"
 
-export default function ChatSessionPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params)
+export default function ChatSessionPage() {
+  const [id, setId] = useState("")
   const router = useRouter()
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    setId(params.get("id") || "")
+  }, [])
   const { ready } = useAuthGate({ requireSuperAdmin: true })
   const { data, error: loadError, loading, reload, setData } = useApi<ChatSessionDetail>(
     `/admin/chat-sessions/${id}`,
-    { enabled: ready, deps: [id] },
+    { enabled: ready && !!id, deps: [id] },
   )
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState("")
@@ -58,7 +63,6 @@ export default function ChatSessionPage({ params }: { params: Promise<{ id: stri
   }
 
   function renderContent(content: string): string {
-    // Stored as a JSON string when role is assistant (Claude content blocks).
     try {
       const parsed = JSON.parse(content)
       if (Array.isArray(parsed)) {

@@ -90,7 +90,7 @@ export default function ChatHandoffsPage() {
                     )}
                   </TableCell>
                   <TableCell className="text-right">
-                    <Link href={`/dashboard/chat/${s.sessionId}`}>
+                    <Link href={`/dashboard/chat/detail?id=${s.sessionId}`}>
                       <Button variant="ghost" size="sm">Open</Button>
                     </Link>
                   </TableCell>
