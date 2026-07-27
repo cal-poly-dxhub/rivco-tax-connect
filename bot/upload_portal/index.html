@@ -401,6 +401,15 @@
                     Upload the following documents to support your claim. Accepted formats: PDF, JPG, PNG (max 10MB each).
                 </p>
                 <div id="docFields"></div>
+                <div style="margin-top:1.25rem; border-top:1px dashed var(--border-light); padding-top:1rem;">
+                    <p style="font-size:0.78rem; font-weight:700; font-family:'Montserrat',sans-serif; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-muted); margin-bottom:0.5rem;">Optional: Hand-filled paper form</p>
+                    <p style="font-size:0.78rem; color:var(--text-muted); margin-bottom:0.75rem;">If you printed this form and filled it out by hand, scan or photograph it and upload it here instead of signing digitally above.</p>
+                    <div class="doc-upload" style="border-style:dashed">
+                        <div class="doc-label">Completed paper form (scanned or photographed)</div>
+                        <input type="file" id="doc_scanned-form" data-doc-id="scanned-form" accept=".pdf,.jpg,.jpeg,.png,.heic">
+                        <span class="doc-status" id="doc_status_scanned-form"></span>
+                    </div>
+                </div>
             </div>
 
             <div id="submitSection" style="display:none">
@@ -715,33 +724,8 @@
                                 docFields.appendChild(row);
                             });
                         }
-                        // Always show scanned form upload option
-                        var scannedRow = document.createElement("div");
-                        scannedRow.className = "doc-upload";
-                        scannedRow.style.borderStyle = "dashed";
-                        scannedRow.innerHTML =
-                            '<div class="doc-label">Completed form (scanned or photographed)' +
-                            '<br><span style="font-size:0.72rem; color:var(--text-muted); font-weight:400;">' +
-                            'If you printed and filled out the paper form, upload the signed copy here instead of signing digitally above.</span>' +
-                            '</div>' +
-                            '<input type="file" id="doc_scanned-form" data-doc-id="scanned-form" accept=".pdf,.jpg,.jpeg,.png,.heic">' +
-                            '<span class="doc-status" id="doc_status_scanned-form"></span>';
-                        docFields.appendChild(scannedRow);
                     })
-                    .catch(function() {
-                        // Even if API fails, show scanned form upload
-                        var scannedRow = document.createElement("div");
-                        scannedRow.className = "doc-upload";
-                        scannedRow.style.borderStyle = "dashed";
-                        scannedRow.innerHTML =
-                            '<div class="doc-label">Completed form (scanned or photographed)' +
-                            '<br><span style="font-size:0.72rem; color:var(--text-muted); font-weight:400;">' +
-                            'If you printed and filled out the paper form, upload the signed copy here.</span>' +
-                            '</div>' +
-                            '<input type="file" id="doc_scanned-form" data-doc-id="scanned-form" accept=".pdf,.jpg,.jpeg,.png,.heic">' +
-                            '<span class="doc-status" id="doc_status_scanned-form"></span>';
-                        docFields.appendChild(scannedRow);
-                    });
+                    .catch(function() {});
             }
 
             /* ── Print as official form PDF (generated from schema) ── */

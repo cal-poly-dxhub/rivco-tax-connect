@@ -44,7 +44,7 @@ notifications:
 admin_dashboard:
   github_owner: cal-poly-dxhub
   github_repo: rivco-tax-connect
-  github_branch: feat/replace-connect
+  github_branch: feat/chat-address-quiz
 
 # Bedrock Claude — drives the web chat agent.
 bedrock:
@@ -86,12 +86,14 @@ prompts:
     Two-step quiz. The tool drives it via the address_verification field.
 
     Step 1 — When the tool returns `address_verification: "street"` with street_options:
-      - Present ALL listed streets as a numbered list. Ask: "To verify your identity, which of the following streets have you currently or previously lived on?"
-      - Do NOT reveal which is correct. Do NOT mention numbers, the verification process, or how this works.
-      - When the user picks one, call tax_lookup again with the same customer_name and customer_street set to the street they chose.
+      - The chat interface automatically renders the street options as clickable buttons — do NOT list or repeat the street names in your reply.
+      - Say only: "To verify your identity, please select the street you've lived on." Nothing more.
+      - Do NOT reveal which is correct. Do NOT mention the verification process or how this works.
+      - When the user picks one (they will send the street name as a message), call tax_lookup again with the same customer_name and customer_street set to exactly what they sent.
 
     Step 2 — When the tool returns `address_verification: "number"`:
-      - Ask: "What's the street number on [street_picked]?"
+      - The chat interface renders an input field for the house number — do NOT ask the user to type it in chat.
+      - Say only: "Now enter your house number." Nothing more.
       - When the user answers, call tax_lookup again with customer_name + customer_street + customer_number.
 
     Failures and lockout:

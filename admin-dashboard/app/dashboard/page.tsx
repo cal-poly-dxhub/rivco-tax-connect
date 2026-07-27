@@ -201,7 +201,7 @@ export default function DashboardPage() {
           <TableHeader>
             <TableRow>
               <TableHead>Name</TableHead>
-              <TableHead>Type</TableHead>
+              {perms?.isSuperAdmin && <TableHead>Type</TableHead>}
               <TableHead>Departments</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Tasks</TableHead>
@@ -232,11 +232,13 @@ export default function DashboardPage() {
                       )}
                     </div>
                   </TableCell>
-                  <TableCell>
-                    {Array.from(new Set(s.refundType.split(","))).map((t) => (
-                      <Badge key={t} variant="secondary" className="mr-1">{labelFor(t, labels)}</Badge>
-                    ))}
-                  </TableCell>
+                  {perms?.isSuperAdmin && (
+                    <TableCell>
+                      {Array.from(new Set(s.refundType.split(","))).map((t) => (
+                        <Badge key={t} variant="secondary" className="mr-1">{labelFor(t, labels)}</Badge>
+                      ))}
+                    </TableCell>
+                  )}
                   <TableCell>
                     {s.departments.length ? s.departments.map((d) => (
                       <Badge key={d} variant="outline" className="mr-1">{d}</Badge>
