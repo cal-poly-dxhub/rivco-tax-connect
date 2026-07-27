@@ -2,7 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
+import { getToken, storeToken } from "@/lib/types";
 import type {
+  ClaimantSubmission,
   ReserveResponse,
   UploadSlot,
 } from "@/lib/types";
@@ -26,6 +28,86 @@ interface SchemasResponse {
   refund_types: string[];
   schemas: Record<string, FormSchema>;
   merged_fields: FormField[];
+}
+
+/**
+ * One refund/claim from the bot handoff. Multiple stale-warrant or payroll
+ * refunds for the same person each become an entry — the form renders a
+ * warrant block per claim and the admin viewer renders a filled AP-13 per
+ * claim. Property-tax claims share the array but have their own field set.
+ */
+interface Claim {
+  type: string;
+  // STALE_WARRANT / PAYROLL fields
+  warrant_number?: string;
+  warrant_amount?: string;
+  warrant_date?: string;
+  business_unit?: string;
+  business_name?: string;
+  is_owner?: string;
+  warrant_included?: string;
+  // PROPERTY_TAX fields
+  assessment_number?: string;
+  tax_year?: string;
+  refund_amount?: string;
+}
+
+const AP13_TYPES = new Set(["STALE_WARRANT", "PAYROLL"]);
+
+function isAp13(type: string): boolean {
+  return AP13_TYPES.has(type);
+}
+
+interface RequiredDoc {
+  id: string;
+  label: string;
+  required: boolean;
+}
+
+interface DocRequirementsResponse {
+  refund_types: string[];
+  docs: RequiredDoc[];
+  either_of: string[][];
+}
+
+// ── Reusable file-picker button ───────────────────────────
+//
+// Native <input type="file"> renders the OS-default "Choose File" UI which
+// looks like a label, not a button. Wrap it in a styled <label> so the
+// click target reads as an obvious button. The hidden input still drives
+// onChange so accessibility (keyboard, screen readers) is preserved.
+
+function FileInputButton({
+  accept,
+  multiple,
+  onChange,
+  label,
+}: {
+  accept?: string;
+  multiple?: boolean;
+  onChange: (files: File[]) => void;
+  label: string;
+}) {
+  return (
+    <label
+      className="inline-flex items-center px-3 py-2 text-xs font-bold uppercase tracking-widest cursor-pointer"
+      style={{
+        fontFamily: "Montserrat, sans-serif",
+        background: "var(--navy)",
+        color: "#fff",
+        border: "none",
+      }}
+    >
+      {label}
+      <input
+        type="file"
+        accept={accept}
+        multiple={multiple}
+        onChange={(e) => onChange(Array.from(e.target.files ?? []))}
+        className="hidden"
+      />
+    </label>
+  );
 }
 
 // ── Header ─────────────────────────────────────────────────
@@ -247,11 +329,29 @@ export default function NewClaimPage() {
 
   // Full form
   const [schemas, setSchemas] = useState<SchemasResponse | null>(null);
+  const [docReqs, setDocReqs] = useState<RequiredDoc[]>([]);
   const [formValues, setFormValues] = useState<Record<string, string>>({});
+  // Per-claim fields. AP-13 (STALE_WARRANT, PAYROLL) types each get one
+  // entry per warrant; PROPERTY_TAX gets one entry. Fields like name /
+  // address / email / phone live in formValues since they're shared.
+  const [claims, setClaims] = useState<Claim[]>([]);
   const [sigDataUrl, setSigDataUrl] = useState<string | null>(null);
-  const [files, setFiles] = useState<File[]>([]);
+  // Per-required-doc file (single each).
+  const [reqFiles, setReqFiles] = useState<Record<string, File | null>>({});
+  // Optional scanned-form fallback (single file).
+  const [scannedForm, setScannedForm] = useState<File | null>(null);
+  // Optional "other" attachments (multi-file).
+  const [otherFiles, setOtherFiles] = useState<File[]>([]);
+  // Files already uploaded to S3 via save-draft. Keyed by safeName, value is
+  // the original filename to display next to the doc box. The user can pick
+  // a fresh file to replace one of these (saving uploads the new one and the
+  // backend drops the old one with the same doc-id prefix).
+  const [savedDocs, setSavedDocs] = useState<Record<string, string>>({});
   const [submissionId, setSubmissionId] = useState("");
   const [statusMsg, setStatusMsg] = useState("");
+  // "info" = blue (in-progress), "success" = green (saved/ok),
+  // "error" = red (validation / failures). Defaults to error for back-compat.
+  const [statusKind, setStatusKind] = useState<"info" | "success" | "error">("error");
   const [errorMsg, setErrorMsg] = useState("");
 
   // Reserve-on-load state (bot handoff)
@@ -259,6 +359,7 @@ export default function NewClaimPage() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
+    const resumeId = params.get("submissionId") ?? "";
     const name = params.get("name") ?? "";
     const type = params.get("type") ?? "";
     const address = params.get("address") ?? "";
@@ -266,6 +367,59 @@ export default function NewClaimPage() {
     setUrlName(name);
     setUrlType(type);
     setUrlAddress(address);
+
+    if (resumeId) {
+      // Resume path: claimant came from /claim's "Continue your claim" button.
+      // Token must already be in sessionStorage from a prior verify; if not,
+      // bounce them to /my-claim to verify first.
+      (async () => {
+        const token = getToken(resumeId);
+        if (!token) {
+          window.location.href = "/my-claim";
+          return;
+        }
+        try {
+          setPhase("loading");
+          const status = await apiFetch<ClaimantSubmission>(
+            `/claimant/status?id=${encodeURIComponent(resumeId)}`,
+            { token },
+          );
+          setReservedId(resumeId);
+          setUrlName(status.name);
+          setUrlType(status.refundType);
+          // Hydrate the form with whatever they typed before. We don't get
+          // back the real address from the server (privacy) — but it's in
+          // draftFormData if they typed it.
+          const draft = status.draftFormData ?? {};
+          const { claims: savedClaims, ...savedFields } = draft as Record<string, unknown>;
+          setFormValues({
+            name: status.name,
+            ...(savedFields as Record<string, string>),
+          });
+          await loadSchemas(status.refundType.split(",").filter(Boolean));
+          // Override the URL-derived claims with the saved per-claim entries
+          // if the user got that far before saving.
+          if (Array.isArray(savedClaims) && savedClaims.length > 0) {
+            setClaims(savedClaims as Claim[]);
+          }
+          // Surface previously-uploaded files so the user sees them attached
+          // and only has to pick replacements for what they want to change.
+          const docs = status.documents ?? [];
+          const origs = status.originalNames ?? {};
+          const savedMap: Record<string, string> = {};
+          for (const fn of docs) {
+            if (fn === "unified-form.json") continue;
+            savedMap[fn] = origs[fn] || fn;
+          }
+          setSavedDocs(savedMap);
+          setPhase("form");
+        } catch (e) {
+          setErrorMsg(e instanceof Error ? e.message : String(e));
+          setPhase("error");
+        }
+      })();
+      return;
+    }
 
     if (name && type && address) {
       // Bot handoff: reserve immediately then load form
@@ -277,6 +431,7 @@ export default function NewClaimPage() {
             body: JSON.stringify({ name, refundType: type, address }),
           });
           setReservedId(res.submissionId);
+          if (res.token) storeToken(res.submissionId, res.token);
           // Pre-fill values
           setFormValues({ name, address });
           await loadSchemas(type.split(",").filter(Boolean));
@@ -292,26 +447,42 @@ export default function NewClaimPage() {
   }, []);
 
   async function loadSchemas(types: string[]) {
-    const data = await apiFetch<SchemasResponse>(
-      `/form-schemas?types=${encodeURIComponent(types.join(","))}`,
-    );
+    const [data, reqs] = await Promise.all([
+      apiFetch<SchemasResponse>(
+        `/form-schemas?types=${encodeURIComponent(types.join(","))}`,
+      ),
+      apiFetch<DocRequirementsResponse>(
+        `/doc-requirements?types=${encodeURIComponent(types.join(","))}`,
+      ).catch(() => ({ refund_types: types, docs: [] as RequiredDoc[], either_of: [] as string[][] })),
+    ]);
     setSchemas(data);
-    // Pre-fill amounts/ids from URL if available (bot handoff)
+    setDocReqs(reqs.docs || []);
+    setReqFiles({});
+    // Build a per-claim array from the bot-handoff URL — one entry per
+    // refund. Multiple stale warrants for the same person turn into N
+    // separate AP-13 entries; PROPERTY_TAX gets one entry that holds
+    // assessment/tax-year/refund-amount.
     const params = new URLSearchParams(window.location.search);
     const amounts = (params.get("amount") ?? "").split(",");
     const ids = (params.get("id") ?? "").split(",");
-    const pre: Record<string, string> = {};
-    types.forEach((rt, i) => {
+    const assessment = params.get("assessment") ?? "";
+    const taxyear = params.get("taxyear") ?? "";
+    const built: Claim[] = types.map((rt, i) => {
       if (rt === "PROPERTY_TAX") {
-        if (amounts[i]) pre["refund_amount"] = amounts[i];
-      } else {
-        if (amounts[i]) pre["warrant_amount"] = amounts[i];
-        if (ids[i]) pre["warrant_number"] = ids[i];
+        return {
+          type: rt,
+          assessment_number: assessment,
+          tax_year: taxyear,
+          refund_amount: amounts[i] || "",
+        };
       }
+      return {
+        type: rt,
+        warrant_number: ids[i] || "",
+        warrant_amount: amounts[i] || "",
+      };
     });
-    if (params.get("assessment")) pre["assessment_number"] = params.get("assessment")!;
-    if (params.get("taxyear")) pre["tax_year"] = params.get("taxyear")!;
-    setFormValues((v) => ({ ...v, ...pre }));
+    setClaims(built);
   }
 
   async function handleMiniSubmit(e: React.FormEvent) {
@@ -332,6 +503,7 @@ export default function NewClaimPage() {
         }),
       });
       setReservedId(res.submissionId);
+      if (res.token) storeToken(res.submissionId, res.token);
       setFormValues({ name: miniName, address: miniAddress });
       setUrlName(miniName);
       setUrlAddress(miniAddress);
@@ -354,24 +526,234 @@ export default function NewClaimPage() {
     setFormValues((v) => ({ ...v, [id]: value }));
   }
 
+  // Stash whatever the user has typed so they can resume later. Reuses the
+  // claimant token from sessionStorage; the token is set by the bot-handoff
+  // /reserve call (returned via setReservedId) or by a /my-claim verify.
+  //
+  // Also uploads any newly-picked files immediately so they survive a tab
+  // close. Files already on S3 (savedDocs) are skipped unless the user picked
+  // a replacement.
+  async function saveDraft(opts: { silent?: boolean } = {}) {
+    if (!reservedId) return; // No id yet -> can't save (e.g. mini-form path).
+    const token = getToken(reservedId);
+    if (!token) {
+      if (!opts.silent) {
+        setStatusKind("error");
+        setStatusMsg("Your session expired. Please verify again at /my-claim before saving.");
+      }
+      return;
+    }
+    try {
+      // Collect any newly-picked files that need uploading. Required-doc
+      // slots, scanned-form, and "other" attachments use the same naming
+      // scheme as handleSubmit so the backend `_doc_prefix()` semantics line up.
+      const ext = (f: File) => (f.name.split(".").pop() ?? "bin").toLowerCase();
+      const toUpload: { docId: string; file: File; safeName: string }[] = [];
+      Object.entries(reqFiles).forEach(([docId, f]) => {
+        if (f) toUpload.push({ docId, file: f, safeName: `${docId}.${ext(f)}` });
+      });
+      if (scannedForm) {
+        toUpload.push({
+          docId: "scanned-form",
+          file: scannedForm,
+          safeName: `scanned-form.${ext(scannedForm)}`,
+        });
+      }
+      otherFiles.forEach((f, i) => {
+        // Stamp other-N files with a per-save timestamp so multiple save
+        // rounds don't collide on the same key.
+        const ts = new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14);
+        const base = otherFiles.length > 1 ? `other-${ts}-${i + 1}` : `other-${ts}`;
+        toUpload.push({ docId: base, file: f, safeName: `${base}.${ext(f)}` });
+      });
+
+      // Push files to S3 if there are any.
+      const newOriginals: Record<string, string> = {};
+      let uploadedNames: string[] = [];
+      if (toUpload.length > 0) {
+        const continueRes = await apiFetch<{ uploads: UploadSlot[] }>("/claimant/continue", {
+          method: "POST",
+          token,
+          body: JSON.stringify({
+            submissionId: reservedId,
+            files: toUpload.map((d) => ({
+              filename: d.safeName,
+              contentType: d.file.type || "application/octet-stream",
+              originalFilename: d.file.name,
+            })),
+          }),
+        });
+        for (const d of toUpload) {
+          const slot = continueRes.uploads.find((u) => u.filename === d.safeName);
+          if (!slot) continue;
+          const r = await fetch(slot.uploadUrl, {
+            method: "PUT",
+            headers: { "Content-Type": d.file.type || "application/octet-stream" },
+            body: d.file,
+          });
+          if (!r.ok) throw new Error(`S3 PUT failed (${r.status}) for ${d.file.name}`);
+          newOriginals[d.safeName] = d.file.name;
+        }
+        uploadedNames = toUpload.map((d) => d.safeName);
+      }
+
+      // Persist form fields + merge filenames into documents server-side.
+      const saveResp = await apiFetch<{ documents?: string[] }>("/claimant/save-draft", {
+        method: "POST",
+        token,
+        body: JSON.stringify({
+          submissionId: reservedId,
+          formData: { ...formValues, claims },
+          filenames: uploadedNames,
+          originalNames: newOriginals,
+        }),
+      });
+
+      // Roll uploaded files into savedDocs and clear the picked-file state so
+      // the UI shows them as attached.
+      if (uploadedNames.length > 0) {
+        setSavedDocs((prev) => {
+          const next = { ...prev };
+          // Drop older docs with the same doc-id prefix so the user sees the
+          // replacement, not both.
+          const newPrefixes = new Set(uploadedNames.map((n) => n.split(".")[0].replace(/-\d+$/, "")));
+          for (const k of Object.keys(next)) {
+            const prefix = k.split(".")[0].replace(/-\d+$/, "");
+            if (newPrefixes.has(prefix) && !uploadedNames.includes(k)) delete next[k];
+          }
+          for (const fn of uploadedNames) {
+            next[fn] = newOriginals[fn] || fn;
+          }
+          return next;
+        });
+        // Clear the in-memory pickers — the files are saved now.
+        setReqFiles({});
+        setScannedForm(null);
+        setOtherFiles([]);
+      } else if (saveResp.documents) {
+        // Server may have echoed back the canonical doc list; trust it.
+        const known = new Set(saveResp.documents);
+        setSavedDocs((prev) => {
+          const next: Record<string, string> = {};
+          for (const k of Object.keys(prev)) {
+            if (known.has(k)) next[k] = prev[k];
+          }
+          return next;
+        });
+      }
+
+      if (!opts.silent) {
+        setStatusKind("success");
+        const fileNote =
+          uploadedNames.length > 0
+            ? ` (${uploadedNames.length} file${uploadedNames.length === 1 ? "" : "s"} attached)`
+            : "";
+        setStatusMsg(
+          `Saved${fileNote}. Resume any time at /my-claim with this Claim ID: ${reservedId}`,
+        );
+      }
+    } catch (e) {
+      if (!opts.silent) {
+        setStatusKind("error");
+        setStatusMsg(
+          e instanceof ApiError
+            ? `Could not save draft (${e.status}): ${e.message}`
+            : `Could not save draft: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+  }
+
+  // Best-effort save on tab close so the user doesn't lose progress.
+  // Uses sendBeacon when available to survive the unload.
+  useEffect(() => {
+    if (!reservedId) return;
+    const handler = () => {
+      const token = getToken(reservedId);
+      if (!token) return;
+      const url =
+        (window.__CLAIMANT_CONFIG__?.API_URL?.replace(/\/$/, "") ?? "") +
+        "/claimant/save-draft";
+      const body = JSON.stringify({
+        submissionId: reservedId,
+        formData: { ...formValues, claims },
+      });
+      // sendBeacon doesn't let us set custom headers, so fall back to a
+      // best-effort fetch with keepalive when we need the auth header.
+      try {
+        fetch(url, {
+          method: "POST",
+          keepalive: true,
+          headers: { "Content-Type": "application/json", "X-Claimant-Token": token },
+          body,
+        });
+      } catch {
+        // ignore — best-effort
+      }
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [reservedId, formValues, claims]);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!sigDataUrl) {
-      setStatusMsg("Please sign the form before submitting.");
+    const usingScannedForm = !!scannedForm;
+    if (!sigDataUrl && !usingScannedForm) {
+      setStatusKind("error");
+      setStatusMsg("Please sign the form (or upload a scanned hand-filled form) before submitting.");
       return;
     }
     if (!schemas) return;
 
-    // Validate required fields
+    // Validate required fields. Common fields read from formValues; per-claim
+    // fields read from the matching claims[i] entry — required checks are
+    // applied per claim so 3 stale-warrant claims need 3 warrant numbers.
     const missing: string[] = [];
     for (const f of schemas.merged_fields) {
-      if (f.required && f.type !== "checkbox") {
-        const val = (formValues[f.id] ?? "").trim();
-        if (!val) missing.push(f.label);
+      const section = f.section || "common";
+      const isCommon = section === "common";
+      if (f.type === "checkbox") {
+        if (!f.required) continue;
+        if (isCommon) {
+          if (!(formValues[f.id] === "true" || formValues[f.id] === "false")) missing.push(f.label);
+        } else {
+          claims.forEach((c, i) => {
+            if (c.type !== section) return;
+            const v = (c as unknown as Record<string, unknown>)[f.id];
+            if (!(v === "true" || v === "false")) missing.push(`${f.label} (Claim ${i + 1})`);
+          });
+        }
+        continue;
+      }
+      if (!f.required) continue;
+      if (isCommon) {
+        if (!(formValues[f.id] ?? "").trim()) missing.push(f.label);
+      } else {
+        claims.forEach((c, i) => {
+          if (c.type !== section) return;
+          const v = String((c as unknown as Record<string, unknown>)[f.id] ?? "").trim();
+          if (!v) missing.push(`${f.label} (Claim ${i + 1})`);
+        });
       }
     }
     if (missing.length > 0) {
+      setStatusKind("error");
       setStatusMsg(`Please fill required fields: ${missing.join(", ")}`);
+      return;
+    }
+
+    // Validate required documents
+    // Required-doc check: a freshly-picked file or a previously-saved file
+    // (from a draft-save round) both count.
+    const savedSlots = new Set(
+      Object.keys(savedDocs).map((k) => k.split(".")[0]),
+    );
+    const missingDocs = docReqs
+      .filter((d) => d.required && !reqFiles[d.id] && !savedSlots.has(d.id))
+      .map((d) => d.label);
+    if (missingDocs.length > 0) {
+      setStatusKind("error");
+      setStatusMsg(`Please upload required documents: ${missingDocs.join(", ")}`);
       return;
     }
 
@@ -384,9 +766,15 @@ export default function NewClaimPage() {
       const refundType = types.join(",");
       const address = formValues["address"] || urlAddress || miniAddress;
 
-      // Build unified form JSON blob
+      // Build unified form JSON blob.
+      //
+      // `formData` keeps the shared fields (name/address/email/phone) so older
+      // tooling that reads it still works.
+      // `claims` is the new array — one entry per refund. The admin viewer
+      // iterates this to render one filled AP-13 PDF per claim.
       const unifiedPayload = {
         formData: formValues,
+        claims,
         refundTypes: types,
         signature: sigDataUrl,
         submittedAt: new Date().toISOString(),
@@ -395,10 +783,41 @@ export default function NewClaimPage() {
         type: "application/json",
       });
 
-      // Build file list: unified form + any user attachments
-      const fileList: { filename: string; contentType: string }[] = [
+      // Build file list. The backend's _doc_prefix() maps "<docId>.<ext>" back
+      // to its requirement; multi-file inputs need per-file suffixes so two
+      // files don't collide on the same S3 key.
+      const ext = (f: File) => (f.name.split(".").pop() ?? "bin").toLowerCase();
+      const docFiles: { docId: string; file: File; safeName: string }[] = [];
+
+      Object.entries(reqFiles).forEach(([docId, f]) => {
+        if (f) docFiles.push({ docId, file: f, safeName: `${docId}.${ext(f)}` });
+      });
+      if (scannedForm) {
+        docFiles.push({
+          docId: "scanned-form",
+          file: scannedForm,
+          safeName: `scanned-form.${ext(scannedForm)}`,
+        });
+      }
+      otherFiles.forEach((f, i) => {
+        const base = otherFiles.length > 1 ? `other-${i + 1}` : "other";
+        docFiles.push({ docId: base, file: f, safeName: `${base}.${ext(f)}` });
+      });
+
+      const fileList: {
+        filename: string;
+        contentType: string;
+        originalFilename?: string;
+      }[] = [
         { filename: "unified-form.json", contentType: "application/json" },
-        ...files.map((f) => ({ filename: f.name, contentType: f.type || "application/octet-stream" })),
+        ...docFiles.map((d) => ({
+          filename: d.safeName,
+          contentType: d.file.type || "application/octet-stream",
+          // The backend stamps this on the manifest so the dashboard /
+          // /claim status page can display "DMV License.pdf" instead of
+          // the doc-id-derived safe filename.
+          originalFilename: d.file.name,
+        })),
       ];
 
       // POST /upload to get presigned URLs, passing the reserved ID so the
@@ -424,13 +843,13 @@ export default function NewClaimPage() {
           body: unifiedBlob,
         });
       }
-      for (const file of files) {
-        const slot = uploadSlots.find((u) => u.filename === file.name);
+      for (const d of docFiles) {
+        const slot = uploadSlots.find((u) => u.filename === d.safeName);
         if (slot) {
           await fetch(slot.uploadUrl, {
             method: "PUT",
-            headers: { "Content-Type": file.type || "application/octet-stream" },
-            body: file,
+            headers: { "Content-Type": d.file.type || "application/octet-stream" },
+            body: d.file,
           });
         }
       }
@@ -450,6 +869,7 @@ export default function NewClaimPage() {
       const msg = e instanceof ApiError
         ? `Submission failed (${e.status}): ${e.message}`
         : `Submission failed: ${e instanceof Error ? e.message : String(e)}`;
+      setStatusKind("error");
       setStatusMsg(msg);
       setPhase("form");
     }
@@ -623,152 +1043,313 @@ export default function NewClaimPage() {
 
               {/* Form sections */}
               {(() => {
-                const { merged_fields, refund_types, schemas: typeSchemas } = schemas;
-                const sectionOrder = ["common", ...refund_types];
+                const { merged_fields, schemas: typeSchemas } = schemas;
                 const bySection: Record<string, FormField[]> = {};
                 for (const f of merged_fields) {
                   const s = f.section || "common";
                   (bySection[s] = bySection[s] || []).push(f);
                 }
 
-                return sectionOrder.map((section) => {
-                  const fields = bySection[section];
-                  if (!fields || fields.length === 0) return null;
+                // Render shared (common) fields once, then iterate `claims`.
+                // AP-13 refund types (STALE_WARRANT, PAYROLL) get one section
+                // per claim instance. PROPERTY_TAX gets one (single-claim).
+                const ap13Counts: Record<string, number> = {};
+                for (const c of claims) if (isAp13(c.type)) ap13Counts[c.type] = (ap13Counts[c.type] ?? 0) + 1;
+                const ap13SeenIdx: Record<string, number> = {};
 
-                  const sectionTitle =
-                    section === "common"
-                      ? "Claimant Information"
-                      : typeSchemas[section]?.title ?? section;
+                const renderSectionFields = (
+                  sectionFields: FormField[],
+                  // For AP-13 sections, the per-claim getter/setter; otherwise
+                  // null which means use formValues directly.
+                  perClaim: { idx: number; claim: Claim } | null,
+                ) => (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+                    {sectionFields.map((f) => {
+                      const isWide =
+                        f.type === "address" || f.type === "textarea" || f.type === "checkbox";
 
-                  return (
-                    <div key={section}>
-                      <div
-                        className="text-center text-xs font-bold uppercase tracking-widest py-2 mb-4 border-t border-b"
-                        style={{
-                          fontFamily: "Montserrat, sans-serif",
-                          borderColor: "var(--border)",
-                        }}
-                      >
-                        {sectionTitle}
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-                        {fields.map((f) => {
-                          const isWide =
-                            f.type === "address" || f.type === "textarea" || f.type === "checkbox";
-
-                          if (f.type === "checkbox") {
-                            return (
-                              <div
-                                key={f.id}
-                                className="col-span-full flex items-center gap-4 py-1"
-                              >
-                                <span className="text-sm">{f.label}</span>
-                                <div className="flex gap-4 ml-auto">
-                                  {["true", "false"].map((val) => (
-                                    <label
-                                      key={val}
-                                      className="flex items-center gap-1 text-sm font-bold cursor-pointer"
-                                    >
-                                      <input
-                                        type="radio"
-                                        name={f.id}
-                                        value={val}
-                                        checked={formValues[f.id] === val}
-                                        onChange={(e) =>
-                                          handleFieldChange(f.id, e.target.value)
-                                        }
-                                        style={{ accentColor: "var(--navy)" }}
-                                      />
-                                      {val === "true" ? "Yes" : "No"}
-                                    </label>
-                                  ))}
-                                </div>
-                              </div>
-                            );
-                          }
-
-                          const inputType: Record<string, string> = {
-                            text: "text",
-                            email: "email",
-                            tel: "tel",
-                            date: "date",
-                            number: "number",
-                          };
-
-                          const input =
-                            f.type === "address" || f.type === "textarea" ? (
-                              <textarea
-                                id={`f_${f.id}`}
-                                required={f.required}
-                                rows={2}
-                                value={formValues[f.id] ?? ""}
-                                onChange={(e) => handleFieldChange(f.id, e.target.value)}
-                                className="w-full border-b bg-transparent outline-none py-2 text-sm resize-none"
-                                style={{ borderColor: "var(--border)" }}
-                              />
-                            ) : (
-                              <input
-                                id={`f_${f.id}`}
-                                type={inputType[f.type] ?? "text"}
-                                required={f.required}
-                                value={formValues[f.id] ?? ""}
-                                onChange={(e) => handleFieldChange(f.id, e.target.value)}
-                                className="w-full border-b bg-transparent outline-none py-2 text-sm"
-                                style={{ borderColor: "var(--border)" }}
-                              />
-                            );
-
-                          return (
-                            <div
-                              key={f.id}
-                              className={isWide ? "col-span-full" : ""}
-                            >
-                              {input}
-                              <label
-                                htmlFor={`f_${f.id}`}
-                                className="block text-xs uppercase tracking-widest mt-1"
-                                style={{
-                                  fontFamily: "Montserrat, sans-serif",
-                                  color: "var(--text-muted)",
-                                }}
-                              >
-                                {f.label}
-                                {f.required && (
-                                  <span style={{ color: "var(--red)" }}> *</span>
-                                )}
-                              </label>
-                            </div>
+                      // Resolve current value + writer for this field.
+                      const fieldKey = perClaim ? `${f.id}_${perClaim.idx}` : f.id;
+                      const value = perClaim
+                        ? String((perClaim.claim as unknown as Record<string, unknown>)[f.id] ?? "")
+                        : (formValues[f.id] ?? "");
+                      const onChange = (v: string) => {
+                        if (perClaim) {
+                          setClaims((prev) =>
+                            prev.map((c, i) =>
+                              i === perClaim.idx ? { ...c, [f.id]: v } : c,
+                            ),
                           );
-                        })}
-                      </div>
-                    </div>
+                        } else {
+                          handleFieldChange(f.id, v);
+                        }
+                      };
+
+                      if (f.type === "checkbox") {
+                        return (
+                          <div
+                            key={fieldKey}
+                            className="col-span-full flex items-center gap-4 py-1"
+                          >
+                            <span className="text-sm">{f.label}</span>
+                            <div className="flex gap-4 ml-auto">
+                              {["true", "false"].map((val) => (
+                                <label
+                                  key={val}
+                                  className="flex items-center gap-1 text-sm font-bold cursor-pointer"
+                                >
+                                  <input
+                                    type="radio"
+                                    name={fieldKey}
+                                    value={val}
+                                    checked={value === val}
+                                    onChange={(e) => onChange(e.target.value)}
+                                    style={{ accentColor: "var(--navy)" }}
+                                  />
+                                  {val === "true" ? "Yes" : "No"}
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      const inputType: Record<string, string> = {
+                        text: "text",
+                        email: "email",
+                        tel: "tel",
+                        date: "date",
+                        number: "number",
+                      };
+
+                      const input =
+                        f.type === "address" || f.type === "textarea" ? (
+                          <textarea
+                            id={`f_${fieldKey}`}
+                            required={f.required}
+                            rows={2}
+                            value={value}
+                            onChange={(e) => onChange(e.target.value)}
+                            className="w-full border-b bg-transparent outline-none py-2 text-sm resize-none"
+                            style={{ borderColor: "var(--border)" }}
+                          />
+                        ) : (
+                          <input
+                            id={`f_${fieldKey}`}
+                            type={inputType[f.type] ?? "text"}
+                            required={f.required}
+                            value={value}
+                            onChange={(e) => onChange(e.target.value)}
+                            className="w-full border-b bg-transparent outline-none py-2 text-sm"
+                            style={{ borderColor: "var(--border)" }}
+                          />
+                        );
+
+                      return (
+                        <div
+                          key={fieldKey}
+                          className={isWide ? "col-span-full" : ""}
+                        >
+                          {input}
+                          <label
+                            htmlFor={`f_${fieldKey}`}
+                            className="block text-xs uppercase tracking-widest mt-1"
+                            style={{
+                              fontFamily: "Montserrat, sans-serif",
+                              color: "var(--text-muted)",
+                            }}
+                          >
+                            {f.label}
+                            {f.required && (
+                              <span style={{ color: "var(--red)" }}> *</span>
+                            )}
+                          </label>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+
+                const sectionHeader = (title: string, key: string) => (
+                  <div
+                    key={`hdr-${key}`}
+                    className="text-center text-xs font-bold uppercase tracking-widest py-2 mb-4 border-t border-b"
+                    style={{
+                      fontFamily: "Montserrat, sans-serif",
+                      borderColor: "var(--border)",
+                    }}
+                  >
+                    {title}
+                  </div>
+                );
+
+                const blocks: React.ReactNode[] = [];
+
+                // Common (shared) fields
+                if (bySection.common && bySection.common.length) {
+                  blocks.push(
+                    <div key="common">
+                      {sectionHeader("Claimant Information", "common")}
+                      {renderSectionFields(bySection.common, null)}
+                    </div>,
+                  );
+                }
+
+                // Per-claim sections, in URL/handoff order.
+                claims.forEach((claim, idx) => {
+                  const fields = bySection[claim.type];
+                  if (!fields || fields.length === 0) return;
+                  const sectionTitle = typeSchemas[claim.type]?.title ?? claim.type;
+                  let title = sectionTitle;
+                  if (isAp13(claim.type) && (ap13Counts[claim.type] ?? 0) > 1) {
+                    const seen = (ap13SeenIdx[claim.type] = (ap13SeenIdx[claim.type] ?? 0) + 1);
+                    title = `${sectionTitle} — Claim ${seen} of ${ap13Counts[claim.type]}`;
+                  }
+                  blocks.push(
+                    <div key={`claim-${idx}`}>
+                      {sectionHeader(title, `claim-${idx}`)}
+                      {renderSectionFields(fields, { idx, claim })}
+                    </div>,
                   );
                 });
+
+                return blocks;
               })()}
 
-              {/* File upload */}
+              {/* Supporting Documents */}
               <div className="mb-6">
                 <div
                   className="text-center text-xs font-bold uppercase tracking-widest py-2 mb-3 border-t border-b"
                   style={{ fontFamily: "Montserrat, sans-serif", borderColor: "var(--border)" }}
                 >
-                  Supporting Documents (optional)
+                  Supporting Documents
                 </div>
-                <input
-                  type="file"
-                  multiple
-                  accept=".pdf,.jpg,.jpeg,.png,.heic"
-                  onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
-                  className="text-sm w-full"
-                />
-                {files.length > 0 && (
-                  <ul className="mt-2 text-xs" style={{ color: "var(--text-muted)" }}>
-                    {files.map((f, i) => (
-                      <li key={i}>{f.name}</li>
-                    ))}
-                  </ul>
-                )}
+
+                {/* Required docs list — one labeled file box per requirement */}
+                {docReqs.map((doc) => {
+                  // A saved doc for this slot has a safeName starting with
+                  // the doc-id (e.g. "government-id.pdf" → "government-id").
+                  const savedKey = Object.keys(savedDocs).find(
+                    (k) => k.split(".")[0] === doc.id,
+                  );
+                  const savedLabel = savedKey ? savedDocs[savedKey] : null;
+                  const picked = reqFiles[doc.id];
+                  return (
+                    <div
+                      key={doc.id}
+                      className="border px-4 py-3 mb-3 flex flex-wrap items-center gap-3"
+                      style={{ borderColor: "var(--border-light)" }}
+                    >
+                      <div className="flex-1 min-w-[16rem] text-sm font-semibold">
+                        {doc.label}
+                        {doc.required && (
+                          <span
+                            className="ml-2 text-xs font-bold"
+                            style={{ color: "var(--red)" }}
+                          >
+                            Required
+                          </span>
+                        )}
+                      </div>
+                      <FileInputButton
+                        accept=".pdf,.jpg,.jpeg,.png,.heic"
+                        onChange={(files) =>
+                          setReqFiles((prev) => ({
+                            ...prev,
+                            [doc.id]: files[0] ?? null,
+                          }))
+                        }
+                        label={picked || savedLabel ? "Replace File" : "Choose File"}
+                      />
+                      {picked ? (
+                        <span className="text-xs" style={{ color: "var(--green, #2e7d32)" }}>
+                          ✓ {picked.name}
+                        </span>
+                      ) : savedLabel ? (
+                        <span className="text-xs" style={{ color: "var(--green, #2e7d32)" }}>
+                          ✓ {savedLabel}
+                        </span>
+                      ) : null}
+                    </div>
+                  );
+                })}
+
+                {/* Optional: scanned hand-filled paper form */}
+                {(() => {
+                  const savedKey = Object.keys(savedDocs).find(
+                    (k) => k.split(".")[0] === "scanned-form",
+                  );
+                  const savedLabel = savedKey ? savedDocs[savedKey] : null;
+                  return (
+                    <div
+                      className="border-2 border-dashed px-4 py-3 mb-3"
+                      style={{ borderColor: "var(--border-light)" }}
+                    >
+                      <div className="text-xs font-bold uppercase tracking-wider mb-1" style={{ fontFamily: "Montserrat, sans-serif", color: "var(--text-muted)" }}>
+                        Optional: Hand-filled paper form
+                      </div>
+                      <p className="text-xs mb-2" style={{ color: "var(--text-muted)" }}>
+                        If you printed and filled this form by hand, upload a scan or photograph
+                        here instead of signing digitally below.
+                      </p>
+                      <FileInputButton
+                        accept=".pdf,.jpg,.jpeg,.png,.heic"
+                        onChange={(files) => setScannedForm(files[0] ?? null)}
+                        label={scannedForm || savedLabel ? "Replace File" : "Choose File"}
+                      />
+                      {scannedForm ? (
+                        <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
+                          ✓ {scannedForm.name}
+                        </div>
+                      ) : savedLabel ? (
+                        <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
+                          ✓ {savedLabel}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })()}
+
+                {/* Optional: other supporting documents */}
+                <div
+                  className="border-2 border-dashed px-4 py-3"
+                  style={{ borderColor: "var(--border-light)" }}
+                >
+                  <div className="text-xs font-bold uppercase tracking-wider mb-1" style={{ fontFamily: "Montserrat, sans-serif", color: "var(--text-muted)" }}>
+                    Optional: Other supporting documents
+                  </div>
+                  <p className="text-xs mb-2" style={{ color: "var(--text-muted)" }}>
+                    Attach any additional evidence you'd like staff to review (correspondence,
+                    payment records, etc.). You can select multiple files at once.
+                  </p>
+                  <FileInputButton
+                    accept=".pdf,.jpg,.jpeg,.png,.heic"
+                    multiple
+                    onChange={(files) => setOtherFiles(files)}
+                    label={otherFiles.length > 0 ? "Replace Files" : "Choose Files"}
+                  />
+                  {/* Previously-saved 'other' attachments */}
+                  {(() => {
+                    const otherSaved = Object.entries(savedDocs).filter(
+                      ([k]) => k.startsWith("other-") || k.startsWith("other."),
+                    );
+                    if (!otherSaved.length) return null;
+                    return (
+                      <ul className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
+                        {otherSaved.map(([key, label]) => (
+                          <li key={key}>✓ {label}</li>
+                        ))}
+                      </ul>
+                    );
+                  })()}
+                  {otherFiles.length > 0 && (
+                    <ul className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
+                      {otherFiles.map((f, i) => (
+                        <li key={i}>✓ {f.name}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               </div>
 
               {/* Signature */}
@@ -787,18 +1368,24 @@ export default function NewClaimPage() {
               </div>
 
               {/* Status message */}
-              {statusMsg && (
-                <div
-                  className="px-4 py-3 text-sm border-l-4 mb-4"
-                  style={{
-                    background: phase === "submitting" ? "#e3f2fd" : "#fce4ec",
-                    borderColor: phase === "submitting" ? "#0c71ca" : "var(--red)",
-                    color: phase === "submitting" ? "#1565c0" : "#c62828",
-                  }}
-                >
-                  {statusMsg}
-                </div>
-              )}
+              {statusMsg && (() => {
+                // Submitting always wins as info-blue; otherwise the kind set
+                // by whoever wrote the message (success-green / error-red).
+                const kind = phase === "submitting" ? "info" : statusKind;
+                const palette = {
+                  info: { bg: "#e3f2fd", border: "#0c71ca", fg: "#1565c0" },
+                  success: { bg: "#e8f5e9", border: "var(--green)", fg: "#1b5e20" },
+                  error: { bg: "#fce4ec", border: "var(--red)", fg: "#c62828" },
+                }[kind];
+                return (
+                  <div
+                    className="px-4 py-3 text-sm border-l-4 mb-4"
+                    style={{ background: palette.bg, borderColor: palette.border, color: palette.fg }}
+                  >
+                    {statusMsg}
+                  </div>
+                );
+              })()}
 
               <button
                 type="submit"
@@ -814,6 +1401,24 @@ export default function NewClaimPage() {
               >
                 {phase === "submitting" ? "Submitting…" : "Submit Claim"}
               </button>
+
+              {reservedId && (
+                <button
+                  type="button"
+                  onClick={() => saveDraft()}
+                  disabled={phase === "submitting"}
+                  className="w-full mt-2 py-2 text-xs font-bold uppercase tracking-widest disabled:opacity-50"
+                  style={{
+                    fontFamily: "Montserrat, sans-serif",
+                    background: "transparent",
+                    color: "var(--navy)",
+                    border: "1px solid var(--navy)",
+                    cursor: phase === "submitting" ? "not-allowed" : "pointer",
+                  }}
+                >
+                  Save and continue later
+                </button>
+              )}
             </form>
           )}
         </div>

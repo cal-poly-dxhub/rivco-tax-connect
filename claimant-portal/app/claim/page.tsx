@@ -56,7 +56,7 @@ export default function ClaimStatusPage() {
 
   function handleUploadMore() {
     if (submissionId) {
-      router.push(`/new?submissionId=${submissionId}`);
+      router.push(`/claim/upload?id=${encodeURIComponent(submissionId)}`);
     }
   }
 
@@ -96,6 +96,7 @@ export default function ClaimStatusPage() {
   const overallStatus = submission.overallStatus as ClaimStatus;
   const canUploadMore =
     overallStatus === "partial" || overallStatus === "uploaded";
+  const canResume = overallStatus === "draft";
   const visibleDocs = (submission.documents ?? []).filter(
     (d) => !d.startsWith("_"),
   );
@@ -200,10 +201,35 @@ export default function ClaimStatusPage() {
                     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                     <polyline points="14 2 14 8 20 8" />
                   </svg>
-                  <span style={{ color: "var(--text)" }}>{doc}</span>
+                  <span style={{ color: "var(--text)" }}>
+                    {friendlyDocLabel(doc, submission.originalNames)}
+                  </span>
                 </li>
               ))}
             </ul>
+          </div>
+        )}
+
+        {/* Resume draft button (status = draft) */}
+        {canResume && submissionId && (
+          <div className="mb-4">
+            <button
+              type="button"
+              onClick={() => router.push(`/new?submissionId=${encodeURIComponent(submissionId)}`)}
+              className="w-full py-3 font-bold uppercase tracking-wide text-sm"
+              style={{
+                fontFamily: "Montserrat, sans-serif",
+                background: "var(--navy)",
+                color: "#fff",
+                border: "none",
+                cursor: "pointer",
+              }}
+            >
+              Continue your claim
+            </button>
+            <p className="text-xs mt-2" style={{ color: "var(--text-muted)" }}>
+              Picks up where you left off — your previous answers are saved.
+            </p>
           </div>
         )}
 
@@ -327,4 +353,30 @@ function PageShell({ children }: { children: React.ReactNode }) {
       </div>
     </div>
   );
+}
+
+// Map our doc-id-derived safe filenames to user-friendly labels. Used as a
+// fallback when the upload manifest has no original filename for a given doc
+// (e.g. older claims).
+const DOC_LABELS: Record<string, string> = {
+  "unified-form": "Submitted claim form",
+  "government-id": "Government photo ID",
+  "proof-of-entitlement": "Proof of entitlement",
+  "proof-of-ownership": "Proof of property ownership",
+  "scanned-form": "Scanned paper form",
+  "ap13-affidavit": "Signed AP-13 affidavit",
+  "property-tax-claim": "Signed property tax claim",
+};
+
+function friendlyDocLabel(
+  filename: string,
+  originalNames?: Record<string, string>,
+): string {
+  if (filename === "unified-form.json") return "Submitted claim form";
+  const original = originalNames?.[filename];
+  if (original) return original;
+  // Fall back to the doc-id prefix (`government-id.pdf` -> `government-id`)
+  // and look it up in our label map.
+  const stem = filename.split(".")[0].replace(/-\d+$/, "");
+  return DOC_LABELS[stem] || filename;
 }

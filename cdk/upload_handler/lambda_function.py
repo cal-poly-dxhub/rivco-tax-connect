@@ -11,6 +11,40 @@ from botocore.config import Config
 s3 = boto3.client("s3", config=Config(signature_version="s3v4"))
 dynamodb = boto3.resource("dynamodb")
 cognito = boto3.client("cognito-idp")
+secrets_client = boto3.client("secretsmanager")
+
+
+def _get_claimant_secret() -> str:
+    """Return the HMAC key for signing claimant tokens, fetched lazily and
+    cached on the warm-container module level.
+
+    Resolution order:
+      1. CLAIMANT_SECRET — explicit value (legacy / local dev)
+      2. CLAIMANT_SECRET_ARN — Secrets Manager secret created by CDK
+      3. fall back to the dev placeholder + log a warning so behavior never
+         silently fails (claimant tokens just won't be valid across restarts)
+    """
+    cached = getattr(_get_claimant_secret, "_cached", None)
+    if cached:
+        return cached
+    direct = os.environ.get("CLAIMANT_SECRET", "").strip()
+    if direct and direct != "CHANGEME-set-in-ssm":
+        _get_claimant_secret._cached = direct  # type: ignore[attr-defined]
+        return direct
+    arn = os.environ.get("CLAIMANT_SECRET_ARN", "").strip()
+    if arn:
+        try:
+            resp = secrets_client.get_secret_value(SecretId=arn)
+            value = resp.get("SecretString") or ""
+            if value:
+                _get_claimant_secret._cached = value  # type: ignore[attr-defined]
+                return value
+        except Exception as e:  # noqa: BLE001
+            print(f"[claimant-secret] failed to fetch {arn}: {e!r}")
+    print("[claimant-secret] WARN: no real secret configured; using insecure dev default")
+    return "dev-secret-change-me"
+
+
 BUCKET = os.environ["UPLOAD_BUCKET"]
 TABLE_NAME = os.environ.get("TABLE_NAME", "")
 ADMIN_CONFIG_TABLE = os.environ.get("ADMIN_CONFIG_TABLE", "")
@@ -69,6 +103,59 @@ _DEFAULT_DOC_REQS: dict[str, dict[str, Any]] = {
 # present on the submission.
 _UNIFIED_FORM_FILENAME = "unified-form.json"
 _UNIFIED_FORM_FULFILLS = {"ap13-affidavit", "property-tax-claim"}
+
+# Default refund-type catalog. Used as the seed when the admin-config table has
+# no REFTYPE#<key> rows yet. Once any REFTYPE# row exists, the admin-config
+# table becomes the source of truth — adds and deletes there fully control the
+# active set (a fresh deploy can wipe these defaults entirely).
+_DEFAULT_REFUND_TYPES: dict[str, str] = {
+    "STALE_WARRANT": "Stale-Dated Warrant",
+    "PAYROLL": "Payroll",
+    "PROPERTY_TAX": "Property Tax",
+}
+
+# Refund-type key shape: uppercase letters/digits/underscores, 1-32 chars. Stored
+# in S3 keys, DynamoDB partition keys, and HTML data-* attrs, so keep it strict.
+_VALID_REFUND_TYPE_KEY = re.compile(r'^[A-Z][A-Z0-9_]{0,31}$')
+
+
+def _load_refund_types() -> dict[str, str]:
+    """Return {key: label} for every active refund type.
+
+    Reads REFTYPE#<key> rows from the admin-config table. If the table has no
+    REFTYPE rows at all, falls back to the legacy defaults so a fresh deploy
+    keeps working without an explicit setup step. Once any REFTYPE row exists,
+    the admin-config table is the sole source of truth.
+
+    Cached on the function object across one warm invocation; bust via
+    ``_bust_refund_type_cache()`` after a write.
+    """
+    cache = getattr(_load_refund_types, "cache", None)
+    if cache is not None:
+        return cache
+    if not admin_table:
+        _load_refund_types.cache = dict(_DEFAULT_REFUND_TYPES)  # type: ignore[attr-defined]
+        return _load_refund_types.cache
+    items = _scan_all(
+        admin_table,
+        FilterExpression="begins_with(pk, :p)",
+        ExpressionAttributeValues={":p": "REFTYPE#"},
+    )
+    if not items:
+        _load_refund_types.cache = dict(_DEFAULT_REFUND_TYPES)  # type: ignore[attr-defined]
+        return _load_refund_types.cache
+    out = {item["key"]: item.get("label", item["key"]) for item in items if item.get("key")}
+    _load_refund_types.cache = out  # type: ignore[attr-defined]
+    return out
+
+
+def _bust_refund_type_cache() -> None:
+    if hasattr(_load_refund_types, "cache"):
+        delattr(_load_refund_types, "cache")
+
+
+def _is_known_refund_type(refund_type: str) -> bool:
+    return refund_type in _load_refund_types()
 
 
 def _get_doc_req(refund_type: str) -> dict[str, Any]:
@@ -384,6 +471,20 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     if event.get("httpMethod") == "OPTIONS":
         return {"statusCode": 200, "headers": headers, "body": ""}
 
+    # Wrap dispatch so unhandled exceptions still come back through API Gateway
+    # with CORS headers attached. Without this, the browser sees a CORS-policy
+    # block instead of the real 5xx and the actual error in CloudWatch is much
+    # harder to correlate.
+    try:
+        return _dispatch(event, headers)
+    except Exception as exc:  # noqa: BLE001
+        import traceback as _tb
+        print("[ERROR] unhandled exception:", repr(exc))
+        print(_tb.format_exc())
+        return _err(500, "Internal error — see CloudWatch logs", headers)
+
+
+def _dispatch(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
     resource = event.get("resource", "")
     method = event.get("httpMethod", "")
     if resource.startswith("/admin/"):
@@ -434,6 +535,7 @@ def _handle_package(event: dict[str, Any], headers: dict[str, str]) -> dict[str,
         return _err(403, "Not authorized for this submission", headers)
 
     internal_ids = _internal_doc_ids(refund_types) if not is_super else set()
+    original_names = manifest.get("originalNames") or {}
 
     paginator = s3.get_paginator("list_objects_v2")
     files = []
@@ -451,7 +553,12 @@ def _handle_package(event: dict[str, Any], headers: dict[str, str]) -> dict[str,
                 Params={"Bucket": BUCKET, "Key": key},
                 ExpiresIn=PACKAGE_EXPIRY,
             )
-            files.append({"filename": filename, "downloadUrl": download_url, "size": obj["Size"]})
+            files.append({
+                "filename": filename,
+                "originalFilename": original_names.get(filename, ""),
+                "downloadUrl": download_url,
+                "size": obj["Size"],
+            })
 
     return {
         "statusCode": 200,
@@ -503,6 +610,8 @@ def _compute_statuses(departments: list[str], refund_type_csv: str, filenames: l
 def _handle_status(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
     """List submissions the caller is allowed to see."""
     dept_keys, is_super = _auth(event)
+    qs = event.get("queryStringParameters") or {}
+    include_drafts = (qs.get("include") or "").lower() == "drafts"
     if table:
         submissions = []
         for item in _list_submissions():
@@ -517,6 +626,13 @@ def _handle_status(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
             statuses = item.get("statuses")
             if not isinstance(statuses, dict):
                 statuses = _compute_statuses(depts, item.get("refundType", ""), docs)
+
+            # Drafts are created by /claimant/reserve when a claimant opens
+            # the form via a bot link but never submits. They clutter the
+            # admin queue with non-actionable rows; hide unless explicitly
+            # requested via ?include=drafts.
+            if not include_drafts and all(v == "draft" for v in statuses.values()):
+                continue
 
             tasks_by_dept = _tasks_by_department(statuses, depts, refund_types, docs)
 
@@ -765,12 +881,20 @@ def _handle_upload(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
 
     urls = []
     now = _now_iso()
+    # Map safe filename → claimant's original filename so the dashboard and
+    # the /claim page can display "DMV License.pdf" instead of "government-id.pdf".
+    original_names: dict[str, str] = {}
 
     for f in files:
         content_type = f.get("contentType", "")
         filename = _sanitize_filename(f.get("filename") or "file")
         if content_type not in ALLOWED_TYPES:
             return _err(400, f"Unsupported file type: {content_type}", headers)
+
+        original = (f.get("originalFilename") or "").strip()
+        if original:
+            # Cap length so a malicious client can't bloat the manifest.
+            original_names[filename] = original[:200]
 
         key = f"{submission_id}/{filename}"
         presigned = s3.generate_presigned_url(
@@ -783,7 +907,11 @@ def _handle_upload(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
     s3.put_object(
         Bucket=BUCKET,
         Key=f"{submission_id}/_manifest.json",
-        Body=json.dumps({"name": name, "refundType": refund_type}),
+        Body=json.dumps({
+            "name": name,
+            "refundType": refund_type,
+            "originalNames": original_names,
+        }),
         ContentType="application/json",
     )
 
@@ -804,7 +932,16 @@ def _handle_upload(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
         }
         if address:
             item["address"] = address
-        _put_submission(item)
+        try:
+            _put_submission(item)
+            print(f"[upload] wrote sid={submission_id} name={name!r} types={refund_types} depts={departments}")
+        except Exception as e:  # noqa: BLE001
+            import traceback as _tb
+            print(f"[upload] FAILED to write sid={submission_id}: {e!r}")
+            print(_tb.format_exc())
+            raise
+    else:
+        print(f"[upload] WARN: no table configured; skipped DDB write for sid={submission_id}")
 
     return {
         "statusCode": 200,
@@ -826,15 +963,21 @@ def _username_from_email(email: str) -> str:
 
 
 def _handle_admin(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
-    _, is_super = _auth(event)
-    if not is_super:
-        return _err(403, "Super-admin only", headers)
+    dept_keys, is_super = _auth(event)
     if not admin_table or not USER_POOL_ID:
         return _err(500, "Admin backend not configured", headers)
 
     path = (event.get("pathParameters") or {}).get("proxy", "")
     method = event.get("httpMethod", "GET")
     parts = path.split("/") if path else []
+
+    # Chat-handoff *read* paths are open to any authenticated admin (handoffs
+    # may need to be picked up by whichever department's admin is on call).
+    # Mutating actions (resolve/delete) stay super-admin-only and are gated
+    # inside their handlers.
+    chat_read_open = parts[:1] == ["chat-sessions"] and method == "GET"
+    if not is_super and not chat_read_open:
+        return _err(403, "Super-admin only", headers)
 
     # /admin/config (GET)
     if path == "config" and method == "GET":
@@ -855,9 +998,19 @@ def _handle_admin(event: dict[str, Any], headers: dict[str, str]) -> dict[str, A
             return _admin_update_user(event, parts[1], headers)
         if len(parts) == 2 and method == "DELETE":
             return _admin_delete_user(parts[1], headers)
-    # /admin/refund-types/<TYPE> (PUT to set label)
-    if parts[:1] == ["refund-types"] and len(parts) == 2 and method == "PUT":
-        return _admin_set_refund_type_label(event, parts[1], headers)
+    # /admin/refund-types
+    if parts[:1] == ["refund-types"]:
+        if len(parts) == 1 and method == "GET":
+            return _admin_list_refund_types(headers)
+        if len(parts) == 1 and method == "POST":
+            return _admin_create_refund_type(event, headers)
+        if len(parts) == 2 and method == "PUT":
+            # Legacy: set label only (kept for the existing dashboard route).
+            return _admin_set_refund_type_label(event, parts[1], headers)
+        if len(parts) == 2 and method == "PATCH":
+            return _admin_update_refund_type(event, parts[1], headers)
+        if len(parts) == 2 and method == "DELETE":
+            return _admin_delete_refund_type(parts[1], headers)
     # /admin/doc-requirements
     if parts[:1] == ["doc-requirements"]:
         if len(parts) == 1 and method == "GET":
@@ -876,11 +1029,19 @@ def _handle_admin(event: dict[str, Any], headers: dict[str, str]) -> dict[str, A
     if parts[:1] == ["chat-sessions"]:
         if len(parts) == 1 and method == "GET":
             return _admin_list_chat_sessions(event, headers)
+        # GET /admin/chat-sessions/by-ref/<refNumber> — open to all admins,
+        # so on-call staff can paste a quoted reference and pull the transcript.
+        if len(parts) == 3 and parts[1] == "by-ref" and method == "GET":
+            return _admin_get_chat_session_by_ref(parts[2], headers)
         if len(parts) == 2 and method == "GET":
             return _admin_get_chat_session(parts[1], headers)
         if len(parts) == 3 and parts[2] == "resolve" and method == "POST":
+            if not is_super:
+                return _err(403, "Super-admin only", headers)
             return _admin_resolve_chat_handoff(parts[1], headers)
         if len(parts) == 2 and method == "DELETE":
+            if not is_super:
+                return _err(403, "Super-admin only", headers)
             return _admin_delete_chat_session(parts[1], headers)
 
     return _err(404, f"Unknown admin route: {method} {path}", headers)
@@ -934,10 +1095,15 @@ def _admin_get_config(headers: dict[str, str]) -> dict[str, Any]:
             "createdAt": cu.get("UserCreateDate").isoformat() if cu.get("UserCreateDate") else "",
         })
 
+    refund_types = [
+        {"key": k, "label": v, "isDefault": k in _DEFAULT_REFUND_TYPES}
+        for k, v in sorted(_load_refund_types().items())
+    ]
     return {"statusCode": 200, "headers": headers, "body": json.dumps({
         "departments": sorted(departments, key=lambda d: d["key"]),
         "users": sorted(users, key=lambda u: u["username"]),
         "refundTypeLabels": refund_type_labels,
+        "refundTypes": refund_types,
     })}
 
 
@@ -1159,7 +1325,7 @@ def _admin_delete_user(username: str, headers: dict[str, str]) -> dict[str, Any]
 
 def _admin_set_refund_type_label(event: dict[str, Any], refund_type: str, headers: dict[str, str]) -> dict[str, Any]:
     refund_type = refund_type.upper()
-    if refund_type not in {"STALE_WARRANT", "PAYROLL", "PROPERTY_TAX"}:
+    if not _is_known_refund_type(refund_type):
         return _err(400, "Unknown refund type", headers)
     try:
         body = json.loads(event.get("body") or "{}")
@@ -1176,17 +1342,132 @@ def _admin_set_refund_type_label(event: dict[str, Any], refund_type: str, header
             "body": json.dumps({"refund_type": refund_type, "label": label})}
 
 
+def _seed_refund_type_rows() -> None:
+    """First-touch helper: write the legacy defaults as REFTYPE# rows so the
+    super-admin starts with an editable catalog instead of an empty table."""
+    if not admin_table:
+        return
+    now = _now_iso()
+    with admin_table.batch_writer() as batch:
+        for key, label in _DEFAULT_REFUND_TYPES.items():
+            batch.put_item(Item={
+                "pk": f"REFTYPE#{key}", "key": key, "label": label,
+                "createdAt": now, "updatedAt": now,
+            })
+    _bust_refund_type_cache()
+
+
+def _admin_list_refund_types(headers: dict[str, str]) -> dict[str, Any]:
+    """List all known refund types with metadata.
+
+    Falls through to the legacy seeds when no REFTYPE# rows exist yet, so the
+    dashboard can render a CRUD list immediately.
+    """
+    types = _load_refund_types()
+    out = [
+        {"key": k, "label": v, "isDefault": k in _DEFAULT_REFUND_TYPES}
+        for k, v in sorted(types.items())
+    ]
+    return {"statusCode": 200, "headers": headers,
+            "body": json.dumps({"refund_types": out})}
+
+
+def _admin_create_refund_type(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except json.JSONDecodeError:
+        return _err(400, "Invalid JSON", headers)
+    key = (body.get("key") or "").strip().upper()
+    label = (body.get("label") or "").strip()
+    if not _VALID_REFUND_TYPE_KEY.match(key):
+        return _err(400, "key must be uppercase letters/digits/underscores, 1-32 chars, starting with a letter", headers)
+    if not label:
+        return _err(400, "label is required", headers)
+    # Adding the first explicit row would otherwise drop the legacy seeds (the
+    # admin-config table becomes the source of truth once any REFTYPE# row
+    # exists), so persist the seeds alongside this new entry to preserve them.
+    if not _scan_all(admin_table, FilterExpression="begins_with(pk, :p)",
+                     ExpressionAttributeValues={":p": "REFTYPE#"}):
+        _seed_refund_type_rows()
+    if admin_table.get_item(Key={"pk": f"REFTYPE#{key}"}).get("Item"):
+        return _err(409, "Refund type already exists", headers)
+    admin_table.put_item(Item={
+        "pk": f"REFTYPE#{key}", "key": key, "label": label,
+        "createdAt": _now_iso(), "updatedAt": _now_iso(),
+    })
+    _bust_refund_type_cache()
+    return {"statusCode": 201, "headers": headers,
+            "body": json.dumps({"key": key, "label": label})}
+
+
+def _admin_update_refund_type(event: dict[str, Any], key: str, headers: dict[str, str]) -> dict[str, Any]:
+    key = key.upper()
+    if not _VALID_REFUND_TYPE_KEY.match(key):
+        return _err(400, "invalid key", headers)
+    if not _is_known_refund_type(key):
+        return _err(404, "Refund type not found", headers)
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except json.JSONDecodeError:
+        return _err(400, "Invalid JSON", headers)
+    label = (body.get("label") or "").strip()
+    if not label:
+        return _err(400, "label is required", headers)
+    # Materialize the legacy seeds the first time something is edited so the
+    # active set doesn't silently change shape.
+    if not _scan_all(admin_table, FilterExpression="begins_with(pk, :p)",
+                     ExpressionAttributeValues={":p": "REFTYPE#"}):
+        _seed_refund_type_rows()
+    admin_table.put_item(Item={
+        "pk": f"REFTYPE#{key}", "key": key, "label": label,
+        "updatedAt": _now_iso(),
+    })
+    # Mirror the label change into the legacy TYPELABEL# row so existing
+    # consumers (admin dashboard column headers, etc.) stay consistent.
+    admin_table.put_item(Item={
+        "pk": f"TYPELABEL#{key}", "refund_type": key,
+        "label": label, "updatedAt": _now_iso(),
+    })
+    _bust_refund_type_cache()
+    return {"statusCode": 200, "headers": headers,
+            "body": json.dumps({"key": key, "label": label})}
+
+
+def _admin_delete_refund_type(key: str, headers: dict[str, str]) -> dict[str, Any]:
+    key = key.upper()
+    if not _VALID_REFUND_TYPE_KEY.match(key):
+        return _err(400, "invalid key", headers)
+    if not _is_known_refund_type(key):
+        return _err(404, "Refund type not found", headers)
+    # If a department references this type, refuse — the admin should detach
+    # it first (or the department's status derivation would break).
+    in_use = [d["key"] for d in _load_departments() if key in (d.get("refund_types") or [])]
+    if in_use:
+        return _err(409, f"Refund type is used by department(s): {', '.join(in_use)}", headers)
+    # First delete materializes the seeds (so removing one default doesn't
+    # leave the other two implicitly active via the fallback).
+    if not _scan_all(admin_table, FilterExpression="begins_with(pk, :p)",
+                     ExpressionAttributeValues={":p": "REFTYPE#"}):
+        _seed_refund_type_rows()
+    admin_table.delete_item(Key={"pk": f"REFTYPE#{key}"})
+    # Clean up the related auxiliary rows so the type fully disappears.
+    admin_table.delete_item(Key={"pk": f"TYPELABEL#{key}"})
+    admin_table.delete_item(Key={"pk": f"DOCREQ#{key}"})
+    admin_table.delete_item(Key={"pk": f"FORMSCHEMA#{key}"})
+    _bust_refund_type_cache()
+    return {"statusCode": 200, "headers": headers,
+            "body": json.dumps({"key": key, "deleted": True})}
+
+
 def _admin_list_doc_requirements(headers: dict[str, str]) -> dict[str, Any]:
     """Return doc requirements for each known refund type, seeded from defaults."""
-    out = {}
-    for rt in ("STALE_WARRANT", "PAYROLL", "PROPERTY_TAX"):
-        out[rt] = _get_doc_req(rt)
+    out = {rt: _get_doc_req(rt) for rt in _load_refund_types()}
     return {"statusCode": 200, "headers": headers, "body": json.dumps(out)}
 
 
 def _admin_put_doc_requirements(event: dict[str, Any], refund_type: str, headers: dict[str, str]) -> dict[str, Any]:
     refund_type = refund_type.upper()
-    if refund_type not in {"STALE_WARRANT", "PAYROLL", "PROPERTY_TAX"}:
+    if not _is_known_refund_type(refund_type):
         return _err(400, "Unknown refund type", headers)
     try:
         body = json.loads(event.get("body") or "{}")
@@ -1249,8 +1530,9 @@ _DEFAULT_FORM_SCHEMAS: dict[str, dict[str, Any]] = {
             {"id": "warrant_date", "label": "Warrant Date", "type": "date", "required": False, "section": "STALE_WARRANT"},
             {"id": "business_name", "label": "Business Claimant Name & Title", "type": "text", "required": False, "section": "STALE_WARRANT"},
             {"id": "business_unit", "label": "Business Unit", "type": "text", "required": False, "section": "STALE_WARRANT"},
+            {"id": "is_owner", "label": "Are you the legal owner or custodian of this warrant?", "type": "checkbox", "required": True, "section": "STALE_WARRANT"},
+            {"id": "warrant_included", "label": "Is the stale dated warrant included with your documentation?", "type": "checkbox", "required": True, "section": "STALE_WARRANT"},
             {"id": "is_incorporated", "label": "Is the claimant an incorporated entity?", "type": "checkbox", "required": False, "section": "STALE_WARRANT"},
-            {"id": "is_owner", "label": "Is the claimant the original payee?", "type": "checkbox", "required": False, "section": "STALE_WARRANT"},
         ],
     },
     "PAYROLL": {
@@ -1264,6 +1546,8 @@ _DEFAULT_FORM_SCHEMAS: dict[str, dict[str, Any]] = {
             {"id": "warrant_amount", "label": "Warrant Amount", "type": "number", "required": True, "section": "PAYROLL"},
             {"id": "warrant_date", "label": "Warrant Date", "type": "date", "required": False, "section": "PAYROLL"},
             {"id": "business_unit", "label": "Business Unit", "type": "text", "required": False, "section": "PAYROLL"},
+            {"id": "is_owner", "label": "Are you the legal owner or custodian of this warrant?", "type": "checkbox", "required": True, "section": "PAYROLL"},
+            {"id": "warrant_included", "label": "Is the stale dated warrant included with your documentation?", "type": "checkbox", "required": True, "section": "PAYROLL"},
         ],
     },
     "PROPERTY_TAX": {
@@ -1308,13 +1592,13 @@ def _get_form_schema(refund_type: str) -> dict[str, Any]:
 
 def _admin_list_form_schemas(headers: dict[str, str]) -> dict[str, Any]:
     """Return schemas for every known refund type."""
-    out = {rt: _get_form_schema(rt) for rt in _DEFAULT_FORM_SCHEMAS.keys()}
+    out = {rt: _get_form_schema(rt) for rt in _load_refund_types()}
     return {"statusCode": 200, "headers": headers, "body": json.dumps(out)}
 
 
 def _admin_get_form_schema(refund_type: str, headers: dict[str, str]) -> dict[str, Any]:
     refund_type = refund_type.upper()
-    if refund_type not in _DEFAULT_FORM_SCHEMAS:
+    if not _is_known_refund_type(refund_type):
         return _err(400, "Unknown refund type", headers)
     return {"statusCode": 200, "headers": headers,
             "body": json.dumps(_get_form_schema(refund_type))}
@@ -1322,7 +1606,7 @@ def _admin_get_form_schema(refund_type: str, headers: dict[str, str]) -> dict[st
 
 def _admin_put_form_schema(event: dict[str, Any], refund_type: str, headers: dict[str, str]) -> dict[str, Any]:
     refund_type = refund_type.upper()
-    if refund_type not in _DEFAULT_FORM_SCHEMAS:
+    if not _is_known_refund_type(refund_type):
         return _err(400, "Unknown refund type", headers)
     try:
         body = json.loads(event.get("body") or "{}")
@@ -1361,7 +1645,12 @@ def _admin_put_form_schema(event: dict[str, Any], refund_type: str, headers: dic
     raw_title = body.get("title")
     if raw_title is not None and not isinstance(raw_title, str):
         return _err(400, "title must be a string", headers)
-    title = (raw_title or _DEFAULT_FORM_SCHEMAS[refund_type]["title"]).strip()
+    default_title = (
+        _DEFAULT_FORM_SCHEMAS.get(refund_type, {}).get("title")
+        or _load_refund_types().get(refund_type)
+        or refund_type
+    )
+    title = (raw_title or default_title).strip()
 
     admin_table.put_item(Item={
         "pk": f"FORMSCHEMA#{refund_type}",
@@ -1386,7 +1675,8 @@ def _handle_public_form_schemas(event: dict[str, Any], headers: dict[str, str]) 
     if not raw:
         return _err(400, "types query parameter required", headers)
     requested = [t.strip().upper() for t in raw.split(",") if t.strip()]
-    invalid = [t for t in requested if t not in _DEFAULT_FORM_SCHEMAS]
+    known = _load_refund_types()
+    invalid = [t for t in requested if t not in known]
     if invalid:
         return _err(400, f"Unknown refund types: {', '.join(invalid)}", headers)
 
@@ -1601,6 +1891,37 @@ def _admin_get_chat_session(session_id: str, headers: dict[str, str]) -> dict[st
             "body": json.dumps({"meta": meta, "handoff": handoff, "messages": messages})}
 
 
+_REF_NUMBER = re.compile(r'^[A-Z0-9-]{3,32}$')
+
+
+def _admin_get_chat_session_by_ref(ref_number: str, headers: dict[str, str]) -> dict[str, Any]:
+    """Look up the session that owns a given handoff reference number.
+
+    Reference numbers are short (e.g. REF-A1B2C) so a filtered scan over
+    HANDOFF rows is cheap and keeps the chat-sessions table free of an extra
+    GSI. Returns the same shape as ``_admin_get_chat_session`` once the
+    matching session is found.
+    """
+    if not chat_table:
+        return _err(500, "Chat backend not configured", headers)
+    ref = (ref_number or "").strip().upper()
+    if not _REF_NUMBER.match(ref):
+        return _err(400, "Invalid reference number", headers)
+    items = _scan_all(
+        chat_table,
+        FilterExpression="sk = :h AND refNumber = :r",
+        ExpressionAttributeValues={":h": "HANDOFF", ":r": ref},
+    )
+    if not items:
+        return _err(404, "No handoff matches that reference number", headers)
+    # If multiple sessions share the same ref (shouldn't happen, but defend),
+    # use the most-recently-requested one.
+    items.sort(key=lambda it: it.get("requestedAt", ""), reverse=True)
+    session_pk = items[0]["pk"]
+    session_id = session_pk.split("#", 1)[1] if "#" in session_pk else session_pk
+    return _admin_get_chat_session(session_id, headers)
+
+
 def _admin_resolve_chat_handoff(session_id: str, headers: dict[str, str]) -> dict[str, Any]:
     """Mark a handoff handled — clear the GSI keys so it drops off the pending list."""
     if not chat_table:
@@ -1687,14 +2008,25 @@ def _street_name_only(street: str) -> str:
     return street.strip()
 
 
-def _generate_decoy_streets(real_address: str, all_addresses: list[str], count: int = 3) -> list[str]:
-    """Pick `count` distinct street strings that differ from `real_address`."""
+def _generate_decoy_streets(
+    real_address: str, all_addresses: list[str], count: int = 3, seed_key: str = "",
+) -> list[str]:
+    """Pick `count` distinct street strings that differ from `real_address`.
+
+    Deterministic when ``seed_key`` is set: same key + same dataset → same
+    decoys + ordering. Used to keep the address-quiz options stable across
+    repeated requests for the same submission, so a claimant who hits Refresh
+    or restarts the flow sees the same 4 buttons.
+    """
     import random
     real_street = _extract_street(real_address)
     seen = {real_street.lower()}
     decoys: list[str] = []
-    candidates = list(all_addresses)
-    random.shuffle(candidates)
+    # Sort candidates so the input order is deterministic across calls — the
+    # `all_addresses` list comes back from a query whose order can vary.
+    candidates = sorted(all_addresses)
+    rng = random.Random(seed_key) if seed_key else random
+    rng.shuffle(candidates)
     for addr in candidates:
         if addr == real_address:
             continue
@@ -1720,9 +2052,7 @@ def _verify_claimant_token(submission_id: str, token: str) -> bool:
     import hmac
     import hashlib
     import time
-    secret = os.environ.get("CLAIMANT_SECRET", "dev-secret-change-me")
-    if secret == "dev-secret-change-me":
-        logger.warning("CLAIMANT_SECRET not set — using insecure dev default")
+    secret = _get_claimant_secret()
     try:
         decoded = base64.urlsafe_b64decode(token + "==").decode()
         parts = decoded.split(":")
@@ -1767,6 +2097,12 @@ def _handle_claimant(event: dict[str, Any], headers: dict[str, str]) -> dict[str
     elif resource == "/claimant/continue" or proxy == "continue":
         if method == "POST":
             return _claimant_continue(event, headers)
+    elif resource == "/claimant/continue-complete" or proxy == "continue-complete":
+        if method == "POST":
+            return _claimant_continue_complete(event, headers)
+    elif resource == "/claimant/save-draft" or proxy == "save-draft":
+        if method == "POST":
+            return _claimant_save_draft(event, headers)
 
     return _err(404, f"No claimant handler for {method} {resource or proxy}", headers)
 
@@ -1797,27 +2133,62 @@ def _claimant_reserve(event: dict[str, Any], headers: dict[str, str]) -> dict[st
     now = _now_iso()
     refund_types = [t.strip() for t in refund_type.split(",") if t.strip()]
     departments = _derive_departments(refund_types)
+    print(f"[reserve] sid={submission_id} name={name!r} types={refund_types} depts={departments}")
 
-    _put_submission(
-        {
-            "submissionId": submission_id,
-            "name": name,
-            "refundType": refund_type,
-            "departments": departments,
-            "statuses": {d: "draft" for d in departments},
-            "documents": [],
-            "submittedAt": now,
-            "updatedAt": now,
-        },
-        address=address,
-        initial_status="draft",
-    )
+    try:
+        _put_submission(
+            {
+                "submissionId": submission_id,
+                "name": name,
+                "refundType": refund_type,
+                "departments": departments,
+                "statuses": {d: "draft" for d in departments},
+                "documents": [],
+                "submittedAt": now,
+                "updatedAt": now,
+            },
+            address=address,
+            initial_status="draft",
+        )
+        print(f"[reserve] wrote sid={submission_id}")
+    except Exception as e:  # noqa: BLE001
+        import traceback as _tb
+        print(f"[reserve] FAILED to write sid={submission_id}: {e!r}")
+        print(_tb.format_exc())
+        raise
+
+    # Mint a session token alongside the reservation so the claimant can use
+    # save-draft / continue-upload immediately, without re-verifying via the
+    # address quiz. The bot only ever reaches /reserve after a successful
+    # name+address match, so we treat that as already-verified for token
+    # purposes.
+    token, expiry_iso = _mint_claimant_token(submission_id)
 
     return {
         "statusCode": 200,
         "headers": headers,
-        "body": json.dumps({"submissionId": submission_id}),
+        "body": json.dumps({
+            "submissionId": submission_id,
+            "token": token,
+            "expiresAt": expiry_iso,
+        }),
     }
+
+
+def _mint_claimant_token(submission_id: str) -> tuple[str, str]:
+    """Build the same HMAC token shape /claimant/verify returns. 1-hour TTL."""
+    import base64
+    import hmac
+    import hashlib
+    import time
+    secret = _get_claimant_secret()
+    expiry = int(time.time()) + 3600
+    msg = f"{submission_id}:{expiry}"
+    sig = hmac.new(secret.encode(), msg.encode(), hashlib.sha256).hexdigest()
+    token_plain = f"{submission_id}:{expiry}:{sig}"
+    token = base64.urlsafe_b64encode(token_plain.encode()).rstrip(b"=").decode()
+    expiry_iso = datetime.fromtimestamp(expiry, tz=timezone.utc).isoformat()
+    return token, expiry_iso
 
 
 def _claimant_quiz(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
@@ -1888,7 +2259,12 @@ def _claimant_quiz(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
         other_addresses = []
 
     real_street = _street_name_only(_extract_street(address))
-    decoys = [_street_name_only(_extract_street(a)) for a in _generate_decoy_streets(address, other_addresses, count=3)]
+    # Stable seed: a given submission always produces the same quiz options
+    # regardless of who asked or when. Lets a claimant restart and see the
+    # same 4 buttons, and matches what the chat bot generated for the same
+    # claimant where the keys overlap.
+    seed_key = f"{(item.get('name') or '').upper()}|{address.upper()}"
+    decoys = [_street_name_only(_extract_street(a)) for a in _generate_decoy_streets(address, other_addresses, count=3, seed_key=seed_key)]
     # Filter empty strings and deduplicate in case stripping left collisions
     seen: set[str] = {real_street.lower()}
     clean_decoys = []
@@ -1898,7 +2274,7 @@ def _claimant_quiz(event: dict[str, Any], headers: dict[str, str]) -> dict[str, 
             seen.add(d.lower())
 
     options = [real_street] + clean_decoys
-    random.shuffle(options)
+    random.Random(seed_key).shuffle(options)
 
     return {
         "statusCode": 200,
@@ -1988,17 +2364,7 @@ def _claimant_verify(event: dict[str, Any], headers: dict[str, str]) -> dict[str
         }), headers)
 
     # ── Verification succeeded — issue token ──
-    secret = os.environ.get("CLAIMANT_SECRET", "dev-secret-change-me")
-    if secret == "dev-secret-change-me":
-        logger.warning("CLAIMANT_SECRET not set — using insecure dev default")
-
-    expiry = now_ts + 3600  # 1-hour token
-    msg = f"{submission_id}:{expiry}"
-    sig = hmac.new(secret.encode(), msg.encode(), hashlib.sha256).hexdigest()
-    token_plain = f"{submission_id}:{expiry}:{sig}"
-    token = base64.urlsafe_b64encode(token_plain.encode()).rstrip(b"=").decode()
-
-    expiry_iso = datetime.fromtimestamp(expiry, tz=timezone.utc).isoformat()
+    token, expiry_iso = _mint_claimant_token(submission_id)
 
     # Reset failure counter
     table.update_item(
@@ -2067,6 +2433,16 @@ def _claimant_status(event: dict[str, Any], headers: dict[str, str]) -> dict[str
     all_docs = item.get("documents") or []
     visible_docs = [d for d in all_docs if _doc_prefix(d) not in internal_ids]
 
+    # Pull original filenames from the manifest so the /claim status page can
+    # show "DMV License.pdf" instead of "government-id.pdf".
+    original_names: dict[str, str] = {}
+    try:
+        manifest_obj = s3.get_object(Bucket=BUCKET, Key=f"{submission_id}/_manifest.json")
+        manifest = json.loads(manifest_obj["Body"].read())
+        original_names = manifest.get("originalNames") or {}
+    except Exception:  # noqa: BLE001
+        pass
+
     return {
         "statusCode": 200,
         "headers": headers,
@@ -2076,8 +2452,149 @@ def _claimant_status(event: dict[str, Any], headers: dict[str, str]) -> dict[str
             "refundType": refund_type,
             "overallStatus": overall,
             "documents": visible_docs,
+            "originalNames": {k: v for k, v in original_names.items() if k in visible_docs},
+            # Whatever fields the claimant has typed so far if the form is
+            # still in draft. Lets the /new page resume a partially-filled
+            # submission. Empty/absent for already-submitted claims.
+            "draftFormData": item.get("draftFormData") or {},
             "submittedAt": item.get("submittedAt", ""),
             "updatedAt": item.get("updatedAt", ""),
+        }),
+    }
+
+
+def _claimant_save_draft(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    """POST /claimant/save-draft  (requires X-Claimant-Token header)
+
+    Body: {
+      "submissionId": "...",
+      "formData": { ...partial form values... },
+      "filenames": ["government-id.pdf", ...]     (optional)
+      "originalNames": {"government-id.pdf": "DMV License.pdf"}  (optional)
+    }
+
+    Persists draftFormData + merges any newly-uploaded filenames into
+    documents — without flipping status off `draft`, so the claim stays
+    out of the admin queue until the real submit. Cannot be called once
+    a claim has actually been submitted.
+    """
+    token = (event.get("headers") or {}).get("X-Claimant-Token") or \
+            (event.get("headers") or {}).get("x-claimant-token") or ""
+
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except json.JSONDecodeError:
+        return _err(400, "Invalid JSON", headers)
+
+    submission_id = (body.get("submissionId") or "").strip()
+    form_data = body.get("formData")
+    new_filenames = body.get("filenames") or []
+    new_originals = body.get("originalNames") or {}
+
+    if not submission_id:
+        return _err(400, "submissionId is required", headers)
+    if not re.fullmatch(r'[0-9a-f]{12}', submission_id):
+        return _err(400, "Invalid submission id", headers)
+    if not isinstance(form_data, dict):
+        return _err(400, "formData must be an object", headers)
+    if not isinstance(new_filenames, list):
+        return _err(400, "filenames must be a list", headers)
+    if not isinstance(new_originals, dict):
+        return _err(400, "originalNames must be an object", headers)
+    if not token:
+        return _err(401, "X-Claimant-Token header required", headers)
+    if not _verify_claimant_token(submission_id, token):
+        return _err(403, "Invalid or expired token", headers)
+    if not table:
+        return _err(500, "DynamoDB not configured", headers)
+
+    item = _get_submission(submission_id)
+    if not item:
+        return _err(404, "Submission not found", headers)
+
+    # Only let drafts be overwritten — once a claim has been submitted we
+    # don't want a stray autosave to clobber the final state.
+    statuses = item.get("statuses") or {}
+    if statuses and not all(v == "draft" for v in statuses.values()):
+        return _err(409, "Cannot save draft on a submitted claim", headers)
+
+    # Cap form-data size so a malicious client can't bloat the row. Form
+    # values are typed strings/booleans; 16 KB is plenty.
+    if len(json.dumps(form_data)) > 16384:
+        return _err(400, "formData too large", headers)
+
+    # Merge new filenames into documents, deduped, preserving order.
+    # Per-doc-id semantic: a new "government-id.pdf" replaces the old one
+    # since they share the same prefix; but for `other-N` files we just
+    # append. Keep this simple — dedupe by exact filename.
+    existing_docs: list[str] = list(item.get("documents") or [])
+    seen = set(existing_docs)
+    for fn in new_filenames:
+        if not isinstance(fn, str) or not fn:
+            continue
+        if fn in seen:
+            continue
+        existing_docs.append(fn)
+        seen.add(fn)
+
+    # If the new file replaces an old one with the same doc-id (e.g. user
+    # re-picked their photo ID), drop the older sibling so the dashboard
+    # doesn't show stale duplicates.
+    if new_filenames:
+        new_prefixes = {_doc_prefix(fn) for fn in new_filenames if isinstance(fn, str)}
+        deduped: list[str] = []
+        new_set = set(new_filenames)
+        for fn in existing_docs:
+            prefix = _doc_prefix(fn)
+            if prefix in new_prefixes and fn not in new_set:
+                # An older file with the same doc-id; drop it.
+                continue
+            deduped.append(fn)
+        existing_docs = deduped
+
+    update_expr_parts = ["draftFormData = :d", "documents = :docs", "updatedAt = :u"]
+    expr_vals: dict[str, Any] = {
+        ":d": form_data,
+        ":docs": existing_docs,
+        ":u": _now_iso(),
+    }
+
+    # Merge originalNames into the manifest so resumed views see friendly
+    # labels next to the saved files.
+    if new_originals:
+        try:
+            manifest_obj = s3.get_object(Bucket=BUCKET, Key=f"{submission_id}/_manifest.json")
+            manifest = json.loads(manifest_obj["Body"].read())
+        except Exception:  # noqa: BLE001
+            manifest = {"name": item.get("name", ""), "refundType": item.get("refundType", "")}
+        existing_originals = manifest.get("originalNames") or {}
+        for k, v in new_originals.items():
+            if isinstance(k, str) and isinstance(v, str):
+                existing_originals[k] = v[:200]
+        manifest["originalNames"] = existing_originals
+        try:
+            s3.put_object(
+                Bucket=BUCKET,
+                Key=f"{submission_id}/_manifest.json",
+                Body=json.dumps(manifest),
+                ContentType="application/json",
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"[save-draft] manifest update failed for sid={submission_id}: {e!r}")
+
+    table.update_item(
+        Key=_sub_key(submission_id),
+        UpdateExpression="SET " + ", ".join(update_expr_parts),
+        ExpressionAttributeValues=expr_vals,
+    )
+
+    return {
+        "statusCode": 200,
+        "headers": headers,
+        "body": json.dumps({
+            "submissionId": submission_id,
+            "saved": True,
+            "documents": existing_docs,
         }),
     }
 
@@ -2122,6 +2639,7 @@ def _claimant_continue(event: dict[str, Any], headers: dict[str, str]) -> dict[s
         return _err(400, "Provide 1–10 files", headers)
 
     uploads = []
+    new_originals: dict[str, str] = {}
     for f in files:
         content_type = f.get("contentType", "")
         filename = _sanitize_filename(f.get("filename") or "file")
@@ -2129,9 +2647,114 @@ def _claimant_continue(event: dict[str, Any], headers: dict[str, str]) -> dict[s
             return _err(400, f"Unsupported file type: {content_type}", headers)
         upload_url = _presigned_put(submission_id, filename, content_type)
         uploads.append({"filename": filename, "uploadUrl": upload_url})
+        original = (f.get("originalFilename") or "").strip()
+        if original:
+            new_originals[filename] = original[:200]
+
+    # Merge new original-name mappings into the existing manifest so the
+    # upload-more flow surfaces friendly names too.
+    if new_originals:
+        try:
+            manifest_obj = s3.get_object(Bucket=BUCKET, Key=f"{submission_id}/_manifest.json")
+            manifest = json.loads(manifest_obj["Body"].read())
+        except Exception:  # noqa: BLE001
+            manifest = {}
+        existing = manifest.get("originalNames") or {}
+        existing.update(new_originals)
+        manifest["originalNames"] = existing
+        try:
+            s3.put_object(
+                Bucket=BUCKET,
+                Key=f"{submission_id}/_manifest.json",
+                Body=json.dumps(manifest),
+                ContentType="application/json",
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"[continue] manifest update failed for sid={submission_id}: {e!r}")
 
     return {
         "statusCode": 200,
         "headers": headers,
         "body": json.dumps({"uploads": uploads}),
+    }
+
+
+def _claimant_continue_complete(event: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    """POST /claimant/continue-complete  (requires X-Claimant-Token header)
+
+    Body: {"submissionId": "...", "filenames": ["foo.pdf", "bar.pdf"]}
+    Merges the new filenames into the submission's existing documents list and
+    recomputes per-department statuses. Unlike /upload-complete, this REPLACES
+    nothing — old docs stay, new ones are appended.
+    """
+    token = (event.get("headers") or {}).get("X-Claimant-Token") or \
+            (event.get("headers") or {}).get("x-claimant-token") or ""
+
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except json.JSONDecodeError:
+        return _err(400, "Invalid JSON", headers)
+
+    submission_id = (body.get("submissionId") or "").strip()
+    new_filenames = body.get("filenames") or []
+
+    if not submission_id:
+        return _err(400, "submissionId is required", headers)
+    if not re.fullmatch(r'[0-9a-f]{12}', submission_id):
+        return _err(400, "Invalid submission id", headers)
+    if not token:
+        return _err(401, "X-Claimant-Token header required", headers)
+    if not _verify_claimant_token(submission_id, token):
+        return _err(403, "Invalid or expired token", headers)
+    if not isinstance(new_filenames, list) or not new_filenames:
+        return _err(400, "filenames is required", headers)
+    if not table:
+        return _err(500, "DynamoDB not configured", headers)
+
+    item = _get_submission(submission_id)
+    if not item:
+        return _err(404, "Submission not found", headers)
+
+    # Merge: existing docs + new ones, deduped, preserving order.
+    existing_docs: list[str] = list(item.get("documents") or [])
+    seen = set(existing_docs)
+    for fn in new_filenames:
+        if fn and fn not in seen:
+            existing_docs.append(fn)
+            seen.add(fn)
+
+    refund_type_csv = item.get("refundType", "")
+    departments = item.get("departments") or _derive_departments(
+        [t.strip() for t in refund_type_csv.split(",") if t.strip()])
+
+    # Recompute partial→uploaded transitions on the merged doc set; preserve
+    # any dept that's already past `uploaded` (e.g. admin already approved).
+    new_statuses = _compute_statuses(departments, refund_type_csv, existing_docs)
+    existing_statuses = item.get("statuses") or {}
+    merged: dict[str, str] = {}
+    for dept in departments:
+        prev = existing_statuses.get(dept, "partial")
+        if prev in {"partial", "uploaded"}:
+            merged[dept] = new_statuses.get(dept, "partial")
+        else:
+            merged[dept] = prev
+
+    table.update_item(
+        Key=_sub_key(submission_id),
+        UpdateExpression="SET statuses = :s, documents = :d, updatedAt = :u",
+        ExpressionAttributeValues={
+            ":s": merged,
+            ":d": existing_docs,
+            ":u": _now_iso(),
+        },
+    )
+
+    return {
+        "statusCode": 200,
+        "headers": headers,
+        "body": json.dumps({
+            "submissionId": submission_id,
+            "documents": existing_docs,
+            "statuses": merged,
+        }),
     }

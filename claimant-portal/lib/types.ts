@@ -12,6 +12,17 @@ export interface ClaimantSubmission {
   refundType: string;
   overallStatus: ClaimStatus;
   documents: string[];
+  /**
+   * Map of safe filename -> the claimant's original filename, when known.
+   * Backed by the upload manifest. Missing entries (e.g. older claims) just
+   * fall back to the safe filename for display.
+   */
+  originalNames?: Record<string, string>;
+  /**
+   * Whatever the claimant has typed so far on /new. Returned only while the
+   * submission is still in `draft` status; lets the page resume mid-fill.
+   */
+  draftFormData?: Record<string, unknown>;
   submittedAt: string;
   updatedAt: string;
 }
@@ -27,6 +38,13 @@ export interface VerifyResponse {
 
 export interface ReserveResponse {
   submissionId: string;
+  /**
+   * Session token for save-draft / continue-upload calls. The bot only ever
+   * routes to /reserve after an address-verified match, so we treat that
+   * as already-authenticated and mint the same shape /verify would.
+   */
+  token?: string;
+  expiresAt?: string;
 }
 
 export interface UploadRequest {

@@ -11,6 +11,7 @@ type Options = { requireSuperAdmin?: boolean }
 export function useAuthGate({ requireSuperAdmin = false }: Options = {}) {
   const router = useRouter()
   const [ready, setReady] = useState(false)
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -21,10 +22,12 @@ export function useAuthGate({ requireSuperAdmin = false }: Options = {}) {
         router.replace("/")
         return
       }
-      if (requireSuperAdmin && !session.groups.includes("super-admin")) {
+      const superAdmin = session.groups.includes("super-admin")
+      if (requireSuperAdmin && !superAdmin) {
         router.replace("/dashboard")
         return
       }
+      setIsSuperAdmin(superAdmin)
       setReady(true)
     })()
     return () => {
@@ -32,5 +35,5 @@ export function useAuthGate({ requireSuperAdmin = false }: Options = {}) {
     }
   }, [router, requireSuperAdmin])
 
-  return { ready }
+  return { ready, isSuperAdmin }
 }

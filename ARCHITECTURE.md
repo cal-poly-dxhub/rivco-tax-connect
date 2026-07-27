@@ -128,7 +128,7 @@ sequenceDiagram
 
 **Why WebSocket and not REST polling?** Streaming Claude tokens to the browser as they arrive matters for perceived responsiveness — full responses can take 5-10s, so the user wants to see "typing" right away. WebSockets also keep `$connect`/`$disconnect` lifecycle events natural for session bookkeeping.
 
-**Why a manual agent loop instead of the SDK tool runner?** The SDK runner returns whole messages; we need per-token streaming over the WebSocket. The loop in `bot/chat_handler/lambda_function.py` is small and explicit — it streams text deltas live, dispatches tools when the response stops with `tool_use`, then continues until `end_turn`.
+**Why a manual agent loop instead of the SDK tool runner?** The SDK runner returns whole messages; we need per-token streaming over the WebSocket. The loop in `cdk/chat_handler/lambda_function.py` is small and explicit — it streams text deltas live, dispatches tools when the response stops with `tool_use`, then continues until `end_turn`.
 
 **Why store assistant content blocks (not just text)?** Claude returns `{text, tool_use, thinking}` content blocks. To replay the conversation on the next turn (for tool-result follow-ups), the entire block array has to come back in. We strip response-only fields like `parsed_output` before persisting — the input API rejects them. See `_run_claude_loop` in the chat handler.
 
@@ -138,4 +138,4 @@ sequenceDiagram
 
 **Why drop the Bedrock Knowledge Base?** OpenSearch Serverless costs ~$700/mo to host roughly 12 small auditor-controller webpages. The FAQ content (deadlines, processing times) lives directly in the system prompt; for everything else the agent points the user to auditorcontroller.org or (951) 955-3800. Trade-off: no dynamic re-crawling, no citations.
 
-**Why local Lambda bundling instead of Docker?** `bot/infrastructure.py`'s `_LocalBundling` runs `pip install --platform manylinux2014_x86_64 --only-binary=:all:` to fetch Lambda-compatible wheels without spawning a container. Faster (~30s vs ~3min), no Docker dependency on developer machines.
+**Why local Lambda bundling instead of Docker?** `cdk/infrastructure.py`'s `_LocalBundling` runs `pip install --platform manylinux2014_x86_64 --only-binary=:all:` to fetch Lambda-compatible wheels without spawning a container. Faster (~30s vs ~3min), no Docker dependency on developer machines.
