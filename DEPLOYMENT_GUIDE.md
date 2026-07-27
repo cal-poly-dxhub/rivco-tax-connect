@@ -81,6 +81,74 @@ https://<region>.console.aws.amazon.com/codesuite/codebuild/projects/<AdminBuild
 
 `config.js` sets `window.WS_ENDPOINT` for the widget. The widget reads that, opens the WebSocket, renders the bottom-right chat bubble.
 
+## URL handoff from the auditor-controller website
+
+The county's existing per-division lookup pages (auditorcontroller.org) can deep-link a claimant straight into the upload portal with the form pre-filled. Useful when the claimant has already identified their refund through the existing site and just needs to submit documents.
+
+### URL format
+
+```
+<UploadPortalUrl>/?name=<NAME>&type=<TYPES>&amount=<AMOUNTS>&id=<IDS>&address=<ADDRESS>&confidence=<CONFIDENCE>
+```
+
+| Param | Required | Notes |
+|---|---|---|
+| `name` | yes | Claimant's full name (URL-encoded). Pre-fills the name field across all sections of the unified form. |
+| `type` | yes | Comma-separated list of refund types: `STALE_WARRANT`, `PAYROLL`, `PROPERTY_TAX`. Drives which form sections render and which documents are required. |
+| `amount` | yes | Comma-separated dollar amounts, one per type, in the same order. Used for notarization-threshold logic. |
+| `id` | recommended | Comma-separated identifiers, one per type. For stale warrants this is the warrant number; for property tax it's the assessment index. |
+| `address` | recommended | Pre-fills the address field. URL-encoded full address. |
+| `assessment` | property tax only | Property tax assessment number. |
+| `taxyear` | property tax only | Property tax year. |
+| `confidence` | optional | `high` or `low`. If absent, defaults to `high`. The bot's `tax_lookup` tool sets this; the county-side handoff should usually omit it. |
+
+### Example: stale warrant handoff
+
+```
+http://riverside-tax-refund-v2-portal-779377649677.s3-website-us-west-2.amazonaws.com/
+  ?name=Jane%20Doe
+  &type=STALE_WARRANT
+  &amount=475.00
+  &id=W123456
+  &address=123%20Main%20St%2C%20Riverside%2C%20CA%2092501
+```
+
+### Example: combined refunds
+
+```
+?name=Jane%20Doe
+  &type=STALE_WARRANT,PROPERTY_TAX
+  &amount=475.00,1245.80
+  &id=W123456,2023-456789
+  &address=123%20Main%20St%2C%20Riverside%2C%20CA%2092501
+  &assessment=2023-456789
+  &taxyear=2023
+```
+
+### Embedding on auditorcontroller.org
+
+The simplest integration is a single anchor tag on each lookup result page:
+
+```html
+<a href="<UploadPortalUrl>/?name=...&type=...&amount=...&id=..." class="claim-button">
+  Continue to Claims Portal →
+</a>
+```
+
+If the existing lookup pages are server-rendered (PHP, .NET, etc.), construct the URL server-side from the matched record and link directly. If they're JS-driven, build the URL in the click handler before navigating.
+
+For the chat widget itself (the bot), use the embed snippet from the section above (`chat-widget.css` + `config.js` + `chat-widget.js`). The bot then drives the same handoff URL automatically when claimants chat their way to a match.
+
+### Validation
+
+Test the handoff before going live:
+
+1. Construct a URL with a known claimant from the demo dataset
+2. Open in a fresh browser tab
+3. Confirm the unified form loads with the name, refund type(s), amount(s), and documents-required section pre-populated
+4. Confirm the form validates and submits successfully
+5. Confirm the submission appears in the admin dashboard with the right department tags
+
 ## Smoke tests
 
 ```bash
