@@ -2,7 +2,7 @@
 import os
 import yaml
 import aws_cdk as cdk
-from bot.infrastructure import RiversideTaxRefundStack
+from cdk.infrastructure import RiversideTaxRefundStack
 
 with open('config.yaml') as f:
     cfg = yaml.safe_load(f)

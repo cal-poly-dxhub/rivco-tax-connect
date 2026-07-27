@@ -6,8 +6,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 import boto3
+from botocore.config import Config
 
-s3 = boto3.client("s3")
+s3 = boto3.client("s3", config=Config(signature_version="s3v4"))
 dynamodb = boto3.resource("dynamodb")
 cognito = boto3.client("cognito-idp")
 BUCKET = os.environ["UPLOAD_BUCKET"]

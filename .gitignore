@@ -17,7 +17,6 @@ bot/runtime/soupsieve/
 bot/runtime/typing_extensions.py
 
 # IDE
-.idea/
 .vscode/
 *.swp
 
@@ -32,10 +31,6 @@ bot/runtime/typing_extensions.py
 # Secrets
 .env
 test-widget.html
-
-# Scratch / temp files
-tail-logs.sh
-demo_flows.md
 
 # Saved webpages
 auditor-controller-webpage.html
@@ -54,11 +49,10 @@ flow-module-tax-lookup.json
 # Images
 RCAC-Logo-Final.png
 
-# Planning / tracking docs
-FEATURE_STATUS.md
-IMPLEMENTATION_TASKS.md
-TODO.md
-UPLOAD_PORTAL_DEMO_GUIDE.md
+*.md
+!README.md
 
 # Local-only chat-history scratch file at the repo root.
 /chat
+*.drawio
+.claude/worktrees/
